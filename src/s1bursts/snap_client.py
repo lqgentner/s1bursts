@@ -20,6 +20,7 @@ from deepfreezer.geotiff_utils import (
 )
 from deepfreezer.utils import sliding_window_mean
 import numpy as np
+import rasterio
 
 from s1bursts.config import get_settings
 from s1bursts.dimap import BeamDimapDataset
@@ -46,6 +47,8 @@ from s1bursts.summary import ErrorResult, OkResult, OperationResult
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from upath import UPath
 
     from s1bursts.burst import Burst, BurstPair
     from s1bursts.config import SNAPSettings
@@ -354,6 +357,40 @@ class SNAPClient:
             shutil.copyfileobj(src, dst)
         return local
 
+    def _finalize_product(
+        self,
+        staging_file: Path,
+        product_path: Path | UPath,
+        *,
+        band_names: list[str],
+    ) -> None:
+        """Rewrite the staging GeoTIFF compressed to its final location.
+
+        SNAP's GeoTIFF writer does not embed a NODATA tag, so the profile's
+        ``nodata`` is stamped onto the local staging file first;
+        ``rewrite_tiff`` then carries it into the product.
+
+        Parameters
+        ----------
+        staging_file : Path
+            Uncompressed GeoTIFF written by GPT.
+        product_path : Path | UPath
+            Final product location (local or S3).
+        band_names : list[str]
+            Band descriptions, one per band.
+        """
+        profile = self.config.rasterio_profile or {}
+        nodata = profile.get("nodata")
+        if nodata is not None:
+            with rasterio.open(staging_file, "r+") as ds:
+                ds.nodata = float(nodata)
+        rewrite_tiff(
+            src_file=staging_file,
+            dst_file=product_path,
+            profile=profile,
+            band_names=band_names,
+        )
+
     def create_backscatter(
         self,
         burst: Burst,
@@ -417,10 +454,9 @@ class SNAPClient:
                         },
                         target_file=staging_file,
                     )
-                    rewrite_tiff(
-                        src_file=staging_file,
-                        dst_file=product_path,
-                        profile=self.config.rasterio_profile,
+                    self._finalize_product(
+                        staging_file,
+                        product_path,
                         band_names=config.output_bands,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
@@ -521,10 +557,9 @@ class SNAPClient:
                         },
                         target_file=staging_file,
                     )
-                    rewrite_tiff(
-                        src_file=staging_file,
-                        dst_file=product_path,
-                        profile=self.config.rasterio_profile,
+                    self._finalize_product(
+                        staging_file,
+                        product_path,
                         band_names=config.output_bands,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
@@ -597,10 +632,9 @@ class SNAPClient:
                         process_params={"crs": get_epsg_string(crs)},
                         target_file=staging_file,
                     )
-                    rewrite_tiff(
-                        src_file=staging_file,
-                        dst_file=product_path,
-                        profile=self.config.rasterio_profile,
+                    self._finalize_product(
+                        staging_file,
+                        product_path,
                         band_names=config.output_bands,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
@@ -756,10 +790,9 @@ class SNAPClient:
                         },
                         target_file=staging_file,
                     )
-                    rewrite_tiff(
-                        src_file=staging_file,
-                        dst_file=product_path,
-                        profile=self.config.rasterio_profile,
+                    self._finalize_product(
+                        staging_file,
+                        product_path,
                         band_names=config.output_bands,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:

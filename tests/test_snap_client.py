@@ -10,6 +10,8 @@ import numpy as np
 from pandas import Timestamp
 from pyproj import CRS
 import pytest
+import rasterio
+import rasterio.transform
 
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.dimap import BeamDimapDataset
@@ -181,7 +183,7 @@ class TestCreateBackscatter:
 
         with (
             patch.object(client, "_run_gpt") as mock_gpt,
-            patch("s1bursts.snap_client.rewrite_tiff") as mock_rewrite,
+            patch.object(client, "_finalize_product") as mock_finalize,
         ):
             result = client.create_backscatter(
                 burst,
@@ -196,14 +198,14 @@ class TestCreateBackscatter:
         assert params["swath"] == "IW1"
         assert params["polarization"] == "VV"
         assert params["crs"] == "EPSG:32632"
-        assert mock_rewrite.call_args.kwargs["band_names"] == ["Gamma0", "simulatedImage"]
+        assert mock_finalize.call_args.kwargs["band_names"] == ["Gamma0", "simulatedImage"]
 
     def test_gtc_when_terrain_flattening_disabled(self, client: SNAPClient) -> None:
         burst = _make_burst("2022-01-01")
 
         with (
             patch.object(client, "_run_gpt"),
-            patch("s1bursts.snap_client.rewrite_tiff"),
+            patch.object(client, "_finalize_product"),
         ):
             result = client.create_backscatter(
                 burst,
@@ -247,6 +249,34 @@ class TestCreateBackscatter:
         assert result.source is burst
 
 
+class TestFinalizeProduct:
+    def test_stamps_nodata_and_band_names(self, client: SNAPClient, tmp_path: Path) -> None:
+        """SNAP-style staging GeoTIFF (no NODATA tag) gains nodata + descriptions."""
+        staging = tmp_path / "staging.tif"
+        product = tmp_path / "final.tif"
+        data = np.array([[1.0, 2.0], [np.nan, 4.0]], dtype=np.float32)
+        with rasterio.open(
+            staging,
+            "w",
+            driver="GTiff",
+            width=2,
+            height=2,
+            count=1,
+            dtype="float32",
+            crs="EPSG:32632",
+            transform=rasterio.transform.from_origin(400000, 5200000, 10, 10),
+        ) as ds:
+            ds.write(data, 1)
+
+        client._finalize_product(staging, product, band_names=["Gamma0"])
+
+        with rasterio.open(product) as ds:
+            assert ds.nodata is not None
+            assert np.isnan(ds.nodata)
+            assert ds.descriptions == ("Gamma0",)
+            assert np.array_equal(ds.read(1), data, equal_nan=True)
+
+
 class TestCreateCoherence:
     CRS_UTM32 = CRS("EPSG:32632")
 
@@ -256,7 +286,7 @@ class TestCreateCoherence:
     def test_magnitude_path(self, client: SNAPClient) -> None:
         with (
             patch.object(client, "_run_gpt") as mock_gpt,
-            patch("s1bursts.snap_client.rewrite_tiff") as mock_rewrite,
+            patch.object(client, "_finalize_product") as mock_finalize,
         ):
             result = client.create_coherence(
                 self._make_pair(),
@@ -271,13 +301,13 @@ class TestCreateCoherence:
         params = mock_gpt.call_args.kwargs["process_params"]
         assert params["date1"] == "01Jan2022"
         assert params["date2"] == "13Jan2022"
-        assert mock_rewrite.call_args.kwargs["band_names"] == ["coh"]
+        assert mock_finalize.call_args.kwargs["band_names"] == ["coh"]
 
     def test_complex_path_runs_two_graphs(self, client: SNAPClient) -> None:
         with (
             patch.object(client, "_run_gpt") as mock_gpt,
             patch.object(client, "_write_complex_coherence") as mock_write,
-            patch("s1bursts.snap_client.rewrite_tiff") as mock_rewrite,
+            patch.object(client, "_finalize_product") as mock_finalize,
         ):
             result = client.create_coherence(
                 self._make_pair(),
@@ -290,7 +320,7 @@ class TestCreateCoherence:
         # ifg graph + standalone terrain-correction graph
         assert mock_gpt.call_count == 2
         mock_write.assert_called_once()
-        assert mock_rewrite.call_args.kwargs["band_names"] == ["coh_i", "coh_q"]
+        assert mock_finalize.call_args.kwargs["band_names"] == ["coh_i", "coh_q"]
 
     def test_gpt_failure_returns_error_result(self, client: SNAPClient) -> None:
         pair = self._make_pair()

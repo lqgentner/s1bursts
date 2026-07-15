@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 from pandas import Timestamp
 import pyproj
 import pytest
@@ -166,3 +167,6 @@ class TestSnapProcessing:
         with rasterio.open(product_path) as src:
             assert src.count == 2  # Gamma0 + simulatedImage
             assert src.crs.to_epsg() == 32632
+            # SNAP's GeoTIFF writer drops the NODATA tag; _finalize_product re-stamps it
+            assert src.nodata is not None
+            assert np.isnan(src.nodata)
