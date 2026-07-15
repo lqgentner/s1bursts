@@ -702,8 +702,8 @@ wheels = [
 
 [[package]]
 name = "deepfreezer"
-version = "0.1.dev478+g05a0cd4aa"
-source = { git = "ssh://git@github.com/lqgentner/deepfreezer.git?branch=feat%2Fs1-processing#05a0cd4aad43eab3cced9af5ffa250ad7330a20c" }
+version = "0.1.dev480+g2e4aa89a8"
+source = { git = "ssh://git@github.com/lqgentner/deepfreezer.git#2e4aa89a82f5eec21629fc25025b131b8205c463" }
 dependencies = [
     { name = "dask" },
     { name = "earthengine-api" },
@@ -2564,7 +2564,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "deepfreezer", extras = ["s3"], git = "ssh://git@github.com/lqgentner/deepfreezer.git?branch=feat%2Fs1-processing" },
+    { name = "deepfreezer", extras = ["s3"], git = "ssh://git@github.com/lqgentner/deepfreezer.git" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "geopandas", specifier = ">=1.1" },
     { name = "lxml", specifier = ">=5" },

@@ -46,8 +46,7 @@ dev = [
 
 [tool.uv.sources]
 # deepfreezer is not on PyPI; consumed straight from GitHub.
-# TODO: repoint to `main` once feat/s1-processing is merged.
-deepfreezer = { git = "ssh://git@github.com/lqgentner/deepfreezer.git", branch = "feat/s1-processing" }
+deepfreezer = { git = "ssh://git@github.com/lqgentner/deepfreezer.git" }
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
