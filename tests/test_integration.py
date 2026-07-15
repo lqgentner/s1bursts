@@ -145,8 +145,12 @@ class TestSnapProcessing:
         downloaded_bursts: BurstCollection,
     ) -> None:
         """End-to-end GPT smoke test: SLC zip -> RTC GeoTIFF (takes minutes)."""
+        # Explicit modest resource budget: the machine-wide SNAP_MAX_RAM_GB /
+        # SNAP_MAX_WORKERS may be tuned for a larger production VM, and an
+        # oversized -Xmx gets the JVM OOM-killed on smaller dev machines.
+        # A single-burst RTC fits in a ~3 GB heap.
         processor = BurstProcessor(
-            ProcessingConfig(file_manager=file_manager),
+            ProcessingConfig(file_manager=file_manager, max_workers=1, max_ram_gb=6),
             show_progress=False,
             continue_on_error=False,
         )

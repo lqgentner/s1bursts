@@ -705,14 +705,12 @@ wheels = [
 
 [[package]]
 name = "deepfreezer"
-version = "0.1.dev475+gf58da14a1"
-source = { git = "ssh://git@github.com/lqgentner/deepfreezer.git?branch=feat%2Fs1-processing#f58da14a125aa4c01edab019ab0a97558f365bd0" }
+version = "0.1.dev476+gd317899c6"
+source = { git = "ssh://git@github.com/lqgentner/deepfreezer.git?branch=feat%2Fs1-processing#d317899c63dddba170820378b6cdab46dbaba938" }
 dependencies = [
     { name = "dask" },
-    { name = "defusedxml" },
     { name = "earthengine-api" },
     { name = "geopandas" },
-    { name = "lxml" },
     { name = "matplotlib" },
     { name = "mgrs" },
     { name = "numpy" },
@@ -722,7 +720,6 @@ dependencies = [
     { name = "pillow" },
     { name = "platformdirs" },
     { name = "pyarrow" },
-    { name = "pydantic-settings" },
     { name = "pygeohash" },
     { name = "pyproj" },
     { name = "rasterio" },

@@ -204,10 +204,11 @@ class ProcessingConfig:
             or max(1, n_cpus // self.resolved_max_workers)
         )
 
-        # cache per job (-c): ratio of the per-process RAM budget (default: 70%)
+        # cache per job (-c): ratio of the per-job Java heap (default: 70%).
+        # Must be computed from the heap, not the raw RAM share — otherwise
+        # small budgets produce a tile cache larger than -Xmx.
         cache_ratio = self.gpt_cache_ratio or snap_settings.cache_ratio
-        per_process_ram_mb = ram_mb / self.resolved_max_workers
-        self.resolved_cache_mb = int(per_process_ram_mb * cache_ratio)
+        self.resolved_cache_mb = int(self.resolved_xmx_mb * cache_ratio)
 
 
 class SNAPClient:

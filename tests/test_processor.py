@@ -67,7 +67,9 @@ class TestProcessingConfig:
 
         assert config.resolved_max_workers == 2
         assert config.resolved_xmx_mb == (16 * 1024 - 3000) // 2
-        assert config.resolved_cache_mb == int(16 * 1024 / 2 * 0.70)
+        # Tile cache is a ratio of the per-job heap, never larger than -Xmx
+        assert config.resolved_cache_mb == int(config.resolved_xmx_mb * 0.70)
+        assert config.resolved_cache_mb < config.resolved_xmx_mb
 
     def test_xmx_never_negative_for_small_ram(self, tmp_path: Path) -> None:
         gpt = tmp_path / "gpt"
