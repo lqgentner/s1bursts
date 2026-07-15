@@ -1,6 +1,6 @@
 # Sentinel-1 Local Resolution Weighting (LRW) Pipeline
 
-> **Maintenance note:** Update this document whenever a major rework of the `sentinel1` submodule is completed (e.g. new product classes, renamed fields, new pipeline stages, changed filename conventions).
+> **Maintenance note:** Update this document whenever a major rework of the `s1bursts` package is completed (e.g. new product classes, renamed fields, new pipeline stages, changed filename conventions).
 
 ## Overview
 
@@ -126,10 +126,9 @@ Low-level interface to SNAP GPT:
 
 - `create_backscatter(burst, crs, *, config: BackscatterConfig)`: Single burst → RTC (default) or GTC, depending on `config.flatten_terrain`. Bands: `Gamma0` + `simulatedImage` (RTC) or `Beta0` (GTC).
 - `create_coherence(pair, crs, *, config: CoherenceConfig)`: Burst pair → magnitude (default) or complex coherence depending on `config.write_complex`.
-- `create_coherence_guided(pair, crs, *, config: GuidedCoherenceConfig)`: Burst pair → guided-filter coherence (magnitude or complex via `config.write_complex`).
 - `create_interferogram(pair, crs, *, config: InterferogramConfig)`: Burst pair → terrain-corrected interferogram.
 
-SNAP graphs are generated dynamically at call time from each per-product config in `snap_graph.py` (`BackscatterConfig`, `CoherenceConfig`, `GuidedCoherenceConfig`, `InterferogramConfig`, plus the shared `GeocodingConfig` base). Each config exposes `to_xml()` and `to_mermaid()` for inspection.
+SNAP graphs are generated dynamically at call time from each per-product config in `snap_graph.py` (`BackscatterConfig`, `CoherenceConfig`, `InterferogramConfig`, plus the shared `GeocodingConfig` base). Each config exposes `to_xml()` and `to_mermaid()` for inspection. (A guided-filter coherence variant existed as an experiment and was removed in the s1bursts split.)
 
 `ProcessingConfig` is now a runtime-only struct: `gpt_path`, `file_manager`, `max_workers`, `max_ram_gb`, `gpt_threads_per_job`, `gpt_cache_ratio`, `auxdata_dir`. It auto-resolves `resolved_max_workers`, `resolved_xmx_mb`, `resolved_threads_per_job`, `resolved_cache_mb`.
 

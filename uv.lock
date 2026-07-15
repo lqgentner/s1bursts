@@ -16,9 +16,6 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
-[manifest]
-constraints = [{ name = "gdal", specifier = "<=3.12.2" }]
-
 [[package]]
 name = "affine"
 version = "2.4.0"
@@ -705,8 +702,8 @@ wheels = [
 
 [[package]]
 name = "deepfreezer"
-version = "0.1.dev476+gd317899c6"
-source = { git = "ssh://git@github.com/lqgentner/deepfreezer.git?branch=feat%2Fs1-processing#d317899c63dddba170820378b6cdab46dbaba938" }
+version = "0.1.dev478+g05a0cd4aa"
+source = { git = "ssh://git@github.com/lqgentner/deepfreezer.git?branch=feat%2Fs1-processing#05a0cd4aad43eab3cced9af5ffa250ad7330a20c" }
 dependencies = [
     { name = "dask" },
     { name = "earthengine-api" },
@@ -734,10 +731,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-raster = [
-    { name = "gdal" },
-    { name = "rio-cogeo" },
-]
 s3 = [
     { name = "boto3" },
     { name = "fsspec" },
@@ -908,12 +901,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/10/a1/ae4e3e5003468d639
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/22/4222d7ddf3da30f363edaa98e329c2bce6c65497c9cb2810931c8b2c0fbc/fsspec-2026.6.0-py3-none-any.whl", hash = "sha256:02e0b71817df9b2169dc30a16832045764def1191b43dcff5bb85bdee212d2a1", size = 203949, upload-time = "2026-06-16T01:57:26.358Z" },
 ]
-
-[[package]]
-name = "gdal"
-version = "3.12.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b7/73/52753654d259cae674b7d4f2167d421382d9aa2ee510f047338381ae175b/gdal-3.12.2.tar.gz", hash = "sha256:a5afa8e55a19b296a004a15d38fe3ad60cc380f1f090e2aab5d35331008c970f", size = 899232, upload-time = "2026-02-09T17:53:29.78Z" }
 
 [[package]]
 name = "geopandas"
@@ -1460,21 +1447,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/02/22/c64004c788b2e2c3475d25903b93ac0b5155eee3ad9cf54404e811a7c633/mgrs-1.5.4-cp314-cp314t-win32.whl", hash = "sha256:5264e13eb64bfc4673fb02605f14b7489c19f7add7c66bd4360f70dec0bdff17", size = 58606, upload-time = "2026-02-03T22:42:40.967Z" },
     { url = "https://files.pythonhosted.org/packages/5e/a4/a694e7258b6d28e11eb3182cdcf275879e5fa36e2280a46cd0e2640b446a/mgrs-1.5.4-cp314-cp314t-win_amd64.whl", hash = "sha256:ef4509eef16174506909ed5d38ae699ad19e79048136ad38299ab81ce7a9caf5", size = 60781, upload-time = "2026-02-03T22:42:42.146Z" },
     { url = "https://files.pythonhosted.org/packages/87/0d/9503b3dcde9de04656be214d11d730840146516de056e5eea68b29de89f8/mgrs-1.5.4-cp314-cp314t-win_arm64.whl", hash = "sha256:2c24ea9e62d2c4568bb53cb15c09f2e64baa508069ddbe9431ac5e3f56a6f6d9", size = 57120, upload-time = "2026-02-03T22:42:43.322Z" },
-]
-
-[[package]]
-name = "morecantile"
-version = "7.0.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "attrs" },
-    { name = "click" },
-    { name = "pydantic" },
-    { name = "pyproj" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ab/44/fa4f0685481b51e5ce33089ca84e821453593d34f306738515a937934751/morecantile-7.0.3.tar.gz", hash = "sha256:b44419c83f310b411b1f547df2d07c115dc6d194ab7c8a4c318a154490e938c1", size = 43104, upload-time = "2026-02-04T23:03:26.423Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/98/1a/f9edb1c167bd8ad214dc87e9ae17fb208d08f7a05e724f74ce29e375c8de/morecantile-7.0.3-py3-none-any.whl", hash = "sha256:747c6b8f3a8029ddaadb04d96c834f10d2796d1898ad893bed47c896a058ddc7", size = 50885, upload-time = "2026-02-04T23:03:27.463Z" },
 ]
 
 [[package]]
@@ -2516,21 +2488,6 @@ wheels = [
 ]
 
 [[package]]
-name = "rio-cogeo"
-version = "7.0.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-    { name = "morecantile" },
-    { name = "pydantic" },
-    { name = "rasterio" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/01/3b88154233db4cb29cc54df64006537fadb8d7c2ace872af985dac972fd3/rio_cogeo-7.0.2.tar.gz", hash = "sha256:1454ff94dca8652db68862d667bf47e54ecabfe8872c939f2c16ebb62d432f69", size = 19282, upload-time = "2026-03-27T08:25:27.554Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/da/835b573b1a8ba0fcdb3fa6c26fee0c8fa7549f79cf882894ea2238f19f1c/rio_cogeo-7.0.2-py3-none-any.whl", hash = "sha256:1426faea08ae0970707d3534119164d99969ee15181b06d94c5f84645f82537f", size = 21827, upload-time = "2026-03-27T08:25:26.18Z" },
-]
-
-[[package]]
 name = "rioxarray"
 version = "0.22.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2592,11 +2549,6 @@ dependencies = [
     { name = "universal-pathlib" },
 ]
 
-[package.optional-dependencies]
-raster = [
-    { name = "deepfreezer", extra = ["raster"] },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "debugpy" },
@@ -2612,7 +2564,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "deepfreezer", extras = ["raster"], marker = "extra == 'raster'", git = "ssh://git@github.com/lqgentner/deepfreezer.git?branch=feat%2Fs1-processing" },
     { name = "deepfreezer", extras = ["s3"], git = "ssh://git@github.com/lqgentner/deepfreezer.git?branch=feat%2Fs1-processing" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "geopandas", specifier = ">=1.1" },
@@ -2629,7 +2580,6 @@ requires-dist = [
     { name = "shapely", specifier = ">=2" },
     { name = "universal-pathlib", specifier = ">=0.3" },
 ]
-provides-extras = ["raster"]
 
 [package.metadata.requires-dev]
 dev = [

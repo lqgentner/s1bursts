@@ -530,8 +530,6 @@ class CDSEBurstClient:
         ------
         ValueError
             If credentials are missing or the product/burst cannot be found.
-        ImportError
-            If GDAL is not installed.
 
         """
         return extract_burst_from_s3(

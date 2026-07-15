@@ -31,11 +31,6 @@ dependencies = [
     "universal-pathlib>=0.3",
 ]
 
-[project.optional-dependencies]
-# Extracting bursts directly from CDSE S3 needs the GDAL Python bindings
-# (pulled in via deepfreezer's raster extra); the OData endpoint works without.
-raster = ["deepfreezer[raster]"]
-
 [dependency-groups]
 dev = [
     "debugpy",
@@ -48,11 +43,6 @@ dev = [
     "types-geopandas",
     "types-requests",
 ]
-
-[tool.uv]
-# pip-installed GDAL bindings must match the system libgdal version
-# (`gdal-config --version`).
-constraint-dependencies = ["gdal<=3.12.2"]
 
 [tool.uv.sources]
 # deepfreezer is not on PyPI; consumed straight from GitHub.

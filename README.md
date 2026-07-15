@@ -79,10 +79,6 @@ Not yet on PyPI; install from GitHub:
 uv add "s1bursts @ git+ssh://git@github.com/lqgentner/s1bursts.git"
 ```
 
-Downloading bursts via the OData API works out of the box. Extracting bursts
-directly from CDSE S3 additionally requires the GDAL Python bindings — install
-the `raster` extra (`s1bursts[raster]`) with a matching system GDAL.
-
 For the domain background (product hierarchy, LRW compositing design), see
 [`SENTINEL1_LRW_PIPELINE.md`](SENTINEL1_LRW_PIPELINE.md).
 
