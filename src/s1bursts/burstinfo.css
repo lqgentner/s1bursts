@@ -1,0 +1,55 @@
+.burst-info {
+    max-width: 600px;
+    margin-left: 0.5em;
+    font-family: sans-serif;
+}
+.burst-info h4 {
+    margin: 0.5em 0;
+    font-size: 1.1em;
+}
+.burst-info .row {
+    display: flow-root;
+}
+.burst-info .row:after {
+    content: "";
+    display: table;
+    clear: both;
+}
+.burst-info .column {
+    float: left;
+    width: 50%;
+}
+.burst-info .column.value {
+    text-align: right;
+}
+.burst-info .svg-map {
+    margin-top: 0.5em;
+    text-align: center;
+}
+.burst-info .info-box {
+    max-width: 200px;
+    font-size: 0.9em;
+}
+.burst-info .info-box .row {
+    margin: 0.3em 0;
+}
+.burst-info details {
+    margin-left: 1em;
+    margin-top: 1em;
+}
+.burst-info summary {
+    font-weight: bold;
+    padding: 0.3em 0;
+}
+.burst-info .dataframe-container {
+    margin-top: 0.5em;
+    max-height: 400px;
+    overflow: auto;
+}
+.map-placeholder {
+    padding: 20px;
+    text-align: center;
+    color: #666;
+    background-color: #fafafa;
+    border: 1px solid #ddd;
+}
