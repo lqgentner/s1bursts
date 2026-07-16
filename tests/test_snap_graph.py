@@ -1,9 +1,9 @@
 """Tests for ``s1bursts.snap_graph`` — dynamic SNAP graph generation."""
 
 from pathlib import Path
-from xml.etree.ElementTree import canonicalize, tostring
+from xml.etree.ElementTree import canonicalize
 
-from defusedxml.ElementTree import fromstring
+from lxml.etree import fromstring, tostring
 from pydantic import ValidationError
 import pytest
 

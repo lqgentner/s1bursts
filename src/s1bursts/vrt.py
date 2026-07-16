@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from deepfreezer.geotiff_utils import rasterio_open
+from freezecore.raster import rasterio_open
 from upath import UPath
 
 type AnyPath = str | Path | UPath

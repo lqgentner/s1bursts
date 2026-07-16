@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, Self
 
-from deepfreezer.mgrs import mgrs_to_crs
+from freezecore.mgrs import mgrs_to_crs
 from pandas import Timestamp
 from pyproj import CRS
 

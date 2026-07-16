@@ -7,16 +7,16 @@ from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload
 import warnings
 
-from deepfreezer.datasets.copernicus import (
-    create_s1_geometry_lut,
-    create_s1_orbit_direction_lut,
-    create_s1_orbit_number_lut,
-)
 import geopandas as gpd
 import pandas as pd
 from pandas import DataFrame, Series, Timedelta, Timestamp
 
 from s1bursts import ui
+from s1bursts.burstmap import (
+    create_s1_geometry_lut,
+    create_s1_orbit_direction_lut,
+    create_s1_orbit_number_lut,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterator

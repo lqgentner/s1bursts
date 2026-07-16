@@ -8,10 +8,13 @@ import shutil
 import warnings
 import xml.etree.ElementTree as ET
 
-from defusedxml.ElementTree import parse
+from lxml import etree
 import numpy as np
 import rasterio
 import rasterio.errors
+
+# Hardened parser: no entity resolution, no network access (XXE-safe).
+_XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
 
 
 @dataclass
@@ -75,7 +78,7 @@ class BeamDimapDataset:
     def _parse_img_paths(self) -> dict[str, Path]:
         """Parse the .dim XML file to discover band names and ``.img`` file paths."""
         self._validate_dataset()
-        root = parse(self.dim_path).getroot()
+        root = etree.parse(self.dim_path, parser=_XML_PARSER).getroot()
         img_paths = {}
         for band_elem in root.findall("./Image_Interpretation/Spectral_Band_Info"):
             name = band_elem.findtext("BAND_NAME")

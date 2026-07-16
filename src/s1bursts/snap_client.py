@@ -13,12 +13,11 @@ import subprocess
 import tempfile
 from typing import TYPE_CHECKING, Any, cast
 
-from deepfreezer.geotiff_utils import (
+from freezecore.raster import (
     build_rasterio_profile,
     get_epsg_string,
     rewrite_tiff,
 )
-from deepfreezer.utils import sliding_window_mean
 import numpy as np
 import rasterio
 
@@ -44,6 +43,7 @@ from s1bursts.snap_graph import (
     build_terrain_correction_graph,
 )
 from s1bursts.summary import ErrorResult, OkResult, OperationResult
+from s1bursts.utils import sliding_window_mean
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

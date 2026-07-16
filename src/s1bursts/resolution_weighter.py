@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 from typing import TYPE_CHECKING, Any, Literal, overload
 
-from deepfreezer.geotiff_utils import build_rasterio_profile, rasterio_open
+from freezecore.raster import build_rasterio_profile, rasterio_open
 import numpy as np
 from numpy.typing import NDArray
 from pandas import Timestamp
@@ -30,7 +30,7 @@ from s1bursts.product import (
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping, Sequence
 
-    from deepfreezer.mgrs import MGRSGeoBox
+    from freezecore.mgrs import MGRSGeoBox
 
     from s1bursts.filemanager import FileManager
     from s1bursts.query import OrbitDirection, Polarization

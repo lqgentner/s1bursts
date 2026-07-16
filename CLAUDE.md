@@ -2,11 +2,11 @@
 
 s1bursts is a Sentinel-1 SLC burst download and InSAR processing package, built on the CDSE APIs and ESA SNAP GPT. For domain context, product hierarchy, and pipeline design decisions, see [`SENTINEL1_LRW_PIPELINE.md`](SENTINEL1_LRW_PIPELINE.md).
 
-The package was split out of the [deepfreezer](https://github.com/lqgentner/deepfreezer) repository (formerly `deepfreezer.sentinel1`) and still depends on deepfreezer for shared geo/IO helpers (`geotiff_utils`, `mgrs`, `fileio`, `s3`, `utils`, `datasets`).
+The package was split out of the [deepfreezer](https://github.com/lqgentner/deepfreezer) repository (formerly `deepfreezer.sentinel1`). Shared geo/IO helpers (MGRS grid, rasterio/S3 raster access, HTTP download tooling) come from the sibling [freezecore](https://github.com/lqgentner/freezecore) package — the only first-party dependency, so that s1bursts can be released on PyPI with a wheel-only dependency set (no GDAL, no scipy).
 
 ## Environment
 
-The project uses the uv package manager. The virtual environment is located at `.venv/`. The dependencies are stored in the `pyproject.toml`. deepfreezer is consumed from GitHub via a `[tool.uv.sources]` git entry.
+The project uses the uv package manager. The virtual environment is located at `.venv/`. The dependencies are stored in the `pyproject.toml`. freezecore is consumed from the sibling checkout via a `[tool.uv.sources]` path entry until it is published on PyPI.
 
 To synchronize the environment:
 

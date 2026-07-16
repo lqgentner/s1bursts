@@ -19,8 +19,11 @@ from pathlib import Path
 from typing import Annotated, Any, ClassVar
 from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
-from defusedxml.ElementTree import fromstring
+from lxml import etree
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+
+# Hardened parser: no entity resolution, no network access (XXE-safe).
+_XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -411,7 +414,7 @@ def xml_to_mermaid(graph_xml: str) -> str:
     str
         ``flowchart LR`` Mermaid diagram source.
     """
-    root = fromstring(graph_xml)
+    root = etree.fromstring(graph_xml.encode(), parser=_XML_PARSER)
 
     nodes: dict[str, str] = {}
     edges: list[tuple[str, str]] = []

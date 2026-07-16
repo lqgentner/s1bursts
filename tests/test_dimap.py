@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from defusedxml.ElementTree import parse
+from lxml.etree import parse
 import numpy as np
 import pytest
 

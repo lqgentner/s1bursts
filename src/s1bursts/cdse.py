@@ -8,9 +8,9 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from deepfreezer.fileio import HTTPDownloader
-from deepfreezer.pandas_utils import clean_names
-from deepfreezer.utils import EPSG_WGS84, retry_request
+from freezecore.download import HTTPDownloader, retry_request
+from freezecore.pandas_utils import clean_names
+from freezecore.utils import EPSG_WGS84
 import geopandas as gpd
 import pandas as pd
 from pydantic import SecretStr
