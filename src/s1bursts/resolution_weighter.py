@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 from typing import TYPE_CHECKING, Any, Literal, overload
 
-from freezecore.raster import build_rasterio_profile, rasterio_open
+from freezecore.raster import build_rasterio_profile, rasterio_open, write_cog
 import numpy as np
 from numpy.typing import NDArray
 from pandas import Timestamp
@@ -670,9 +670,7 @@ class ResolutionWeighter:
             height=geobox.height,
             width=geobox.width,
         )
-        with rasterio_open(path, "w", **profile) as dst:
-            dst.write(data, 1)
-            dst.set_band_description(1, band_name)
+        write_cog(data, path, profile, band_names=[band_name])
         logger.debug("saved %s", path.name)
 
     def _write_lrw_qa(
