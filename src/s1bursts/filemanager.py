@@ -155,8 +155,6 @@ class FileManager:
     """Directory for processed products."""
     comp_dir: Path | UPath
     """Directory for composites."""
-    cog_dir: Path | UPath
-    """Directory for cloud-optimized GeoTIFFs (COGs)."""
 
     def __init__(
         self,
@@ -164,7 +162,6 @@ class FileManager:
         slc_dir: Path | UPath | None = None,
         prod_dir: Path | UPath | None = None,
         comp_dir: Path | UPath | None = None,
-        cog_dir: Path | UPath | None = None,
     ) -> None:
         """Initialize FileManager with directory structure.
 
@@ -179,8 +176,6 @@ class FileManager:
             Directory for processed products. Defaults to ``base_dir/s1-prod``.
         comp_dir : Path or UPath, optional
             Directory for composites. Defaults to ``base_dir/s1-comp``.
-        cog_dir : Path or UPath, optional
-            Directory for cloud-optimized GeoTIFFs (COGs). Defaults to ``base_dir/s1-cog``.
         """
         self.base_dir = base_dir
 
@@ -188,10 +183,9 @@ class FileManager:
         self.slc_dir = slc_dir or base_dir / "s1-slc"
         self.prod_dir = prod_dir or base_dir / "s1-prod"
         self.comp_dir = comp_dir or base_dir / "s1-comp"
-        self.cog_dir = cog_dir or base_dir / "s1-cog"
 
         # Create all directories (UPath.mkdir on S3 is a no-op)
-        for directory in [self.slc_dir, self.prod_dir, self.comp_dir, self.cog_dir]:
+        for directory in [self.slc_dir, self.prod_dir, self.comp_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
     # ============ SLC Operations ============
