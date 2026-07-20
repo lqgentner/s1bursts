@@ -99,6 +99,7 @@ class ResolutionWeighter:
         *,
         aggregation: Literal["mean", "median"] | float = ...,
         clip_max_resolution: float | None = ...,
+        decibel: bool = ...,
         write_qa: Literal[False] = False,
         overwrite: bool = ...,
     ) -> RTCLRWComposite: ...
@@ -110,6 +111,7 @@ class ResolutionWeighter:
         *,
         aggregation: Literal["mean", "median"] | float = ...,
         clip_max_resolution: float | None = ...,
+        decibel: bool = ...,
         write_qa: Literal[True],
         overwrite: bool = ...,
     ) -> RTCLRWResult: ...
@@ -120,6 +122,7 @@ class ResolutionWeighter:
         *,
         aggregation: Literal["mean", "median"] | float = "median",
         clip_max_resolution: float | None = None,
+        decibel: bool = False,
         write_qa: bool = False,
         overwrite: bool = False,
     ) -> RTCLRWComposite | RTCLRWResult:
@@ -146,6 +149,10 @@ class ResolutionWeighter:
             Upper limit applied to the resolution weight ``1/area`` before
             further processing.  Suppresses extreme weights in radar shadow
             areas.
+        decibel : bool, default False
+            If ``True``, convert the aggregated composite from intensity
+            (power) to decibels before writing; non-positive intensities
+            become NaN.  Aggregation always happens in the linear domain.
         write_qa : bool, default False
             If ``True``, also write two auxiliary QA products alongside the
             composite: a number-of-observations map (``QA-NUM``) and a composite
@@ -207,8 +214,11 @@ class ResolutionWeighter:
         sim_obs = np.stack([sim_groups[key] for key in rtc_groups])  # (N, H, W)
 
         weights = self._calc_weights(sim_obs, clip_max_resolution)
+        composite = self._aggregate_weighted(rtc_obs, weights, aggregation)
+        if decibel:
+            composite = self._to_decibel(composite)
         self._save(
-            self._aggregate_weighted(rtc_obs, weights, aggregation),
+            composite,
             product,
             geobox,
             polarization,
@@ -361,6 +371,7 @@ class ResolutionWeighter:
         geobox: MGRSGeoBox,
         *,
         aggregation: Literal["mean", "median"] | float = ...,
+        decibel: bool = ...,
         write_qa: Literal[False] = False,
         overwrite: bool = ...,
     ) -> dict[OrbitDirection, RTCPassComposite]: ...
@@ -371,6 +382,7 @@ class ResolutionWeighter:
         geobox: MGRSGeoBox,
         *,
         aggregation: Literal["mean", "median"] | float = ...,
+        decibel: bool = ...,
         write_qa: Literal[True],
         overwrite: bool = ...,
     ) -> dict[OrbitDirection, RTCPassResult]: ...
@@ -380,6 +392,7 @@ class ResolutionWeighter:
         geobox: MGRSGeoBox,
         *,
         aggregation: Literal["mean", "median"] | float = "median",
+        decibel: bool = False,
         write_qa: bool = False,
         overwrite: bool = False,
     ) -> Mapping[OrbitDirection, RTCPassComposite | RTCPassResult]:
@@ -401,6 +414,10 @@ class ResolutionWeighter:
             Temporal aggregation method.  Pass ``"mean"`` or ``"median"`` for
             the corresponding statistic, or a float in ``(0, 1)`` for an
             interpolated quantile at that level.
+        decibel : bool, default False
+            If ``True``, convert the aggregated composite from intensity
+            (power) to decibels before writing; non-positive intensities
+            become NaN.  Aggregation always happens in the linear domain.
         write_qa : bool, default False
             If ``True``, also write a number-of-observations QA product
             (``QA-NUM``) per orbit direction.
@@ -456,8 +473,11 @@ class ResolutionWeighter:
 
             groups = self._stitch_by_orbit_date(subset)
             rtc_obs = np.stack(list(groups.values()))  # (N, H, W)
+            composite = self._aggregate_unweighted(rtc_obs, aggregation)
+            if decibel:
+                composite = self._to_decibel(composite)
             self._save(
-                self._aggregate_unweighted(rtc_obs, aggregation),
+                composite,
                 product,
                 geobox,
                 polarization,
@@ -792,6 +812,14 @@ class ResolutionWeighter:
         if clip_max_resolution is not None:
             weights = weights.clip(max=clip_max_resolution)
         return weights
+
+    @staticmethod
+    def _to_decibel(data: NDArray[np.floating[Any]]) -> NDArray[np.float32]:
+        """Convert intensity (power) to decibels; non-positive values become NaN."""
+        decibel = np.full_like(data, np.nan, dtype=np.float32)
+        valid = data > 0
+        decibel[valid] = 10.0 * np.log10(data[valid])
+        return decibel
 
     @staticmethod
     def _count_observations(values: NDArray[np.floating[Any]]) -> NDArray[np.uint16]:
