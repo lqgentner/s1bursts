@@ -826,7 +826,7 @@ class GeocodingConfig(BaseModel):
     @property
     def standard_grid_origin(self) -> tuple[float, float]:
         """Origin of standard grid: At pixel centers."""
-        half = self.grid_spacing // 2
+        half = self.grid_spacing / 2
         return (half, half)
 
     def to_xml(self) -> str:

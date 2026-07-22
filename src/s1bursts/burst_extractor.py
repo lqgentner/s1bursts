@@ -35,6 +35,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_xml(data: bytes) -> etree._Element:
+    """Parse untrusted SAFE XML with entity resolution and network access disabled.
+
+    A fresh parser is created per call because ``lxml`` parsers are not safe to
+    share across the threads that drive concurrent burst extraction.
+
+    Parameters
+    ----------
+    data : bytes
+        Raw XML document bytes.
+
+    Returns
+    -------
+    lxml.etree._Element
+        Parsed document root.
+    """
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    return etree.fromstring(data, parser=parser)
+
+
 _CATALOG_URL = "https://catalogue.dataspace.copernicus.eu/odata/v1"
 
 _MANIFEST_NS = {
@@ -293,7 +314,7 @@ def _edit_annotation(root: etree._Element, meta: _BurstMeta) -> bytes:
 
 def _edit_calibration(text: str, meta: _BurstMeta) -> bytes:
     """Shift calibrationVector line numbers and update start/stop times."""
-    root = etree.fromstring(text.encode())
+    root = _parse_xml(text.encode())
     for el in root.findall("calibrationVectorList/calibrationVector/line"):
         el.text = str(int(el.text) - meta.starting_line)
     root.find("adsHeader/startTime").text = meta.azimuth_start
@@ -303,7 +324,7 @@ def _edit_calibration(text: str, meta: _BurstMeta) -> bytes:
 
 def _edit_noise(text: str, meta: _BurstMeta) -> bytes:
     """Shift noiseRangeVector line numbers and update start/stop times."""
-    root = etree.fromstring(text.encode())
+    root = _parse_xml(text.encode())
     for el in root.findall("noiseRangeVectorList/noiseRangeVector/line"):
         el.text = str(int(el.text) - meta.starting_line)
     root.find("adsHeader/startTime").text = meta.azimuth_start
@@ -313,7 +334,7 @@ def _edit_noise(text: str, meta: _BurstMeta) -> bytes:
 
 def _edit_rfi(text: str, meta: _BurstMeta) -> bytes:
     """Update start/stop times in an RFI annotation file."""
-    root = etree.fromstring(text.encode())
+    root = _parse_xml(text.encode())
     root.find("adsHeader/startTime").text = meta.azimuth_start
     root.find("adsHeader/stopTime").text = meta.azimuth_end
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", pretty_print=True)
@@ -370,7 +391,7 @@ def _edit_manifest(  # noqa: C901
     text = text.replace(old_pattern, meta.new_pattern)
     text = text.replace(old_pattern_short, meta.new_pattern_short)
 
-    root = etree.fromstring(text.encode())
+    root = _parse_xml(text.encode())
 
     # Update acquisition period
     for el in root.xpath(
@@ -576,8 +597,8 @@ def extract_burst_from_s3(  # noqa: PLR0915
     ann_text = ann_upath.read_text()
     manifest_text = (product_root / "manifest.safe").read_text()
 
-    ann_root = etree.fromstring(ann_text.encode())
-    mfst_root = etree.fromstring(manifest_text.encode())
+    ann_root = _parse_xml(ann_text.encode())
+    mfst_root = _parse_xml(manifest_text.encode())
 
     # --- Resolve burst position and build naming metadata ---
     meta = _resolve_burst(

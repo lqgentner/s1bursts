@@ -820,7 +820,7 @@ def _populate_worker_userdir(worker_userdir: Path, shared_cache: Path) -> None:
             if dst.exists():
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.symlink_to(src)
+            dst.symlink_to(src.resolve())
 
 
 def _publish_new_files(worker_userdir: Path, shared_cache: Path) -> None:
