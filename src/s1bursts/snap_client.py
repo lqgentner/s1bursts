@@ -384,11 +384,14 @@ class SNAPClient:
         if nodata is not None:
             with rasterio.open(staging_file, "r+") as ds:
                 ds.nodata = float(nodata)
+        # The staging file is a disposable copy in a TemporaryDirectory, so move
+        # it into place rather than leaving a redundant copy behind.
         rewrite_tiff(
             src_file=staging_file,
             dst_file=product_path,
             profile=profile,
             band_names=band_names,
+            move=True,
         )
 
     def create_backscatter(
