@@ -465,8 +465,8 @@ wheels = [
 
 [[package]]
 name = "freezecore"
-version = "0.1.dev4+g89751f71f"
-source = { git = "ssh://git@github.com/lqgentner/freezecore.git#89751f71fc24d3231f796d4aedbc1a9034160d27" }
+version = "0.1.dev6+g318938c46"
+source = { git = "ssh://git@github.com/lqgentner/freezecore.git#318938c4699ed7a03d019ac3abd608e3e1e9bf08" }
 dependencies = [
     { name = "affine" },
     { name = "geopandas" },
