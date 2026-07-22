@@ -71,6 +71,41 @@ class TestBurst:
     def test_full_burst_id(self) -> None:
         assert make_burst().full_burst_id == "015_030346_IW1"
 
+    @pytest.mark.parametrize(
+        ("sub_swath", "expected_mode"),
+        [
+            ("IW1", "IW"),
+            ("IW3", "IW"),
+            ("EW1", "EW"),
+            ("EW5", "EW"),
+        ],
+    )
+    def test_mode_derived_from_subswath(self, sub_swath: str, expected_mode: str) -> None:
+        assert make_burst(sub_swath=sub_swath).mode == expected_mode
+
+    def test_ew_burst_queries_ew_lut(self) -> None:
+        """EW bursts must query the EW burst map, not the IW default (S1-01)."""
+        ew_key = (12345, "EW2")
+        ew_geometry = box(10.0, 70.0, 12.0, 71.0)
+        with (
+            patch("s1bursts.burst.create_s1_geometry_lut") as geom_lut,
+            patch("s1bursts.burst.create_s1_orbit_number_lut") as orbit_num_lut,
+            patch("s1bursts.burst.create_s1_orbit_direction_lut") as orbit_dir_lut,
+        ):
+            geom_lut.return_value = {ew_key: ew_geometry}
+            orbit_num_lut.return_value = {ew_key: 42}
+            orbit_dir_lut.return_value = {ew_key: "DESCENDING"}
+            burst = make_burst(burst_id=12345, sub_swath="EW2")
+
+            assert burst.geometry is ew_geometry
+            assert burst.rel_orbit_number == 42
+            assert burst.orbit_direction == "DESCENDING"
+            assert burst.full_burst_id == "042_012345_EW2"
+
+        geom_lut.assert_called_once_with(mode="EW")
+        orbit_num_lut.assert_called_with(mode="EW")
+        orbit_dir_lut.assert_called_once_with(mode="EW")
+
     def test_unknown_burst_raises_key_error(self) -> None:
         burst = make_burst(burst_id=99999)
 

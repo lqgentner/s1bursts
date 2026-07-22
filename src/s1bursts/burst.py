@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
     from shapely import Polygon
 
+    from s1bursts.burstmap import Mode
     from s1bursts.cdse import CDSEResponse
     from s1bursts.query import OrbitDirection, Polarization, SubSwath
 
@@ -36,6 +37,17 @@ class BurstFootprintMixin:
     __slots__ = ()
     burst_id: int
     sub_swath: SubSwath
+
+    @property
+    def mode(self) -> Mode:
+        """Acquisition mode (``"IW"`` or ``"EW"``) derived from the sub-swath.
+
+        Returns
+        -------
+        Mode
+            ``"IW"`` for ``IW1``-``IW3`` sub-swaths, ``"EW"`` for ``EW1``-``EW5``.
+        """
+        return cast("Mode", self.sub_swath[:2])
 
     def _lut_lookup[T](self, lut: dict[tuple[int, SubSwath], T]) -> T:
         """Look up this burst in a LUT keyed by (burst_id, sub_swath).
@@ -79,7 +91,7 @@ class BurstFootprintMixin:
         KeyError
             If the burst is not found in the map.
         """
-        return self._lut_lookup(create_s1_orbit_number_lut())
+        return self._lut_lookup(create_s1_orbit_number_lut(mode=self.mode))
 
     @property
     def orbit_direction(self) -> OrbitDirection:
@@ -95,7 +107,7 @@ class BurstFootprintMixin:
         KeyError
             If the burst is not found in the map.
         """
-        return self._lut_lookup(create_s1_orbit_direction_lut())
+        return self._lut_lookup(create_s1_orbit_direction_lut(mode=self.mode))
 
     @property
     def geometry(self) -> Polygon:
@@ -111,7 +123,7 @@ class BurstFootprintMixin:
         KeyError
             If the burst is not found in the map.
         """
-        return self._lut_lookup(create_s1_geometry_lut())
+        return self._lut_lookup(create_s1_geometry_lut(mode=self.mode))
 
     @property
     def full_burst_id(self) -> str:
