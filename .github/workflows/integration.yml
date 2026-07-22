@@ -1,0 +1,52 @@
+name: Integration
+
+# Live tests against CDSE (OData + S3) and, where available, a local SNAP GPT
+# install. These need real credentials and are slow, so they do not run on every
+# push: trigger them manually (workflow_dispatch) or on the weekly schedule.
+#
+# Configure these repository secrets before first use:
+#   CDSE_USERNAME, CDSE_PASSWORD                       -- OData downloads
+#   CDSE_S3_ACCESS_KEY_ID, CDSE_S3_SECRET_ACCESS_KEY   -- S3 burst extraction
+#
+# Each integration test skips itself when its prerequisites are missing (see
+# tests/test_integration.py), so the SNAP-dependent cases are skipped until a
+# `gpt` executable is provisioned on the runner (see the commented step below).
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays at 05:00 UTC.
+    - cron: "0 5 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+
+      # ESA SNAP is not installed here: provisioning `gpt` (a multi-GB install
+      # plus one-time auxdata download) is environment-specific. Add a setup step
+      # that installs SNAP and exports `SNAP_GPT_PATH` to also exercise the
+      # processing paths; until then the SNAP-dependent tests skip themselves.
+
+      - name: Record tool versions
+        run: |
+          uv run python -c "import sys; print('python', sys.version)"
+          uv run python -c "import rasterio; print('rasterio', rasterio.__version__)"
+          uv run python -c "import s1bursts; print('s1bursts', s1bursts.__version__ if hasattr(s1bursts, '__version__') else 'n/a')"
+
+      - name: Run live integration tests
+        env:
+          CDSE_USERNAME: ${{ secrets.CDSE_USERNAME }}
+          CDSE_PASSWORD: ${{ secrets.CDSE_PASSWORD }}
+          CDSE_S3_ACCESS_KEY_ID: ${{ secrets.CDSE_S3_ACCESS_KEY_ID }}
+          CDSE_S3_SECRET_ACCESS_KEY: ${{ secrets.CDSE_S3_SECRET_ACCESS_KEY }}
+        run: uv run pytest -q -m integration
