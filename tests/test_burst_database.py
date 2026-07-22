@@ -11,7 +11,7 @@ from shapely.geometry import box
 
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.database import BurstDatabase
-from s1bursts.errors import BurstNotFoundError
+from s1bursts.errors import BurstDownloadError, BurstNotFoundError
 from s1bursts.query import SearchQuery
 from s1bursts.summary import ErrorResult, OkResult
 
@@ -99,23 +99,45 @@ class TestDownloadDispatch:
         # No download happened, so no CDSEAuth may have been created
         assert db.client.auth is None
 
-    def test_creates_auth_lazily_on_download(self) -> None:
+    def test_creates_auth_lazily_on_odata_download(self) -> None:
+        """OData downloads build a CDSEAuth on first use, guarded to run once."""
         db = _make_database()
+        db.client = MagicMock()
         db.client.auth = None
-        burst = _make_burst()
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            cdse_id="cdse-id",
+        )
 
-        with (
-            patch("s1bursts.database.CDSEAuth") as mock_auth_cls,
-            patch.object(
-                db,
-                "_download_single_burst",
-                return_value=OkResult(source=burst, result=burst),
-            ),
-        ):
-            summary = db.download(burst)
+        with patch("s1bursts.database.CDSEAuth") as mock_auth_cls:
+            result = db._download_burst_odata(burst)
 
+        assert isinstance(result, OkResult)
         mock_auth_cls.assert_called_once()
+
+    def test_s3_download_needs_no_odata_auth(self) -> None:
+        """endpoint='s3' must not construct a CDSEAuth (S1-03)."""
+        file_manager = MagicMock()
+        file_manager.get_slc_path.return_value.exists.return_value = False
+        db = BurstDatabase(file_manager=file_manager, default_endpoint="s3")
+        db.client = MagicMock()
+        db.client.auth = None
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            parent_product_name="S1A_IW_SLC__1SDV",
+        )
+
+        with patch("s1bursts.database.CDSEAuth") as mock_auth_cls:
+            summary = db.download(burst, endpoint="s3")
+
         assert summary.n_processed == 1
+        mock_auth_cls.assert_not_called()
 
     def test_burst_pair_downloads_both_bursts(self) -> None:
         db = _make_database()
@@ -184,6 +206,30 @@ class TestEndpointWrappers:
 
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, HTTPError)
+
+    def test_odata_without_credentials_returns_clear_error(self) -> None:
+        """A missing-credentials failure surfaces as a per-burst BurstDownloadError."""
+        file_manager = MagicMock()
+        file_manager.get_slc_path.return_value.exists.return_value = False
+        db = BurstDatabase(file_manager=file_manager)
+        db.client.auth = None
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            cdse_id="cdse-id",
+        )
+
+        with patch(
+            "s1bursts.database.CDSEAuth",
+            side_effect=ValueError("CDSE credentials not configured"),
+        ):
+            result = db._download_burst_odata(burst)
+
+        assert isinstance(result, ErrorResult)
+        assert isinstance(result.error, BurstDownloadError)
+        assert "endpoint='s3'" in str(result.error)
 
     def test_s3_requires_parent_product_name(self) -> None:
         db = _make_database()
