@@ -1692,14 +1692,14 @@ requires-dist = [
     { name = "freezecore", extras = ["s3"], git = "ssh://git@github.com/lqgentner/freezecore.git" },
     { name = "geopandas", specifier = ">=1.1" },
     { name = "lxml", specifier = ">=5" },
-    { name = "numpy", specifier = ">=1.24" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "odc-geo", specifier = ">=0.5.0" },
     { name = "pandas", specifier = ">=2.3" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pyproj", specifier = ">=3.5" },
     { name = "rasterio", specifier = ">=1.5.0" },
-    { name = "requests" },
+    { name = "requests", specifier = ">=2.28" },
     { name = "rich", specifier = ">=13" },
     { name = "shapely", specifier = ">=2" },
     { name = "universal-pathlib", specifier = ">=0.3" },
@@ -1707,14 +1707,14 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "debugpy" },
-    { name = "mypy" },
-    { name = "pandas-stubs" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "types-geopandas" },
-    { name = "types-requests" },
+    { name = "debugpy", specifier = ">=1.8" },
+    { name = "mypy", specifier = ">=1.11" },
+    { name = "pandas-stubs", specifier = ">=2.2" },
+    { name = "pytest", specifier = ">=8.2" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "ruff", specifier = ">=0.6" },
+    { name = "types-geopandas", specifier = ">=1.0" },
+    { name = "types-requests", specifier = ">=2.31" },
 ]
 
 [[package]]
