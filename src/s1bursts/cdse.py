@@ -252,7 +252,10 @@ class CDSEResponse:
         geometry = gpd.GeoSeries([], crs=EPSG_WGS84, dtype="geometry")
 
         if not df_results.empty:
-            extracted = df_results[_FOOTPRINT_COL].str.extract(r"SRID=(\d+);(POLYGON \(\(.*\)\))")
+            # Bursts crossing the antimeridian come back as MULTIPOLYGON.
+            extracted = df_results[_FOOTPRINT_COL].str.extract(
+                r"SRID=(\d+);((?:MULTI)?POLYGON \(.*\))",
+            )
             epsg_codes = extracted[0].astype(int)
             if not (epsg_codes == EPSG_WGS84).all():
                 msg = f"Found unknown EPSG codes:\n{epsg_codes}"
