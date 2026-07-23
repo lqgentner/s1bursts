@@ -61,7 +61,7 @@ Credentials and SNAP settings are read from environment variables (or a
 `.env` file in the working directory):
 
 | Variable | Purpose |
-|---|---|
+| --- | --- |
 | `CDSE_USERNAME`, `CDSE_PASSWORD` | CDSE account, required for OData burst downloads ([register](https://dataspace.copernicus.eu/)) |
 | `CDSE_S3_ACCESS_KEY_ID`, `CDSE_S3_SECRET_ACCESS_KEY` | CDSE S3 keys, required for S3 burst extraction ([generate](https://eodata-s3keysmanager.dataspace.copernicus.eu/)) |
 | `SNAP_GPT_PATH` | Path to the SNAP `gpt` executable, required for processing |
@@ -70,6 +70,23 @@ Credentials and SNAP settings are read from environment variables (or a
 | `SNAP_AUXDATA_PATH` | Shared DEM/orbit cache (default: `~/.snap/auxdata`) |
 
 Searching the burst catalog requires no credentials.
+
+### Burst-ID map (optional)
+
+Relative orbit number, orbit direction, and footprint geometry are propagated
+directly from the CDSE search response and from SLC filenames, so the normal
+search → download → process → composite workflow needs no extra data.
+
+These attributes are only looked up in the [SAR-MPC Sentinel-1 burst-ID
+map](https://sar-mpc.eu/sar-mpc-products/) for a burst that was **not** obtained
+from a search or a filename (e.g. a hand-constructed `Burst`). Download it
+(~500 MB per aquisition mode) once when you need it:
+
+```pythons
+from s1bursts import download_burst_map
+
+download_burst_map(mode="IW")
+```
 
 ## Installation
 
