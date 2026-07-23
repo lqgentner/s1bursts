@@ -702,8 +702,17 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         "geometry",
         "_rel_orbit_number",
         "_orbit_direction",
+        "_lines_per_burst",
+        "_samples_per_burst",
     ]
-    _OPTIONAL_COLUMNS: ClassVar[list[str]] = ["_rel_orbit_number", "_orbit_direction"]
+    _OPTIONAL_COLUMNS: ClassVar[list[str]] = [
+        "_rel_orbit_number",
+        "_orbit_direction",
+        # Burst pixel dimensions, propagated from CDSE and used only to pick the
+        # most complete of near-identical-timestamp duplicates.
+        "_lines_per_burst",
+        "_samples_per_burst",
+    ]
     # Entry names for display
     _ENTRY_NAME_SINGULAR: ClassVar[str] = "Burst"
     _ENTRY_NAME_PLURAL: ClassVar[str] = "Bursts"
@@ -878,6 +887,9 @@ class BurstCollection(_BaseBurstCollection[Burst]):
                 # Propagated from CDSE so footprint properties need no LUT lookup.
                 "_rel_orbit_number": cdse_df["relative_orbit_number"],
                 "_orbit_direction": cdse_df["orbit_direction"],
+                # Used only to resolve near-identical-timestamp duplicates.
+                "_lines_per_burst": cdse_df["lines_per_burst"],
+                "_samples_per_burst": cdse_df["samples_per_burst"],
             },
             geometry="geometry",
             crs=cdse_df.crs,
@@ -923,11 +935,13 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         self,
         threshold: Timedelta | None = None,
     ) -> None:
-        """Remove bursts with nearly identical timestamps, keeping the most recent.
+        """Collapse near-identical-timestamp duplicates, keeping the most complete burst.
 
-        The CDSE API sometimes returns bursts with identical
-        burst_id, sub_swath, and polarization but timestamps that differ by a
-        few milliseconds. This method identifies and removes such duplicates.
+        The same physical burst can appear twice in a CDSE search: identical burst_id,
+        sub_swath, and polarization with sensing times differing by microseconds.
+        The two products may differ in extent, so the most complete one (largest
+        ``lines_per_burst * samples_per_burst``) is kept, falling back to the most
+        recent acquisition when the size is equal or unknown.
 
         Parameters
         ----------
@@ -938,30 +952,48 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         if threshold is None:
             threshold = Timedelta(hours=1)
 
+        # Dimensions are only needed here; drop them afterwards so they don't leak
+        # into pair collections or the HTML display.
+        dim_cols = ["_lines_per_burst", "_samples_per_burst"]
+
         if len(self.df) == 0:
+            self.df = self.df.drop(columns=dim_cols)
             return
 
-        df_sorted = self.df.sort_values("date")
+        df_sorted = self.df.sort_values([*self._INSAR_MATCH_COLUMNS, "date"])
 
-        # Calculate difference with next row
-        time_diff = df_sorted.groupby(self._INSAR_MATCH_COLUMNS)["date"].diff(-1)
+        # A new cluster starts at the first row of each footprint group or wherever
+        # the gap to the previous row exceeds the threshold.
+        gap = df_sorted.groupby(self._INSAR_MATCH_COLUMNS)["date"].diff()
+        cluster = (gap.isna() | (gap.abs() > threshold)).cumsum()
 
-        # Find all close matches (index of older burst)
-        is_close = time_diff.abs() <= threshold
+        # Completeness ranks candidates within a cluster; missing dimensions sort
+        # last (-1) so the most-recent date decides
+        lines = pd.to_numeric(df_sorted["_lines_per_burst"], errors="coerce")
+        samples = pd.to_numeric(df_sorted["_samples_per_burst"], errors="coerce")
+        completeness = (lines * samples).fillna(-1)
 
-        if not is_close.any():
-            return
+        ranked = df_sorted.assign(_cluster=cluster, _completeness=completeness).sort_values(
+            ["_cluster", "_completeness", "date"],
+        )
+        keep_idx = ranked.groupby("_cluster").tail(1).index
 
-        # Warn about removed duplicates
-        for _, row in df_sorted.loc[is_close].iterrows():
-            warnings.warn(
-                f"Detected multiple products with nearly identical timestamp for burst "
-                f"'{self._row_to_entry(row)}'. "
-                "Keeping burst with more recent timestamp.",
-                stacklevel=3,
-            )
-        # Keep the more recent burst (remove older ones marked as is_close)
-        self.df = df_sorted.loc[~is_close].reset_index(drop=True)
+        cluster_sizes = cluster.groupby(cluster).transform("size")
+        for idx in keep_idx:
+            if cluster_sizes[idx] > 1:
+                warnings.warn(
+                    "Detected multiple products with nearly identical timestamp for burst "
+                    f"'{self._row_to_entry(df_sorted.loc[idx])}'. "
+                    "Keeping the most complete product.",
+                    stacklevel=3,
+                )
+
+        self.df = (
+            df_sorted.loc[keep_idx]
+            .sort_values("date")
+            .drop(columns=dim_cols)
+            .reset_index(drop=True)
+        )
 
 
 class BurstPairCollection(_BaseBurstCollection[BurstPair]):

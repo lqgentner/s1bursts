@@ -320,8 +320,40 @@ class TestBurstCollection:
             collection = BurstCollection.from_bursts(bursts)
 
         assert len(collection) == 2
-        # The more recent of the two near-duplicates is kept
+        # Without dimensions, the more recent of the two near-duplicates is kept.
         assert Timestamp("2022-01-01 05:00:01") in list(collection.df.date)
+
+    def test_dedup_keeps_most_complete_over_most_recent(self) -> None:
+        """The fuller burst wins even when it has the earlier timestamp."""
+        base = {
+            "burst_id": BURST_ID,
+            "sub_swath": SUB_SWATH,
+            "polarization": "VV",
+            "abs_burst_id": 1,
+            "parent_product_name": "P",
+            "geometry": GEOMETRY,
+        }
+        fuller = {
+            **base,
+            "date": Timestamp("2018-07-25 05:51:06.894074", tz="UTC"),
+            "cdse_id": "fuller",
+            "_lines_per_burst": 1508,
+            "_samples_per_burst": 23281,
+        }
+        cropped = {
+            **base,
+            "date": Timestamp("2018-07-25 05:51:06.894080", tz="UTC"),
+            "cdse_id": "cropped",
+            "_lines_per_burst": 1504,
+            "_samples_per_burst": 22424,
+        }
+        df = gpd.GeoDataFrame([fuller, cropped], geometry="geometry")
+
+        with pytest.warns(UserWarning, match="most complete"):
+            collection = BurstCollection(df)
+
+        assert len(collection) == 1
+        assert list(collection.df.cdse_id) == ["fuller"]
 
     def test_find_pairs_with_12_day_baseline(self) -> None:
         collection = make_collection(["2022-01-01", "2022-01-13", "2022-01-25"])

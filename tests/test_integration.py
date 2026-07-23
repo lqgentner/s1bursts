@@ -24,6 +24,8 @@ import rasterio
 
 from s1bursts import BurstDatabase, BurstProcessor, FileManager, ProcessingConfig, SearchQuery
 from s1bursts.config import get_settings
+from s1bursts.errors import ConfigurationError
+from s1bursts.snap_client import _resolve_gpt_path
 
 if TYPE_CHECKING:
     from s1bursts.burst import Burst, BurstCollection
@@ -46,9 +48,19 @@ requires_cdse_s3 = pytest.mark.skipif(
     _settings.cdse.s3.access_key_id is None or _settings.cdse.s3.secret_access_key is None,
     reason="CDSE_S3_ACCESS_KEY_ID / CDSE_S3_SECRET_ACCESS_KEY not configured",
 )
+
+
+def _gpt_available() -> bool:
+    try:
+        _resolve_gpt_path(None, _settings.snap)
+    except ConfigurationError:
+        return False
+    return True
+
+
 requires_snap = pytest.mark.skipif(
-    _settings.snap.gpt_path is None or not Path(_settings.snap.gpt_path).exists(),
-    reason="SNAP_GPT_PATH not configured or gpt executable missing",
+    not _gpt_available(),
+    reason="SNAP `gpt` executable not resolvable (set SNAP_BIN or add gpt to PATH)",
 )
 
 
@@ -89,6 +101,34 @@ class TestCatalogSearch:
         assert burst.date >= Timestamp(TIME_RANGE[0], tz="UTC")
         assert burst.cdse_id is not None
         assert burst.parent_product_name is not None
+
+    def test_near_identical_timestamp_products_are_deduplicated(
+        self,
+        database: BurstDatabase,
+    ) -> None:
+        """CDSE returns two products for this burst whose timestamps differ by ~6 us.
+
+        They come from two overlapping parent SLC slices and differ in extent. The
+        collection must collapse them to a single burst, keeping the more complete
+        product (more samples/lines) rather than merely the most recent, and warn.
+        """
+        query = SearchQuery(
+            burst_id=78124,
+            sub_swath="IW1",
+            polarization="VH",
+            time_range=("2018-07-24", "2018-07-27"),
+        )
+
+        with pytest.warns(UserWarning, match="most complete"):
+            bursts = database.search(query)
+
+        days = [burst.date.normalize() for burst in bursts]
+        # No two surviving bursts share a calendar day.
+        assert len(days) == len(set(days))
+        # The fuller product (23281 vs 22424 samples/burst) is kept, even though it
+        # has the slightly earlier sensing time.
+        kept = next(b for b in bursts if b.date.normalize() == Timestamp("2018-07-25", tz="UTC"))
+        assert kept.cdse_id == "e756a6f6-91a2-4d7e-b818-b2b3c3988cf6"
 
 
 @pytest.fixture(scope="module")

@@ -20,12 +20,13 @@ if TYPE_CHECKING:
 @pytest.fixture
 def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ProcessingConfig:
     """ProcessingConfig with a stub gpt executable and isolated env."""
-    for var in ("SNAP_GPT_PATH", "SNAP_MAX_WORKERS", "SNAP_THREADS_PER_JOB"):
+    for var in ("SNAP_BIN", "SNAP_MAX_WORKERS", "SNAP_THREADS_PER_JOB"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.chdir(tmp_path)
     gpt = tmp_path / "gpt"
     gpt.touch()
-    return ProcessingConfig(file_manager=MagicMock(), gpt_path=gpt)
+    gpt.chmod(0o755)
+    return ProcessingConfig(file_manager=MagicMock(), bin=tmp_path)
 
 
 @pytest.fixture
@@ -42,25 +43,37 @@ class TestProcessingConfig:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.delenv("SNAP_GPT_PATH", raising=False)
+        monkeypatch.delenv("SNAP_BIN", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        with pytest.raises(Exception, match="SNAP GPT path is None"):
+        with (
+            patch("s1bursts.snap_client.shutil.which", return_value=None),
+            pytest.raises(Exception, match="Could not resolve the SNAP `gpt` executable"),
+        ):
             ProcessingConfig(file_manager=MagicMock())
 
-    def test_nonexistent_gpt_path_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(Exception, match="executable not found"):
-            ProcessingConfig(file_manager=MagicMock(), gpt_path=tmp_path / "missing-gpt")
+    def test_bin_without_gpt_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(Exception, match="No `gpt` executable found"):
+            ProcessingConfig(file_manager=MagicMock(), bin=tmp_path / "missing-bin")
+
+    def test_non_executable_gpt_path_raises(self, tmp_path: Path) -> None:
+        gpt = tmp_path / "gpt"
+        gpt.touch()
+        gpt.chmod(0o644)
+
+        with pytest.raises(Exception, match="not executable"):
+            ProcessingConfig(file_manager=MagicMock(), bin=tmp_path)
 
     def test_resource_resolution(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SNAP_MAX_WORKERS", raising=False)
         monkeypatch.chdir(tmp_path)
         gpt = tmp_path / "gpt"
         gpt.touch()
+        gpt.chmod(0o755)
 
         config = ProcessingConfig(
             file_manager=MagicMock(),
-            gpt_path=gpt,
+            bin=tmp_path,
             max_workers=2,
             max_ram_gb=16,
         )
@@ -74,8 +87,9 @@ class TestProcessingConfig:
     def test_xmx_never_negative_for_small_ram(self, tmp_path: Path) -> None:
         gpt = tmp_path / "gpt"
         gpt.touch()
+        gpt.chmod(0o755)
 
-        config = ProcessingConfig(file_manager=MagicMock(), gpt_path=gpt, max_ram_gb=1)
+        config = ProcessingConfig(file_manager=MagicMock(), bin=tmp_path, max_ram_gb=1)
 
         assert config.resolved_xmx_mb >= 512
 
