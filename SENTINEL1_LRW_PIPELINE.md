@@ -130,7 +130,7 @@ Low-level interface to SNAP GPT:
 
 SNAP graphs are generated dynamically at call time from each per-product config in `snap_graph.py` (`BackscatterConfig`, `CoherenceConfig`, `InterferogramConfig`, plus the shared `GeocodingConfig` base). Each config exposes `to_xml()` and `to_mermaid()` for inspection. (A guided-filter coherence variant existed as an experiment and was removed in the s1bursts split.)
 
-`ProcessingConfig` is now a runtime-only struct: `gpt_path`, `file_manager`, `max_workers`, `max_ram_gb`, `gpt_threads_per_job`, `gpt_cache_ratio`, `auxdata_dir`. It auto-resolves `resolved_max_workers`, `resolved_xmx_mb`, `resolved_threads_per_job`, `resolved_cache_mb`.
+`ProcessingConfig` is now a runtime-only struct: `bin`, `file_manager`, `max_workers`, `max_ram_gb`, `gpt_threads_per_job`, `gpt_cache_ratio`, `auxdata_dir`. It auto-resolves `resolved_max_workers`, `resolved_xmx_mb`, `resolved_threads_per_job`, `resolved_cache_mb`.
 
 #### 5. **BeamDimapDataset** (`dimap.py`)
 
@@ -222,7 +222,7 @@ where $p$ is `self_weight_power` (0 = pure resolution weighting; $p > 0$ promote
 ### Environment Variables
 
 ```bash
-export SNAP_GPT_PATH="/path/to/snap/bin/gpt"
+export SNAP_BIN="/path/to/snap/bin"
 ```
 
 ### ProcessingConfig

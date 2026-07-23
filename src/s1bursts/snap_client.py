@@ -66,6 +66,45 @@ def _write_graph(tmp_dir: Path, name: str, xml: str) -> Path:
     return graph_file
 
 
+def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path:
+    """Resolve and validate the SNAP ``gpt`` executable path.
+
+    Precedence:
+
+    1. ``bin_dir`` (the ``bin`` argument passed to ``ProcessingConfig``).
+    2. ``SNAP_BIN``, a SNAP installation's ``bin`` directory.
+    3. ``gpt`` discovered on ``PATH``.
+
+    Raises
+    ------
+    ConfigurationError
+        If none of the above resolve to a candidate path, or the resolved path is
+        not an executable file.
+    """
+    resolved_bin = bin_dir or snap_settings.bin
+    if resolved_bin is not None:
+        candidates = (resolved_bin / name for name in ("gpt", "gpt.exe"))
+        found = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if found is None:
+            msg = f"No `gpt` executable found in SNAP bin directory: {resolved_bin}"
+            raise ConfigurationError(msg)
+        gpt_path = found
+    else:
+        which = shutil.which("gpt")
+        if which is None:
+            msg = (
+                "Could not resolve the SNAP `gpt` executable. Set `SNAP_BIN` to your SNAP "
+                "installation's `bin` directory, add `gpt` to PATH, or pass `bin` explicitly."
+            )
+            raise ConfigurationError(msg)
+        gpt_path = Path(which)
+
+    if not os.access(gpt_path, os.X_OK):
+        msg = f"SNAP GPT executable is not executable: {gpt_path}"
+        raise ConfigurationError(msg)
+    return gpt_path
+
+
 def _extract_gpt_error(
     stdout: str | None,
     stderr: str | None,
@@ -114,9 +153,9 @@ class ProcessingConfig:
     ----------
     file_manager : FileManager
         File manager resolving input SLC and output product paths.
-    gpt_path : Path, optional
-        Path to the SNAP ``gpt`` executable. Defaults to the ``SNAP_GPT_PATH``
-        environment variable.
+    bin : Path, optional
+        A SNAP installation's ``bin`` directory, used to locate the ``gpt``
+        executable. Defaults to ``SNAP_BIN``, then ``gpt`` discovered on ``PATH``.
     rasterio_profile : dict, optional
         Overrides for the rasterio profile used when rewriting GPT output
         GeoTIFFs. Merged over ``{"dtype": "float32", "nodata": "nan"}``.
@@ -138,7 +177,7 @@ class ProcessingConfig:
     """
 
     file_manager: FileManager
-    gpt_path: Path | None = None
+    bin: Path | None = None
     rasterio_profile: dict[str, Any] | None = None
     max_workers: int | None = None
     max_ram_gb: float | None = None
@@ -162,17 +201,9 @@ class ProcessingConfig:
         self._resolve_resources(snap_settings)
 
     def _resolve_paths(self, snap_settings: SNAPSettings) -> None:
-        """Resolve GPT paths from explicit values and settings."""
-        gpt_path = self.gpt_path or snap_settings.gpt_path
-        if gpt_path is None:
-            msg = (
-                "SNAP GPT path is None. Specify `gpt_path` or set `SNAP_GPT_PATH` in environment."
-            )
-            raise ConfigurationError(msg)
-
-        if not gpt_path.exists():
-            msg = f"SNAP GPT executable not found: {gpt_path}"
-            raise ConfigurationError(msg)
+        """Resolve GPT and auxdata paths from explicit values and settings."""
+        self.resolved_gpt_path = _resolve_gpt_path(self.bin, snap_settings)
+        logger.debug("Resolved SNAP GPT executable: %s", self.resolved_gpt_path)
 
         auxdata_path = self.auxdata_path or snap_settings.auxdata_path
         if auxdata_path is None:
@@ -182,7 +213,6 @@ class ProcessingConfig:
             )
             raise ConfigurationError(msg)
 
-        self.resolved_gpt_path = gpt_path
         self.resolved_auxdata_path = auxdata_path
 
     def _resolve_resources(self, snap_settings: SNAPSettings) -> None:

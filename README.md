@@ -64,7 +64,7 @@ Credentials and SNAP settings are read from environment variables (or a
 | --- | --- |
 | `CDSE_USERNAME`, `CDSE_PASSWORD` | CDSE account, required for OData burst downloads ([register](https://dataspace.copernicus.eu/)) |
 | `CDSE_S3_ACCESS_KEY_ID`, `CDSE_S3_SECRET_ACCESS_KEY` | CDSE S3 keys, required for S3 burst extraction ([generate](https://eodata-s3keysmanager.dataspace.copernicus.eu/)) |
-| `SNAP_GPT_PATH` | Path to the SNAP `gpt` executable, required for processing |
+| `SNAP_BIN` | Path to a SNAP installation's `bin` directory; its `gpt` executable is used for processing. Falls back to `gpt` on `PATH` if unset |
 | `SNAP_MAX_WORKERS` | Parallel GPT processes (default: 1) |
 | `SNAP_MAX_RAM_GB` | Total RAM budget across GPT processes in GB (default: 4) |
 | `SNAP_AUXDATA_PATH` | Shared DEM/orbit cache (default: `~/.snap/auxdata`) |

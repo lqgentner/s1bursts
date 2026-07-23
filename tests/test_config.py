@@ -48,13 +48,13 @@ class TestGetSettings:
         assert get_settings().cdse.username == "from-dotenv"
 
     def test_defaults(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        for var in ("SNAP_GPT_PATH", "SNAP_MAX_WORKERS", "SNAP_MAX_RAM_GB"):
+        for var in ("SNAP_BIN", "SNAP_MAX_WORKERS", "SNAP_MAX_RAM_GB"):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.chdir(tmp_path)
 
         snap = get_settings().snap
 
-        assert snap.gpt_path is None
+        assert snap.bin is None
         assert snap.max_workers == 1
         assert snap.max_ram_gb == 4.0
         assert snap.auxdata_path == Path.home() / ".snap/auxdata"

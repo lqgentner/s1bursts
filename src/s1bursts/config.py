@@ -56,7 +56,7 @@ class SNAPSettings(BaseSettings):
         extra="ignore",
     )
 
-    gpt_path: Path | None = None
+    bin: Path | None = None
     auxdata_path: Path = Path.home() / ".snap/auxdata"
     max_workers: int = 1
     max_ram_gb: float = 4.0
