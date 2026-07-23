@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
+from s1bursts.config import get_settings
 
-from s1bursts.config import CDSES3Settings, get_settings
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestGetSettings:
@@ -57,30 +58,3 @@ class TestGetSettings:
         assert snap.max_workers == 1
         assert snap.max_ram_gb == 4.0
         assert snap.auxdata_path == Path.home() / ".snap/auxdata"
-
-
-class TestS3Env:
-    def test_injects_and_restores_aws_variables(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "previous-key")
-        monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
-        s3 = CDSES3Settings(access_key_id="cdse-key", secret_access_key="cdse-secret")
-
-        with s3.s3_env():
-            assert os.environ["AWS_ACCESS_KEY_ID"] == "cdse-key"
-            assert os.environ["AWS_SECRET_ACCESS_KEY"] == "cdse-secret"
-
-        assert os.environ["AWS_ACCESS_KEY_ID"] == "previous-key"
-        assert "AWS_SECRET_ACCESS_KEY" not in os.environ
-
-    def test_missing_credentials_raise(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        monkeypatch.delenv("CDSE_S3_ACCESS_KEY_ID", raising=False)
-        monkeypatch.delenv("CDSE_S3_SECRET_ACCESS_KEY", raising=False)
-        monkeypatch.chdir(tmp_path)
-        s3 = CDSES3Settings()
-
-        with pytest.raises(ValueError, match="CDSE S3 credentials not configured"), s3.s3_env():
-            pass

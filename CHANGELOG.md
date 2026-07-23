@@ -44,3 +44,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   parser.
 - Relative auxdata cache paths are resolved before symlinking into per-worker
   SNAP userdirs, avoiding broken symlinks.
+
+## Removed
+
+- **Breaking:** removed `CDSES3Settings.s3_env`, a legacy context manager that
+  injected `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` for an external script.
+  S3 credentials now flow through the S3 `UPath` and `freezecore.s3.s3_env`.
