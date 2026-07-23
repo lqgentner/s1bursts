@@ -12,18 +12,24 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 - `Burst.mode` property deriving the acquisition mode (`IW`/`EW`) from the
   sub-swath.
+- `download_burst_map()` to explicitly fetch the SAR-MPC burst-ID map, verified against a pinned SHA-256.
+
+### Changed
+
+- Burst-ID map is now opt-in. Relative orbit number, orbit
+  direction, and footprint geometry are propagated from the CDSE search response
+  and from SLC filenames onto `Burst`/products, so the search → download →
+  process → composite path no longer downloads anything. The ~500 MB SAR-MPC map
+  is consulted only for a burst lacking that metadata (e.g. hand-constructed),
+  and is no longer fetched automatically — call `download_burst_map()` to opt in.
 - `py.typed` marker so downstream type checkers use the inline annotations.
 - Packaging metadata: project URLs, keywords, and Development-Status / Topic /
   Typing classifiers.
 - GitHub Actions CI (lint, type-check, test matrix on 3.12/3.13, a lowest-bound
   dependency job, and a build + wheel smoke-test), a scheduled/manual CDSE +
   SNAP integration workflow, and a Trusted-Publishing release workflow.
-
-### Changed
-
 - Licensing metadata modernized to PEP 639 (`license = "MIT"` +
-  `license-files`), and the sdist no longer ships developer scaffolding
-  (`.vscode/`, `CLAUDE.md`, `AGENTS.md`, `uv.lock`, internal pipeline notes).
+  `license-files`).
 - `numpy` lower bound raised to `>=2.0` to match the freezecore floor, and
   `requests` given a `>=2.28` floor.
 
@@ -35,8 +41,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - **S3-only credentials**: `BurstDatabase.download(endpoint="s3")` no longer
   constructs a CDSE OData authentication handler up front, so downloads work
   with only `CDSE_S3_*` credentials configured. OData credentials are requested
-  lazily and only when an OData request (primary or fallback) actually runs; a
-  missing-credential failure is surfaced as a clear per-burst `BurstDownloadError`.
+  lazily and only when an OData request (primary or fallback) actually runs.
 - Non-integer standard-grid origin now uses true division
   (`grid_spacing / 2`), so a 7.5 m grid yields a 3.75 m pixel-centre origin.
 - Downloaded SAFE annotation/calibration/noise/RFI/manifest XML is parsed with a

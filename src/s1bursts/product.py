@@ -102,8 +102,10 @@ class GeocodedBurst(BurstFootprintMixin, BaseProduct, ABC):
     burst_id: int
     sub_swath: SubSwath
     crs: CRSLike
-    # Resolved via the BurstFootprintMixin property (burst-map LUT); declared
-    # as a field so it is included in dataclasses.asdict() for filenames.
+    # Relative orbit number propagated from the source burst; None falls back to the
+    # LUT via the mixin property. Keyword-only so subclasses can add required fields.
+    _rel_orbit_number: int | None = field(default=None, repr=False, kw_only=True)
+    # Mixin property (propagated value or LUT), declared as a field for asdict() filenames.
     rel_orbit_number: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -160,6 +162,7 @@ class BackscatterProduct(GeocodedBurst):
             polarization=burst.polarization,
             date=burst.date,
             crs=crs,
+            _rel_orbit_number=burst.rel_orbit_number,
         )
 
 
@@ -283,6 +286,7 @@ class CoregisteredProduct(GeocodedBurst, ABC):
             date_secondary=pair.secondary.date,
             polarization=pair.primary.polarization,
             crs=crs,
+            _rel_orbit_number=pair.rel_orbit_number,
         )
 
 

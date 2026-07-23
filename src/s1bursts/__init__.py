@@ -1,6 +1,7 @@
 """Submodule for Sentinel-1 burst processing."""
 
 from s1bursts.burst import Burst, BurstCollection, BurstPair, BurstPairCollection
+from s1bursts.burstmap import download_burst_map
 from s1bursts.database import BurstDatabase
 from s1bursts.dimap import BeamDimapDataset
 from s1bursts.errors import (
@@ -47,4 +48,5 @@ __all__ = [
     "S1BurstsError",
     "SearchQuery",
     "SnapProcessingError",
+    "download_burst_map",
 ]

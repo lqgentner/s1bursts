@@ -17,7 +17,7 @@ from pandas.api.types import CategoricalDtype
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from shapely import Polygon
+    from shapely import MultiPolygon, Polygon
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,14 @@ S1_MODE_DESC = {
     "IW": "Interferometric Wide Swath",
     "EW": "Extra Wide Swath",
 }
+
+# Release tag, baked into cache paths so a version bump cannot reuse a stale cache.
+_BURSTMAP_VERSION = "20220530"
+# SAR-MPC publishes no checksum, so this pins our own known-good copy of the ZIP.
+_BURSTMAP_SHA256 = "9a37efaa7e629f9f4b807fd4a95797a8a5011b9ec3a02e686cfb3682180e4426"
+_COPERNICUS_TERMS_URL = (
+    "https://sentinels.copernicus.eu/documents/247904/690755/Sentinel_Data_Legal_Notice"
+)
 
 
 class Sentinel1Bursts(GeoVectorData):
@@ -84,21 +92,30 @@ class Sentinel1Bursts(GeoVectorData):
         """Metadata container for dataset attribution and licensing."""
         return DatasetMetadata(
             name="Sentinel-1 Burst ID Map",
-            source_url="https://sar-mpc.eu/files/S1_burstid_20220530.zip",
+            source_url=f"https://sar-mpc.eu/files/S1_burstid_{_BURSTMAP_VERSION}.zip",
             attribution="SAR Mission Performance Cluster (SAR-MPC)",
-            version="20220530",
+            version=_BURSTMAP_VERSION,
+            sha256=_BURSTMAP_SHA256,
+            license_url=_COPERNICUS_TERMS_URL,
+            description=(
+                "Sentinel-1 burst-ID map distributed by SAR-MPC. No explicit license is "
+                "stated upstream; use is governed by the Copernicus data terms."
+            ),
             additional_fields={"mode": S1_MODE_DESC[self.mode]},
         )
 
     @property
     def raw_path(self) -> Path:
         """Path to the raw downloaded data."""
-        return self.cache_dir / "raw/sar/s1-burstid-map.zip"
+        return self.cache_dir / f"raw/sar/s1-burstid-map-{_BURSTMAP_VERSION}.zip"
 
     @property
     def processed_path(self) -> Path:
         """Path to the processed data."""
-        return self.cache_dir / f"processed/sar/s1-{self.mode.lower()}-burstid-map.parquet"
+        return (
+            self.cache_dir
+            / f"processed/sar/s1-{self.mode.lower()}-burstid-map-{_BURSTMAP_VERSION}.parquet"
+        )
 
     def _prepare(self) -> None:
         """Extract the ZIP, select most important columns and save as GeoParquet."""
@@ -132,6 +149,52 @@ class Sentinel1Bursts(GeoVectorData):
         save_and_read_parquet(bursts, self.processed_path)
 
 
+def download_burst_map(cache_dir: str | Path | None = None, *, mode: Mode = "IW") -> Path:
+    """Download and prepare the Sentinel-1 burst-ID map for a given acquisition mode.
+
+    The map is a large (~500 MB per mode) static dataset from SAR-MPC. It is only
+    needed to look up the relative orbit number, orbit direction, or footprint
+    geometry of a burst that was **not** obtained from a CDSE search or an SLC
+    filename (e.g. a manually constructed burst). It is not downloaded
+    automatically; call this once to opt in. The raw download is verified against
+    a pinned SHA-256.
+
+    Parameters
+    ----------
+    cache_dir : str or Path or None, default: None
+        Root directory for cached dataset files. Defaults to the
+        ``FREEZECORE_CACHE`` environment variable or the system cache directory.
+    mode : {"IW", "EW"}, default: "IW"
+        Sentinel-1 acquisition mode.
+
+    Returns
+    -------
+    Path
+        Path to the prepared GeoParquet file.
+    """
+    dataset = Sentinel1Bursts(cache_dir=cache_dir, mode=mode)
+    dataset.get_data(download=True)
+    return dataset.processed_path
+
+
+def _load_indexed_burst_map(cache_dir: str | Path | None, mode: Mode) -> gpd.GeoDataFrame:
+    """Load the prepared burst map indexed by ``(burst_id, subswath_name)``.
+
+    Does not download: the map is opt-in. Raises a clear error, pointing at
+    :func:`download_burst_map`, when the data has not been fetched yet.
+    """
+    try:
+        df = Sentinel1Bursts(cache_dir=cache_dir, mode=mode).get_data(download=False)
+    except FileNotFoundError as e:
+        msg = (
+            f"The Sentinel-1 {mode} burst-ID map is required to look up this burst's "
+            "orbit/geometry, but it has not been downloaded. Fetch it once (~500 MB"
+            f"download) with `s1bursts.download_burst_map(mode='{mode}')`."
+        )
+        raise FileNotFoundError(msg) from e
+    return df.set_index(["burst_id", "subswath_name"])
+
+
 @functools.cache
 def create_s1_orbit_direction_lut(
     cache_dir: str | Path | None = None,
@@ -163,8 +226,7 @@ def create_s1_orbit_direction_lut(
         Mapping of ``(burst_id, subswath_name)`` → orbit direction string.
 
     """
-    df = Sentinel1Bursts(cache_dir=cache_dir, mode=mode).get_data(download=True)
-    df = df.set_index(["burst_id", "subswath_name"])
+    df = _load_indexed_burst_map(cache_dir, mode)
     return cast("dict[tuple[int, SubSwath], OrbitDirection]", df["orbit_pass"].to_dict())
 
 
@@ -199,8 +261,7 @@ def create_s1_orbit_number_lut(
         Mapping of ``(burst_id, subswath_name)`` → relative orbit number.
 
     """
-    df = Sentinel1Bursts(cache_dir=cache_dir, mode=mode).get_data(download=True)
-    df = df.set_index(["burst_id", "subswath_name"])
+    df = _load_indexed_burst_map(cache_dir, mode)
     return cast("dict[tuple[int, SubSwath], int]", df["relative_orbit_number"].to_dict())
 
 
@@ -208,7 +269,7 @@ def create_s1_orbit_number_lut(
 def create_s1_geometry_lut(
     cache_dir: str | Path | None = None,
     mode: Mode = "IW",
-) -> dict[tuple[int, SubSwath], Polygon]:
+) -> dict[tuple[int, SubSwath], Polygon | MultiPolygon]:
     """Build a lookup table mapping burst footprints to their geometry.
 
     Loads the Sentinel-1 burst ID map and returns a dictionary keyed by
@@ -230,10 +291,9 @@ def create_s1_geometry_lut(
 
     Returns
     -------
-    dict[tuple[int, SubSwath], Polygon]
+    dict[tuple[int, SubSwath], Polygon | MultiPolygon]
         Mapping of ``(burst_id, subswath_name)`` → footprint geometry.
 
     """
-    df = Sentinel1Bursts(cache_dir=cache_dir, mode=mode).get_data(download=True)
-    df = df.set_index(["burst_id", "subswath_name"])
-    return cast("dict[tuple[int, SubSwath], Polygon]", df["geometry"].to_dict())
+    df = _load_indexed_burst_map(cache_dir, mode)
+    return cast("dict[tuple[int, SubSwath], Polygon | MultiPolygon]", df["geometry"].to_dict())

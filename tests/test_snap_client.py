@@ -153,7 +153,15 @@ BURST_ID = 30346
 
 
 def _make_burst(date: str) -> Burst:
-    return Burst(burst_id=BURST_ID, sub_swath="IW1", polarization="VV", date=Timestamp(date))
+    # Propagate the relative orbit number (as a burst from a CDSE search or SLC
+    # filename would) so product creation needs no opt-in burst-map download.
+    return Burst(
+        burst_id=BURST_ID,
+        sub_swath="IW1",
+        polarization="VV",
+        date=Timestamp(date),
+        _rel_orbit_number=44,
+    )
 
 
 @pytest.fixture
