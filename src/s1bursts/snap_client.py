@@ -411,18 +411,27 @@ class SNAPClient:
         """
         profile = self.config.rasterio_profile or {}
         nodata = profile.get("nodata")
-        if nodata is not None:
-            with rasterio.open(staging_file, "r+") as ds:
-                ds.nodata = float(nodata)
-        # The staging file is a disposable copy in a TemporaryDirectory, so move
-        # it into place rather than leaving a redundant copy behind.
-        rewrite_tiff(
-            src_file=staging_file,
-            dst_file=product_path,
-            profile=profile,
-            band_names=band_names,
-            move=True,
-        )
+        # SNAP's GeoTIFF writer leaves a Photometric/ExtraSamples tag mismatch on
+        # multi-band products. GDAL recovers on read but logs a CPLE_AppDefined warning.
+        # Suppress that warning. The tags are fixed after `rewrite_tiff`.
+        _rasterio_logger = logging.getLogger("rasterio")
+        _prev_level = _rasterio_logger.level
+        _rasterio_logger.setLevel(logging.ERROR)
+        try:
+            if nodata is not None:
+                with rasterio.open(staging_file, "r+") as ds:
+                    ds.nodata = float(nodata)
+            # The staging file is a disposable copy in a TemporaryDirectory, so move
+            # it into place rather than leaving a redundant copy behind.
+            rewrite_tiff(
+                src_file=staging_file,
+                dst_file=product_path,
+                profile=profile,
+                band_names=band_names,
+                move=True,
+            )
+        finally:
+            _rasterio_logger.setLevel(_prev_level)
 
     def create_backscatter(
         self,
