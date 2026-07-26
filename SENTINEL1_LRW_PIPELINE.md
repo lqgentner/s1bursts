@@ -155,7 +155,7 @@ High-level batch processing wrapper around SNAPClient:
 - Progress bars (rich), error handling with continue-on-failure, `OperationSummary` reporting
 - Methods:
   - `create_backscatter(bursts, crs, flatten_terrain=True)` → `OperationSummary[RTCProduct] | OperationSummary[GTCProduct]`
-  - `create_coherences(pairs, crs, window=(15,3), magnitude=True)` → `OperationSummary[CoherenceProduct] | OperationSummary[CoherenceComplexProduct]`
+  - `create_coherences(pairs, crs, window=(25,5), magnitude=True)` → `OperationSummary[CoherenceProduct] | OperationSummary[CoherenceComplexProduct]`
   - `create_interferograms(pairs, crs)` → `OperationSummary[InterferogramProduct]`
 
 **Result types** (`summary.py`):

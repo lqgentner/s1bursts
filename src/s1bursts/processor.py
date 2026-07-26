@@ -63,7 +63,7 @@ class BurstProcessor:
         Parameters
         ----------
         config : ProcessingConfig
-            Processing configuration with FileManager and graph paths.
+            Runtime configuration for SNAP GPT processing.
         show_progress : bool, default True
             Whether to show progress bars.
         continue_on_error : bool, default True
@@ -132,7 +132,7 @@ class BurstProcessor:
             The coordinate reference system of the geocoded output.
         config : CoherenceConfig | None, default None
             Graph-shape configuration; defaults to ``CoherenceConfig()``
-            (15x3 magnitude window, Copernicus 30m DEM).  Set
+            (25x5 magnitude window, Copernicus 30m DEM).  Set
             ``write_complex=True`` to produce a complex coherence product.
         overwrite : bool, default False
             Whether to overwrite existing products.
