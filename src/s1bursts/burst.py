@@ -99,6 +99,9 @@ class BurstFootprintMixin:
 
         Raises
         ------
+        FileNotFoundError
+            If the value was not propagated and the burst map has not been
+            downloaded (see :func:`s1bursts.burstmap.download_burst_map`).
         KeyError
             If the burst is not found in the map.
         """
@@ -117,6 +120,9 @@ class BurstFootprintMixin:
 
         Raises
         ------
+        FileNotFoundError
+            If the value was not propagated and the burst map has not been
+            downloaded (see :func:`s1bursts.burstmap.download_burst_map`).
         KeyError
             If the burst is not found in the map.
         """
@@ -135,6 +141,9 @@ class BurstFootprintMixin:
 
         Raises
         ------
+        FileNotFoundError
+            If the geometry was not propagated and the burst map has not been
+            downloaded (see :func:`s1bursts.burstmap.download_burst_map`).
         KeyError
             If the burst is not found in the map.
         """
@@ -155,6 +164,9 @@ class BurstFootprintMixin:
 
         Raises
         ------
+        FileNotFoundError
+            If ``rel_orbit_number`` was not propagated and the burst map has not
+            been downloaded (see :func:`s1bursts.burstmap.download_burst_map`).
         KeyError
             If the burst is not found in the burst map.
         """
