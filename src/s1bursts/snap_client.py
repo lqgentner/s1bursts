@@ -66,6 +66,74 @@ def _write_graph(tmp_dir: Path, name: str, xml: str) -> Path:
     return graph_file
 
 
+def _apply_map_looks(geocoded_file: Path, map_looks: tuple[int, int]) -> None:
+    """Coherently average a geocoded complex coherence and rewrite it as magnitude.
+
+    Replaces the two-band ``coh_i`` / ``coh_q`` raster at *geocoded_file* with a
+    single-band coherence magnitude, averaged over a ``(n_rows, n_cols)`` window
+    of the map grid before the modulus is taken. Averaging the complex value
+    rather than the magnitude is what suppresses the estimator's small-window
+    bias, since the noise contribution carries random phase and cancels.
+
+    Parameters
+    ----------
+    geocoded_file : Path
+        Two-band terrain-corrected complex coherence, modified in place.
+    map_looks : tuple of int
+        Averaging window as ``(n_rows, n_cols)`` in geocoded pixels.
+    """
+    n_rows, n_cols = map_looks
+    with rasterio.open(geocoded_file) as src:
+        profile = src.profile
+        coh = (src.read(1) + 1j * src.read(2)).astype(np.complex64)
+
+    averaged = sliding_window_mean(coh, win_row=n_rows, win_col=n_cols)
+    magnitude = np.abs(averaged).astype(np.float32)
+
+    profile.update(count=1, dtype="float32")
+    with rasterio.open(geocoded_file, "w", **profile) as dst:
+        dst.write(magnitude, 1)
+
+
+def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path:
+    """Resolve and validate the SNAP ``gpt`` executable path.
+
+    Precedence:
+
+    1. ``bin_dir`` (the ``bin`` argument passed to ``SNAPConfig``).
+    2. ``SNAP_BIN``, a SNAP installation's ``bin`` directory.
+    3. ``gpt`` discovered on ``PATH``.
+
+    Raises
+    ------
+    ConfigurationError
+        If none of the above resolve to a candidate path, or the resolved path is
+        not an executable file.
+    """
+    resolved_bin = bin_dir or snap_settings.bin
+    if resolved_bin is not None:
+        candidates = (resolved_bin / name for name in ("gpt", "gpt.exe"))
+        found = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if found is None:
+            msg = f"No `gpt` executable found in SNAP bin directory: {resolved_bin}"
+            raise ConfigurationError(msg)
+        gpt_path = found
+    else:
+        which = shutil.which("gpt")
+        if which is None:
+            msg = (
+                "Could not resolve the SNAP `gpt` executable. Set `SNAP_BIN` to your SNAP "
+                "installation's `bin` directory, add `gpt` to PATH, or pass `bin` explicitly."
+            )
+            raise ConfigurationError(msg)
+        gpt_path = Path(which)
+
+    if not os.access(gpt_path, os.X_OK):
+        msg = f"SNAP GPT executable is not executable: {gpt_path}"
+        raise ConfigurationError(msg)
+    return gpt_path
+
+
 def _extract_gpt_error(
     stdout: str | None,
     stderr: str | None,
@@ -107,16 +175,14 @@ def _extract_gpt_error(
 
 
 @dataclass
-class ProcessingConfig:
+class SNAPConfig:
     """Runtime configuration for SNAP GPT processing.
 
     Parameters
     ----------
-    file_manager : FileManager
-        File manager resolving input SLC and output product paths.
-    gpt_path : Path, optional
-        Path to the SNAP ``gpt`` executable. Defaults to the ``SNAP_GPT_PATH``
-        environment variable.
+    bin : Path, optional
+        A SNAP installation's ``bin`` directory, used to locate the ``gpt``
+        executable. Defaults to ``SNAP_BIN``, then ``gpt`` discovered on ``PATH``.
     rasterio_profile : dict, optional
         Overrides for the rasterio profile used when rewriting GPT output
         GeoTIFFs. Merged over ``{"dtype": "float32", "nodata": "nan"}``.
@@ -137,8 +203,7 @@ class ProcessingConfig:
         ``SNAP_AUXDATA_PATH`` (or ``~/.snap/auxdata``).
     """
 
-    file_manager: FileManager
-    gpt_path: Path | None = None
+    bin: Path | None = None
     rasterio_profile: dict[str, Any] | None = None
     max_workers: int | None = None
     max_ram_gb: float | None = None
@@ -162,17 +227,9 @@ class ProcessingConfig:
         self._resolve_resources(snap_settings)
 
     def _resolve_paths(self, snap_settings: SNAPSettings) -> None:
-        """Resolve GPT paths from explicit values and settings."""
-        gpt_path = self.gpt_path or snap_settings.gpt_path
-        if gpt_path is None:
-            msg = (
-                "SNAP GPT path is None. Specify `gpt_path` or set `SNAP_GPT_PATH` in environment."
-            )
-            raise ConfigurationError(msg)
-
-        if not gpt_path.exists():
-            msg = f"SNAP GPT executable not found: {gpt_path}"
-            raise ConfigurationError(msg)
+        """Resolve GPT and auxdata paths from explicit values and settings."""
+        self.resolved_gpt_path = _resolve_gpt_path(self.bin, snap_settings)
+        logger.debug("Resolved SNAP GPT executable: %s", self.resolved_gpt_path)
 
         auxdata_path = self.auxdata_path or snap_settings.auxdata_path
         if auxdata_path is None:
@@ -182,7 +239,6 @@ class ProcessingConfig:
             )
             raise ConfigurationError(msg)
 
-        self.resolved_gpt_path = gpt_path
         self.resolved_auxdata_path = auxdata_path
 
     def _resolve_resources(self, snap_settings: SNAPSettings) -> None:
@@ -222,21 +278,25 @@ class SNAPClient:
 
     Parameters
     ----------
-    config : ProcessingConfig
-        Processing configuration with file manager and graph paths.
+    file_manager : FileManager
+        File manager resolving input SLC and output product paths.
+    config : SNAPConfig | None, default None
+        Runtime configuration for SNAP GPT; defaults to ``SNAPConfig()``.
 
     """
 
-    def __init__(self, config: ProcessingConfig) -> None:
+    def __init__(self, file_manager: FileManager, config: SNAPConfig | None = None) -> None:
         """Initialize SNAP client.
 
         Parameters
         ----------
-        config : ProcessingConfig
-            Processing configuration with file manager and graph paths.
+        file_manager : FileManager
+            File manager resolving input SLC and output product paths.
+        config : SNAPConfig | None, default None
+            Runtime configuration for SNAP GPT; defaults to ``SNAPConfig()``.
         """
-        self.config = config
-        self.manager = config.file_manager
+        self.config = config or SNAPConfig()
+        self.manager = file_manager
 
     def _run_gpt(
         self,
@@ -381,18 +441,27 @@ class SNAPClient:
         """
         profile = self.config.rasterio_profile or {}
         nodata = profile.get("nodata")
-        if nodata is not None:
-            with rasterio.open(staging_file, "r+") as ds:
-                ds.nodata = float(nodata)
-        # The staging file is a disposable copy in a TemporaryDirectory, so move
-        # it into place rather than leaving a redundant copy behind.
-        rewrite_tiff(
-            src_file=staging_file,
-            dst_file=product_path,
-            profile=profile,
-            band_names=band_names,
-            move=True,
-        )
+        # SNAP's GeoTIFF writer leaves a Photometric/ExtraSamples tag mismatch on
+        # multi-band products. GDAL recovers on read but logs a CPLE_AppDefined warning.
+        # Suppress that warning. The tags are fixed after `rewrite_tiff`.
+        _rasterio_logger = logging.getLogger("rasterio")
+        _prev_level = _rasterio_logger.level
+        _rasterio_logger.setLevel(logging.ERROR)
+        try:
+            if nodata is not None:
+                with rasterio.open(staging_file, "r+") as ds:
+                    ds.nodata = float(nodata)
+            # The staging file is a disposable copy in a TemporaryDirectory, so move
+            # it into place rather than leaving a redundant copy behind.
+            rewrite_tiff(
+                src_file=staging_file,
+                dst_file=product_path,
+                profile=profile,
+                band_names=band_names,
+                move=True,
+            )
+        finally:
+            _rasterio_logger.setLevel(_prev_level)
 
     def create_backscatter(
         self,
@@ -502,22 +571,20 @@ class SNAPClient:
         OperationResult
             Result of the coherence processing.
         """
-        result: OperationResult[CoherenceProduct] | OperationResult[CoherenceComplexProduct]
         if config.write_complex:
-            result = self._create_coherence_complex(
+            return self._create_coherence_complex(
                 pair,
                 crs,
                 config=config,
                 overwrite=overwrite,
             )
-        else:
-            result = self._create_coherence_magnitude(
-                pair,
-                crs,
-                config=config,
-                overwrite=overwrite,
-            )
-        return cast("OperationResult[CoherenceProduct | CoherenceComplexProduct]", result)
+        magnitude = self._create_coherence_magnitude(
+            pair,
+            crs,
+            config=config,
+            overwrite=overwrite,
+        )
+        return cast("OperationResult[CoherenceProduct | CoherenceComplexProduct]", magnitude)
 
     def _create_coherence_magnitude(
         self,
@@ -579,9 +646,18 @@ class SNAPClient:
         *,
         config: CoherenceConfig,
         overwrite: bool,
-    ) -> OperationResult[CoherenceComplexProduct]:
-        """Run the no-TC ifg graph + Python complex coherence + standalone TC graph."""
-        product = CoherenceComplexProduct.from_burst_pair(pair, crs=crs)
+    ) -> OperationResult[CoherenceProduct | CoherenceComplexProduct]:
+        """Run the no-TC ifg graph + Python complex coherence + standalone TC graph.
+
+        With ``config.map_looks`` set, a coherent box average is applied on the
+        geocoded grid and the magnitude written, so the product on disk is a
+        plain ``COH`` and everything downstream is unchanged.
+        """
+        product: CoherenceProduct | CoherenceComplexProduct = (
+            CoherenceProduct.from_burst_pair(pair, crs=crs)
+            if config.map_looks is not None
+            else CoherenceComplexProduct.from_burst_pair(pair, crs=crs)
+        )
         product_path = self.manager.get_product_path(product)
 
         if not overwrite and self.manager.product_exists(product):
@@ -635,6 +711,8 @@ class SNAPClient:
                         process_params={"crs": get_epsg_string(crs)},
                         target_file=staging_file,
                     )
+                    if config.map_looks is not None:
+                        _apply_map_looks(staging_file, config.map_looks)
                     self._finalize_product(
                         staging_file,
                         product_path,
@@ -820,7 +898,7 @@ def _populate_worker_userdir(worker_userdir: Path, shared_cache: Path) -> None:
             if dst.exists():
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.symlink_to(src)
+            dst.symlink_to(src.resolve())
 
 
 def _publish_new_files(worker_userdir: Path, shared_cache: Path) -> None:

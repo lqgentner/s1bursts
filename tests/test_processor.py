@@ -10,7 +10,7 @@ import pytest
 
 from s1bursts.errors import SnapProcessingError
 from s1bursts.processor import BurstProcessor
-from s1bursts.snap_client import ProcessingConfig
+from s1bursts.snap_client import SNAPConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationSummary
 
 if TYPE_CHECKING:
@@ -18,49 +18,61 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ProcessingConfig:
-    """ProcessingConfig with a stub gpt executable and isolated env."""
-    for var in ("SNAP_GPT_PATH", "SNAP_MAX_WORKERS", "SNAP_THREADS_PER_JOB"):
+def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SNAPConfig:
+    """SNAPConfig with a stub gpt executable and isolated env."""
+    for var in ("SNAP_BIN", "SNAP_MAX_WORKERS", "SNAP_THREADS_PER_JOB"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.chdir(tmp_path)
     gpt = tmp_path / "gpt"
     gpt.touch()
-    return ProcessingConfig(file_manager=MagicMock(), gpt_path=gpt)
+    gpt.chmod(0o755)
+    return SNAPConfig(bin=tmp_path)
 
 
 @pytest.fixture
-def processor(config: ProcessingConfig) -> Iterator[BurstProcessor]:
+def processor(config: SNAPConfig) -> Iterator[BurstProcessor]:
     with patch("s1bursts.processor.SNAPClient") as mock_client_cls:
-        proc = BurstProcessor(config, show_progress=False)
+        proc = BurstProcessor(MagicMock(), config, show_progress=False)
         proc.snap_client = mock_client_cls.return_value
         yield proc
 
 
-class TestProcessingConfig:
+class TestSNAPConfig:
     def test_missing_gpt_path_raises(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.delenv("SNAP_GPT_PATH", raising=False)
+        monkeypatch.delenv("SNAP_BIN", raising=False)
         monkeypatch.chdir(tmp_path)
 
-        with pytest.raises(Exception, match="SNAP GPT path is None"):
-            ProcessingConfig(file_manager=MagicMock())
+        with (
+            patch("s1bursts.snap_client.shutil.which", return_value=None),
+            pytest.raises(Exception, match="Could not resolve the SNAP `gpt` executable"),
+        ):
+            SNAPConfig()
 
-    def test_nonexistent_gpt_path_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(Exception, match="executable not found"):
-            ProcessingConfig(file_manager=MagicMock(), gpt_path=tmp_path / "missing-gpt")
+    def test_bin_without_gpt_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(Exception, match="No `gpt` executable found"):
+            SNAPConfig(bin=tmp_path / "missing-bin")
+
+    def test_non_executable_gpt_path_raises(self, tmp_path: Path) -> None:
+        gpt = tmp_path / "gpt"
+        gpt.touch()
+        gpt.chmod(0o644)
+
+        with pytest.raises(Exception, match="not executable"):
+            SNAPConfig(bin=tmp_path)
 
     def test_resource_resolution(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SNAP_MAX_WORKERS", raising=False)
         monkeypatch.chdir(tmp_path)
         gpt = tmp_path / "gpt"
         gpt.touch()
+        gpt.chmod(0o755)
 
-        config = ProcessingConfig(
-            file_manager=MagicMock(),
-            gpt_path=gpt,
+        config = SNAPConfig(
+            bin=tmp_path,
             max_workers=2,
             max_ram_gb=16,
         )
@@ -74,12 +86,13 @@ class TestProcessingConfig:
     def test_xmx_never_negative_for_small_ram(self, tmp_path: Path) -> None:
         gpt = tmp_path / "gpt"
         gpt.touch()
+        gpt.chmod(0o755)
 
-        config = ProcessingConfig(file_manager=MagicMock(), gpt_path=gpt, max_ram_gb=1)
+        config = SNAPConfig(bin=tmp_path, max_ram_gb=1)
 
         assert config.resolved_xmx_mb >= 512
 
-    def test_profile_defaults_merged(self, config: ProcessingConfig) -> None:
+    def test_profile_defaults_merged(self, config: SNAPConfig) -> None:
         assert config.rasterio_profile is not None
         assert config.rasterio_profile["dtype"] == "float32"
 

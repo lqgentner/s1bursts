@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: Ruff lint
+        run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras
+      - name: mypy
+        run: uv run mypy src/s1bursts
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Run offline unit tests with coverage
+        run: >
+          uv run --python ${{ matrix.python-version }} --all-extras
+          pytest -q --cov=s1bursts --cov-branch --cov-report=term-missing
+
+  test-lowest:
+    # Verifies the declared dependency lower bounds actually install and pass on
+    # the minimum supported Python (3.12). `--resolution lowest-direct` pins
+    # every direct dependency (runtime, extras, and dev tools) to its floor, so
+    # the dev group carries lower bounds too (see [dependency-groups] in
+    # pyproject.toml).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync dependencies at their lower bounds
+        run: uv sync --all-extras --resolution lowest-direct --python 3.12
+      - name: Run tests
+        # --no-sync keeps `uv run` from re-resolving the environment back to the
+        # latest versions before running.
+        run: uv run --no-sync pytest -q
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # hatch-vcs derives the version from git tags/history.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Build sdist and wheel
+        run: uv build
+      - name: Check metadata
+        run: uvx twine check dist/*
+      - name: Smoke-test the wheel in a clean environment
+        run: |
+          uv venv /tmp/smoke
+          uv pip install --python /tmp/smoke "$(ls dist/*.whl)"
+          uv run --python /tmp/smoke --no-project python -c "import s1bursts; from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery; print('import OK')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*

@@ -14,18 +14,38 @@ import rasterio
 import rasterio.transform
 
 from s1bursts.burst import Burst, BurstPair
+from s1bursts.config import SNAPSettings
 from s1bursts.dimap import BeamDimapDataset
-from s1bursts.errors import SnapProcessingError
+from s1bursts.errors import ConfigurationError, SnapProcessingError
 from s1bursts.snap_client import (
     BackscatterConfig,
     CoherenceConfig,
-    ProcessingConfig,
     SNAPClient,
+    SNAPConfig,
     _extract_gpt_error,
+    _resolve_gpt_path,
     snap_worker_userdir,
 )
 from s1bursts.summary import ErrorResult, OkResult
 from tests.test_dimap import NCOLS, NROWS, make_dimap
+
+
+def _snap_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    **overrides: object,
+) -> SNAPSettings:
+    """Build a ``SNAPSettings`` isolated from the ambient environment/.env file."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SNAP_BIN", raising=False)
+    return SNAPSettings(**overrides)  # type: ignore[arg-type]
+
+
+def _make_executable(path: Path) -> Path:
+    path.touch()
+    path.chmod(0o755)
+    return path
+
 
 # Representative gpt stderr for an Apply-Orbit-File failure: an ``Error:`` block
 # followed by a Java stack trace.
@@ -78,6 +98,104 @@ def test_extract_gpt_error_truncates_to_max_chars() -> None:
     detail = _extract_gpt_error(None, f"Error: {long_line}", max_chars=100)
 
     assert len(detail) == 100
+
+
+class TestResolveGptPath:
+    """Precedence: explicit `bin` argument > SNAP_BIN > PATH."""
+
+    def test_explicit_bin_wins_over_snap_bin(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        explicit_bin = tmp_path / "explicit-bin"
+        explicit_bin.mkdir()
+        explicit_gpt = _make_executable(explicit_bin / "gpt")
+        settings_bin = tmp_path / "settings-bin"
+        settings_bin.mkdir()
+        _make_executable(settings_bin / "gpt")
+        settings = _snap_settings(tmp_path, monkeypatch, bin=settings_bin)
+
+        assert _resolve_gpt_path(explicit_bin, settings) == explicit_gpt
+
+    def test_snap_bin_resolves_gpt(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        gpt = _make_executable(bin_dir / "gpt")
+        settings = _snap_settings(tmp_path, monkeypatch, bin=bin_dir)
+
+        assert _resolve_gpt_path(None, settings) == gpt
+
+    def test_snap_bin_resolves_windows_style_executable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        gpt = _make_executable(bin_dir / "gpt.exe")
+        settings = _snap_settings(tmp_path, monkeypatch, bin=bin_dir)
+
+        assert _resolve_gpt_path(None, settings) == gpt
+
+    def test_snap_bin_without_gpt_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        settings = _snap_settings(tmp_path, monkeypatch, bin=bin_dir)
+
+        with pytest.raises(ConfigurationError, match="No `gpt` executable found"):
+            _resolve_gpt_path(None, settings)
+
+    def test_snap_bin_nonexistent_directory_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        settings = _snap_settings(tmp_path, monkeypatch, bin=tmp_path / "missing-dir")
+
+        with pytest.raises(ConfigurationError, match="No `gpt` executable found"):
+            _resolve_gpt_path(None, settings)
+
+    def test_falls_back_to_path_when_unconfigured(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        settings = _snap_settings(tmp_path, monkeypatch)
+        which_path = _make_executable(tmp_path / "path-gpt")
+        monkeypatch.setattr("s1bursts.snap_client.shutil.which", lambda _name: str(which_path))
+
+        assert _resolve_gpt_path(None, settings) == which_path
+
+    def test_raises_when_nothing_resolves(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        settings = _snap_settings(tmp_path, monkeypatch)
+        monkeypatch.setattr("s1bursts.snap_client.shutil.which", lambda _name: None)
+
+        with pytest.raises(ConfigurationError, match="Could not resolve the SNAP `gpt`"):
+            _resolve_gpt_path(None, settings)
+
+    def test_explicit_bin_gpt_must_be_executable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        explicit_bin = tmp_path / "explicit-bin"
+        explicit_bin.mkdir()
+        gpt = explicit_bin / "gpt"
+        gpt.touch()
+        gpt.chmod(0o644)
+        settings = _snap_settings(tmp_path, monkeypatch)
+
+        with pytest.raises(ConfigurationError, match="not executable"):
+            _resolve_gpt_path(explicit_bin, settings)
 
 
 class TestWriteComplexCoherence:
@@ -153,26 +271,34 @@ BURST_ID = 30346
 
 
 def _make_burst(date: str) -> Burst:
-    return Burst(burst_id=BURST_ID, sub_swath="IW1", polarization="VV", date=Timestamp(date))
+    # Propagate the relative orbit number (as a burst from a CDSE search or SLC
+    # filename would) so product creation needs no opt-in burst-map download.
+    return Burst(
+        burst_id=BURST_ID,
+        sub_swath="IW1",
+        polarization="VV",
+        date=Timestamp(date),
+        _rel_orbit_number=44,
+    )
 
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SNAPClient:
     """SNAPClient with a stub gpt executable and a mocked FileManager."""
-    monkeypatch.delenv("SNAP_GPT_PATH", raising=False)
+    monkeypatch.delenv("SNAP_BIN", raising=False)
     monkeypatch.chdir(tmp_path)
     gpt = tmp_path / "gpt"
     gpt.touch()
+    gpt.chmod(0o755)
     manager = MagicMock()
     manager.get_product_path.return_value = tmp_path / "product.tif"
     manager.product_exists.return_value = False
     manager.get_slc_path.return_value = tmp_path / "slc.zip"
-    config = ProcessingConfig(
-        file_manager=manager,
-        gpt_path=gpt,
+    config = SNAPConfig(
+        bin=tmp_path,
         auxdata_path=tmp_path / "auxdata",
     )
-    return SNAPClient(config)
+    return SNAPClient(manager, config)
 
 
 class TestCreateBackscatter:

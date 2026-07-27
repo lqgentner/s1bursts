@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, overload
 
 from freezecore.progress import create_progress
 
-from s1bursts.snap_client import ProcessingConfig, SNAPClient
+from s1bursts.snap_client import SNAPClient, SNAPConfig
 from s1bursts.snap_graph import (
     BackscatterConfig,
     CoherenceConfig,
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         BurstPair,
         BurstPairCollection,
     )
+    from s1bursts.filemanager import FileManager
     from s1bursts.product import (
         CoherenceComplexProduct,
         CoherenceProduct,
@@ -53,7 +54,8 @@ class BurstProcessor:
 
     def __init__(
         self,
-        config: ProcessingConfig,
+        file_manager: FileManager,
+        config: SNAPConfig | None = None,
         *,
         show_progress: bool = True,
         continue_on_error: bool = True,
@@ -62,16 +64,19 @@ class BurstProcessor:
 
         Parameters
         ----------
-        config : ProcessingConfig
-            Processing configuration with FileManager and graph paths.
+        file_manager : FileManager
+            File manager resolving input SLC and output product paths.
+        config : SNAPConfig | None, default None
+            Runtime configuration for SNAP GPT processing; defaults to
+            ``SNAPConfig()``.
         show_progress : bool, default True
             Whether to show progress bars.
         continue_on_error : bool, default True
             Whether to continue processing after an error.
         """
-        self.config = config
-        self.snap_client = SNAPClient(config)
-        self.manager = config.file_manager
+        self.config = config or SNAPConfig()
+        self.snap_client = SNAPClient(file_manager, self.config)
+        self.manager = file_manager
         self.show_progress = show_progress
         self.continue_on_error = continue_on_error
 
@@ -132,7 +137,7 @@ class BurstProcessor:
             The coordinate reference system of the geocoded output.
         config : CoherenceConfig | None, default None
             Graph-shape configuration; defaults to ``CoherenceConfig()``
-            (15x3 magnitude window, Copernicus 30m DEM).  Set
+            (25x5 magnitude window, Copernicus 30m DEM).  Set
             ``write_complex=True`` to produce a complex coherence product.
         overwrite : bool, default False
             Whether to overwrite existing products.

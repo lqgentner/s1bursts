@@ -16,6 +16,7 @@ from s1bursts.burst import (
     BurstPair,
     BurstPairCollection,
 )
+from s1bursts.cdse import CDSEResponse
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -51,12 +52,14 @@ def make_burst(
     burst_id: int = BURST_ID,
     sub_swath: str = SUB_SWATH,
     polarization: str = "VV",
+    geometry: object | None = None,
 ) -> Burst:
     return Burst(
         burst_id=burst_id,
         sub_swath=sub_swath,  # type: ignore[arg-type]
         polarization=polarization,  # type: ignore[arg-type]
         date=Timestamp(date),
+        _geometry=geometry,  # type: ignore[arg-type]
     )
 
 
@@ -71,11 +74,92 @@ class TestBurst:
     def test_full_burst_id(self) -> None:
         assert make_burst().full_burst_id == "015_030346_IW1"
 
+    @pytest.mark.parametrize(
+        ("sub_swath", "expected_mode"),
+        [
+            ("IW1", "IW"),
+            ("IW3", "IW"),
+            ("EW1", "EW"),
+            ("EW5", "EW"),
+        ],
+    )
+    def test_mode_derived_from_subswath(self, sub_swath: str, expected_mode: str) -> None:
+        assert make_burst(sub_swath=sub_swath).mode == expected_mode
+
+    def test_ew_burst_queries_ew_lut(self) -> None:
+        """EW bursts must query the EW burst map, not the IW default (S1-01)."""
+        ew_key = (12345, "EW2")
+        ew_geometry = box(10.0, 70.0, 12.0, 71.0)
+        with (
+            patch("s1bursts.burst.create_s1_geometry_lut") as geom_lut,
+            patch("s1bursts.burst.create_s1_orbit_number_lut") as orbit_num_lut,
+            patch("s1bursts.burst.create_s1_orbit_direction_lut") as orbit_dir_lut,
+        ):
+            geom_lut.return_value = {ew_key: ew_geometry}
+            orbit_num_lut.return_value = {ew_key: 42}
+            orbit_dir_lut.return_value = {ew_key: "DESCENDING"}
+            burst = make_burst(burst_id=12345, sub_swath="EW2")
+
+            assert burst.geometry is ew_geometry
+            assert burst.rel_orbit_number == 42
+            assert burst.orbit_direction == "DESCENDING"
+            assert burst.full_burst_id == "042_012345_EW2"
+
+        geom_lut.assert_called_once_with(mode="EW")
+        orbit_num_lut.assert_called_with(mode="EW")
+        orbit_dir_lut.assert_called_once_with(mode="EW")
+
     def test_unknown_burst_raises_key_error(self) -> None:
         burst = make_burst(burst_id=99999)
 
         with pytest.raises(KeyError, match="not found in the Sentinel-1 burst map"):
             _ = burst.rel_orbit_number
+
+    def test_propagated_values_bypass_the_lut(self) -> None:
+        """Stored footprint overrides are returned without consulting the LUT."""
+        burst = Burst(
+            burst_id=BURST_ID,
+            sub_swath="IW1",
+            polarization="VV",
+            date=Timestamp("2022-01-01"),
+            _rel_orbit_number=88,
+            _orbit_direction="DESCENDING",
+            _geometry=GEOMETRY,
+        )
+        with (
+            patch("s1bursts.burst.create_s1_orbit_number_lut", side_effect=AssertionError),
+            patch("s1bursts.burst.create_s1_orbit_direction_lut", side_effect=AssertionError),
+            patch("s1bursts.burst.create_s1_geometry_lut", side_effect=AssertionError),
+        ):
+            assert burst.rel_orbit_number == 88
+            assert burst.orbit_direction == "DESCENDING"
+            assert burst.geometry is GEOMETRY
+            assert burst.full_burst_id == "088_030346_IW1"
+
+    def test_from_dict_propagates_rel_orbit_from_filename(self) -> None:
+        """A burst reconstructed from a parsed SLC filename keeps its relative orbit."""
+        burst = Burst.from_dict(
+            {
+                "burst_id": BURST_ID,
+                "sub_swath": "IW1",
+                "polarization": "VV",
+                "date": Timestamp("2022-01-01"),
+                "rel_orbit_number": 123,
+            },
+        )
+        with patch("s1bursts.burst.create_s1_orbit_number_lut", side_effect=AssertionError):
+            assert burst.rel_orbit_number == 123
+
+    def test_equality_normalizes_date_to_day(self) -> None:
+        """A CDSE burst (full time) equals its filesystem twin (midnight)."""
+        with_time = make_burst("2022-01-01 05:00:00")
+        midnight = make_burst("2022-01-01")
+
+        assert with_time == midnight
+        assert hash(with_time) == hash(midnight)
+
+    def test_inequality_across_days(self) -> None:
+        assert make_burst("2022-01-01") != make_burst("2022-01-02")
 
     def test_from_dict_drops_unknown_keys(self) -> None:
         burst = Burst.from_dict(
@@ -110,6 +194,40 @@ class TestBurst:
         assert one == other
 
 
+class TestFromCdseResponse:
+    @staticmethod
+    def _response(rel_orbit: int = 88, direction: str = "DESCENDING") -> CDSEResponse:
+        value = {
+            "Id": "some-id",
+            "Name": "some-name",
+            "Footprint": "SRID=4326;POLYGON ((7 46, 8 46, 8 47, 7 47, 7 46))",
+            "BurstId": BURST_ID,
+            "AbsoluteBurstId": 123456,
+            "SwathIdentifier": "IW1",
+            "PolarisationChannels": "VV",
+            "ParentProductName": "S1A_IW_SLC__1SDV",
+            "BeginningDateTime": "2022-01-01T05:00:00.000Z",
+            "EndingDateTime": "2022-01-01T05:00:03.000Z",
+            "AzimuthTime": "2022-01-01T05:00:01.000Z",
+            "RelativeOrbitNumber": rel_orbit,
+            "OrbitDirection": direction,
+        }
+        return CDSEResponse(context="$metadata#Bursts", value=[value], count=1)
+
+    def test_propagates_cdse_metadata_without_lut(self) -> None:
+        """Orbit/direction/geometry from a CDSE search never hit the burst-map LUT."""
+        collection = BurstCollection.from_cdse_response(self._response())
+        (burst,) = list(collection)
+        with (
+            patch("s1bursts.burst.create_s1_orbit_number_lut", side_effect=AssertionError),
+            patch("s1bursts.burst.create_s1_orbit_direction_lut", side_effect=AssertionError),
+            patch("s1bursts.burst.create_s1_geometry_lut", side_effect=AssertionError),
+        ):
+            assert burst.rel_orbit_number == 88
+            assert burst.orbit_direction == "DESCENDING"
+            assert burst.geometry.bounds == (7.0, 46.0, 8.0, 47.0)
+
+
 class TestBurstPair:
     def test_valid_pair(self) -> None:
         pair = BurstPair(make_burst("2022-01-01"), make_burst("2022-01-13"))
@@ -133,7 +251,9 @@ class TestBurstPair:
 
 
 def make_collection(dates: list[str], polarization: str = "VV") -> BurstCollection:
-    return BurstCollection.from_bursts([make_burst(d, polarization=polarization) for d in dates])
+    return BurstCollection.from_bursts(
+        [make_burst(d, polarization=polarization, geometry=GEOMETRY) for d in dates],
+    )
 
 
 class TestBurstCollection:
@@ -200,8 +320,40 @@ class TestBurstCollection:
             collection = BurstCollection.from_bursts(bursts)
 
         assert len(collection) == 2
-        # The more recent of the two near-duplicates is kept
+        # Without dimensions, the more recent of the two near-duplicates is kept.
         assert Timestamp("2022-01-01 05:00:01") in list(collection.df.date)
+
+    def test_dedup_keeps_most_complete_over_most_recent(self) -> None:
+        """The fuller burst wins even when it has the earlier timestamp."""
+        base = {
+            "burst_id": BURST_ID,
+            "sub_swath": SUB_SWATH,
+            "polarization": "VV",
+            "abs_burst_id": 1,
+            "parent_product_name": "P",
+            "geometry": GEOMETRY,
+        }
+        fuller = {
+            **base,
+            "date": Timestamp("2018-07-25 05:51:06.894074", tz="UTC"),
+            "cdse_id": "fuller",
+            "_lines_per_burst": 1508,
+            "_samples_per_burst": 23281,
+        }
+        cropped = {
+            **base,
+            "date": Timestamp("2018-07-25 05:51:06.894080", tz="UTC"),
+            "cdse_id": "cropped",
+            "_lines_per_burst": 1504,
+            "_samples_per_burst": 22424,
+        }
+        df = gpd.GeoDataFrame([fuller, cropped], geometry="geometry")
+
+        with pytest.warns(UserWarning, match="most complete"):
+            collection = BurstCollection(df)
+
+        assert len(collection) == 1
+        assert list(collection.df.cdse_id) == ["fuller"]
 
     def test_find_pairs_with_12_day_baseline(self) -> None:
         collection = make_collection(["2022-01-01", "2022-01-13", "2022-01-25"])

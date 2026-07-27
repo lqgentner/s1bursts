@@ -101,6 +101,7 @@ class ResolutionWeighter:
         clip_max_resolution: float | None = ...,
         decibel: bool = ...,
         write_qa: Literal[False] = False,
+        cqm_decibel: bool = ...,
         overwrite: bool = ...,
     ) -> RTCLRWComposite: ...
     @overload
@@ -113,8 +114,22 @@ class ResolutionWeighter:
         clip_max_resolution: float | None = ...,
         decibel: bool = ...,
         write_qa: Literal[True],
+        cqm_decibel: bool = ...,
         overwrite: bool = ...,
     ) -> RTCLRWResult: ...
+    @overload
+    def compose_rtc_lrw(
+        self,
+        rtc_products: Collection[RTCProduct],
+        geobox: MGRSGeoBox,
+        *,
+        aggregation: Literal["mean", "median"] | float = ...,
+        clip_max_resolution: float | None = ...,
+        decibel: bool = ...,
+        write_qa: bool,
+        cqm_decibel: bool = ...,
+        overwrite: bool = ...,
+    ) -> RTCLRWComposite | RTCLRWResult: ...
     def compose_rtc_lrw(
         self,
         rtc_products: Collection[RTCProduct],
@@ -124,6 +139,7 @@ class ResolutionWeighter:
         clip_max_resolution: float | None = None,
         decibel: bool = False,
         write_qa: bool = False,
+        cqm_decibel: bool = False,
         overwrite: bool = False,
     ) -> RTCLRWComposite | RTCLRWResult:
         """Compute a locally resolution weighted (LRW) RTC intensity composite.
@@ -157,6 +173,10 @@ class ResolutionWeighter:
             If ``True``, also write two auxiliary QA products alongside the
             composite: a number-of-observations map (``QA-NUM``) and a composite
             quality map (``QA-CQM``).
+        cqm_decibel : bool, default False
+            If ``True``, write the ``QA-CQM`` map in decibels instead of square
+            metres. Independent of ``decibel``: the CQM describes the composite's
+            local resolution, not its values.
         overwrite : bool, default False
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
@@ -225,7 +245,15 @@ class ResolutionWeighter:
             overwrite=overwrite,
         )
         if qa:
-            self._write_lrw_qa(rtc_obs, sim_obs, weights, qa, geobox, overwrite=overwrite)
+            self._write_lrw_qa(
+                rtc_obs,
+                sim_obs,
+                weights,
+                qa,
+                geobox,
+                cqm_decibel=cqm_decibel,
+                overwrite=overwrite,
+            )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
 
     @overload
@@ -238,6 +266,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         clip_max_resolution: float | None = ...,
         write_qa: Literal[False] = False,
+        cqm_decibel: bool = ...,
         overwrite: bool = ...,
     ) -> CohLRWComposite: ...
     @overload
@@ -250,8 +279,22 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         clip_max_resolution: float | None = ...,
         write_qa: Literal[True],
+        cqm_decibel: bool = ...,
         overwrite: bool = ...,
     ) -> CohLRWResult: ...
+    @overload
+    def compose_coherence_lrw(
+        self,
+        coh_products: Collection[CoherenceProduct],
+        rtc_products: Collection[RTCProduct],
+        geobox: MGRSGeoBox,
+        *,
+        aggregation: Literal["mean", "median"] | float = ...,
+        clip_max_resolution: float | None = ...,
+        write_qa: bool,
+        cqm_decibel: bool = ...,
+        overwrite: bool = ...,
+    ) -> CohLRWComposite | CohLRWResult: ...
     def compose_coherence_lrw(
         self,
         coh_products: Collection[CoherenceProduct],
@@ -261,6 +304,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = "median",
         clip_max_resolution: float | None = None,
         write_qa: bool = False,
+        cqm_decibel: bool = False,
         overwrite: bool = False,
     ) -> CohLRWComposite | CohLRWResult:
         """Compute a locally resolution weighted (LRW) coherence composite.
@@ -295,6 +339,10 @@ class ResolutionWeighter:
             If ``True``, also write two auxiliary QA products alongside the
             composite: a number-of-observations map (``QA-NUM``) and a composite
             quality map (``QA-CQM``).
+        cqm_decibel : bool, default False
+            If ``True``, write the ``QA-CQM`` map in decibels instead of square
+            metres. Independent of ``decibel``: the CQM describes the composite's
+            local resolution, not its values.
         overwrite : bool, default False
             Skip writing if the output file already exists.
 
@@ -361,7 +409,15 @@ class ResolutionWeighter:
             overwrite=overwrite,
         )
         if qa:
-            self._write_lrw_qa(coh_obs, sim_obs, weights, qa, geobox, overwrite=overwrite)
+            self._write_lrw_qa(
+                coh_obs,
+                sim_obs,
+                weights,
+                qa,
+                geobox,
+                cqm_decibel=cqm_decibel,
+                overwrite=overwrite,
+            )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
 
     @overload
@@ -386,6 +442,17 @@ class ResolutionWeighter:
         write_qa: Literal[True],
         overwrite: bool = ...,
     ) -> dict[OrbitDirection, RTCPassResult]: ...
+    @overload
+    def compose_rtc_by_pass(
+        self,
+        rtc_products: Collection[RTCProduct],
+        geobox: MGRSGeoBox,
+        *,
+        aggregation: Literal["mean", "median"] | float = ...,
+        decibel: bool = ...,
+        write_qa: bool,
+        overwrite: bool = ...,
+    ) -> dict[OrbitDirection, RTCPassComposite | RTCPassResult]: ...
     def compose_rtc_by_pass(
         self,
         rtc_products: Collection[RTCProduct],
@@ -517,6 +584,16 @@ class ResolutionWeighter:
         write_qa: Literal[True],
         overwrite: bool = ...,
     ) -> dict[OrbitDirection, CohPassResult]: ...
+    @overload
+    def compose_coherence_by_pass(
+        self,
+        coh_products: Collection[CoherenceProduct],
+        geobox: MGRSGeoBox,
+        *,
+        aggregation: Literal["mean", "median"] | float = ...,
+        write_qa: bool,
+        overwrite: bool = ...,
+    ) -> dict[OrbitDirection, CohPassComposite | CohPassResult]: ...
     def compose_coherence_by_pass(
         self,
         coh_products: Collection[CoherenceProduct],
@@ -701,6 +778,7 @@ class ResolutionWeighter:
         qa: Mapping[QaMetric, LRWQAProduct],
         geobox: MGRSGeoBox,
         *,
+        cqm_decibel: bool,
         overwrite: bool,
     ) -> None:
         """Compute and write the number-of-observations and composite quality map QA products."""
@@ -713,8 +791,9 @@ class ResolutionWeighter:
             nodata=0,
             overwrite=overwrite,
         )
+        cqm = self._calc_cqm(values, sim_area, weights)
         self._save(
-            self._calc_cqm(values, sim_area, weights),
+            self._to_decibel(cqm) if cqm_decibel else cqm,
             qa[QaMetric.CQM],
             geobox,
             "cqm",

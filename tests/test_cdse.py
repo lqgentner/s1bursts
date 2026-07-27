@@ -164,6 +164,22 @@ class TestCDSEResponse:
         assert gdf.crs.to_epsg() == 4326
         assert gdf.geometry.iloc[0].bounds == (7.0, 46.0, 8.0, 47.0)
 
+    def test_to_geodataframe_parses_multipolygon(self) -> None:
+        """Bursts crossing the antimeridian come back as MULTIPOLYGON."""
+        multipolygon = (
+            "MULTIPOLYGON (((180 52, 179 52, 179 53, 180 53, 180 52)), "
+            "((-180 52, -179 52, -179 53, -180 53, -180 52)))"
+        )
+        response = CDSEResponse(
+            context="$metadata#Bursts",
+            value=[make_response_value(footprint=f"SRID=4326;{multipolygon}")],
+            count=1,
+        )
+
+        gdf = response.to_geodataframe()
+
+        assert gdf.geometry.iloc[0].geom_type == "MultiPolygon"
+
     def test_to_geodataframe_empty(self) -> None:
         response = CDSEResponse(context="$metadata#Bursts", value=[], count=0)
 

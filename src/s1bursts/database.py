@@ -98,16 +98,37 @@ class BurstDatabase:
         # sequence.
         self._unavailable_bursts: dict[Burst, BurstNotFoundError] = {}
         self._unavailable_lock = threading.Lock()
+        self._auth_lock = threading.Lock()
 
     def _ensure_auth(self) -> None:
-        """Create the CDSE authentication handler on first use.
+        """Create the CDSE OData authentication handler on first use.
 
-        Deferred so that searching (which needs no auth) works without
-        credentials, and so that credentials loaded after import (e.g. via
-        ``load_dotenv()``) are picked up.
+        Deferred so that searching (which needs no auth) and S3-only downloads
+        work without OData credentials, and so that credentials loaded after
+        import (e.g. via ``load_dotenv()``) are picked up. Called only
+        immediately before an OData request, so a user who configured only
+        ``CDSE_S3_*`` credentials is never asked for OData credentials unless an
+        OData attempt actually happens (as primary endpoint or as S3 fallback).
+
+        Raises
+        ------
+        BurstDownloadError
+            If OData credentials are required but not configured. Raised as a
+            per-burst :class:`BurstError` so the download loop records it and,
+            when S3 was the primary endpoint, still surfaces the original S3
+            failure alongside it.
         """
-        if self.client.auth is None:
-            self.client.auth = CDSEAuth()
+        with self._auth_lock:
+            if self.client.auth is None:
+                try:
+                    self.client.auth = CDSEAuth()
+                except ValueError as e:
+                    msg = (
+                        "OData download requires CDSE credentials, but none are "
+                        "configured. Set CDSE_USERNAME and CDSE_PASSWORD, or download "
+                        "with endpoint='s3' using CDSE_S3_* credentials only."
+                    )
+                    raise BurstDownloadError(msg) from e
 
     def search(self, query: SearchQuery, max_items: int = 100) -> BurstCollection:
         """Search for Sentinel-1 bursts matching the query.
@@ -196,9 +217,10 @@ class BurstDatabase:
         # Determine which endpoint to use
         endpoint_to_use = endpoint if endpoint is not None else self.default_endpoint
 
-        # Download remaining bursts if any
+        # Download remaining bursts if any. Authentication is deferred to the
+        # OData code path (see `_ensure_auth`) so that `endpoint="s3"` works with
+        # only CDSE_S3_* credentials configured.
         if bursts_to_download:
-            self._ensure_auth()
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [
                     executor.submit(self._download_single_burst, burst, endpoint_to_use)
@@ -336,6 +358,7 @@ class BurstDatabase:
             msg = "ODATA download requires `cdse_id`, received None."
             return ErrorResult(source=burst, error=BurstDownloadError(msg))
         try:
+            self._ensure_auth()
             self.client.download_burst(
                 burst.cdse_id,
                 save_path=self.file_manager.get_slc_path(burst),

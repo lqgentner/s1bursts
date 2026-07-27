@@ -1,50 +1,40 @@
-"""Submodule for Sentinel-1 burst processing."""
+"""Sentinel-1 burst download, SAR and InSAR processing.
 
-from s1bursts.burst import Burst, BurstCollection, BurstPair, BurstPairCollection
+A burst is the smallest independently processable unit of a Sentinel-1
+acquisition. Working at that level keeps downloads small (~100 MB instead of
+~4 GB per SLC scene) and makes dense time-series processing of a fixed
+footprint practical.
+
+This namespace holds what a pipeline is built from: the file manager, the
+search, processing, and compositing services, and the configs they take. What
+those services return lives alongside them, in ``s1bursts.burst``,
+``s1bursts.product``, and ``s1bursts.summary``.
+"""
+
+from s1bursts.burstmap import download_burst_map
 from s1bursts.database import BurstDatabase
-from s1bursts.dimap import BeamDimapDataset
-from s1bursts.errors import (
-    BurstDownloadError,
-    BurstError,
-    BurstNotFoundError,
-    ConfigurationError,
-    S1BurstsError,
-    SnapProcessingError,
-)
 from s1bursts.filemanager import FileManager
 from s1bursts.processor import BurstProcessor
 from s1bursts.query import SearchQuery
 from s1bursts.resolution_weighter import ResolutionWeighter
-from s1bursts.snap_client import ProcessingConfig
+from s1bursts.snap_client import SNAPConfig
 from s1bursts.snap_graph import (
     BackscatterConfig,
     CoherenceConfig,
     GeocodingConfig,
     InterferogramConfig,
 )
-from s1bursts.summary import OperationSummary
 
 __all__ = [
     "BackscatterConfig",
-    "BeamDimapDataset",
-    "Burst",
-    "BurstCollection",
     "BurstDatabase",
-    "BurstDownloadError",
-    "BurstError",
-    "BurstNotFoundError",
-    "BurstPair",
-    "BurstPairCollection",
     "BurstProcessor",
     "CoherenceConfig",
-    "ConfigurationError",
     "FileManager",
     "GeocodingConfig",
     "InterferogramConfig",
-    "OperationSummary",
-    "ProcessingConfig",
     "ResolutionWeighter",
-    "S1BurstsError",
+    "SNAPConfig",
     "SearchQuery",
-    "SnapProcessingError",
+    "download_burst_map",
 ]

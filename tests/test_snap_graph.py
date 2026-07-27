@@ -120,7 +120,11 @@ GOLDEN_CASES = [
     ),
     pytest.param(
         "S1_SLCtoCoh-swissALTI3D.xml",
-        CoherenceConfig(dem=_SWISSALTI3D, window=(25, 5), external_dem_apply_egm=False),
+        CoherenceConfig(
+            dem=_SWISSALTI3D,
+            window=(25, 5),
+            external_dem_apply_egm=False,
+        ),
         id="coherence-swissalti3d",
     ),
 ]
