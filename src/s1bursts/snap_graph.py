@@ -162,13 +162,14 @@ def _multilook(
     *,
     n_rg_looks: int,
     n_az_looks: int,
+    output_intensity: bool = True,
 ) -> str:
     node = _new_node(graph, node_id, "Multilook", [source])
     p = _new_params(node)
     _add_param(p, "sourceBands", None)
     _add_param(p, "nRgLooks", n_rg_looks)
     _add_param(p, "nAzLooks", n_az_looks)
-    _add_param(p, "outputIntensity", value=True)
+    _add_param(p, "outputIntensity", output_intensity)
     _add_param(p, "grSquarePixel", value=True)
     return node_id
 
@@ -641,6 +642,9 @@ def build_coherence_magnitude_graph(cfg: CoherenceConfig) -> str:
         apply_egm=cfg.external_dem_apply_egm,
     )
     src = _topsar_deburst(g, "TOPSAR-Deburst", src)
+    if cfg.multilook is not None:
+        rg, az = cfg.multilook
+        src = _multilook(g, "Multilook", src, n_rg_looks=rg, n_az_looks=az)
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
             g,
@@ -751,7 +755,7 @@ def build_coherence_complex_ifg_graph(cfg: CoherenceConfig) -> str:
     """
     g = _new_graph()
     _build_pair_prefix(g, cfg)
-    _build_ifg_branched_graph(
+    src = _build_ifg_branched_graph(
         g,
         subtract_flat_earth_phase=cfg.subtract_flat_earth_phase,
         subtract_topographic_phase=cfg.subtract_topographic_phase,
@@ -760,10 +764,22 @@ def build_coherence_complex_ifg_graph(cfg: CoherenceConfig) -> str:
         nodata=cfg.external_dem_nodata,
         apply_egm=cfg.external_dem_apply_egm,
     )
+    if cfg.multilook is not None:
+        rg, az = cfg.multilook
+        # outputIntensity would collapse i_ifg/q_ifg into a single intensity
+        # band; the complex pair has to survive for the Python band math.
+        src = _multilook(
+            g,
+            "Multilook",
+            src,
+            n_rg_looks=rg,
+            n_az_looks=az,
+            output_intensity=False,
+        )
     _band_maths(
         g,
         "ReplaceZerosWithNaNs",
-        "TOPSAR-Deburst",
+        src,
         target_bands=_ifg_replace_zeros_target_bands(),
         include_variables_element=False,
     )
@@ -868,9 +884,14 @@ class BackscatterConfig(GeocodingConfig):
 
 
 class CoherenceConfig(GeocodingConfig):
-    """Configuration for the coherence pipeline (magnitude or complex)."""
+    """Configuration for the coherence pipeline (magnitude or complex).
+
+    ``multilook`` is ``(n_rg_looks, n_az_looks)`` applied after debursting, as
+    in :class:`BackscatterConfig`; pass ``None`` to skip the ``Multilook`` step.
+    """
 
     window: tuple[_PositiveInt, _PositiveInt] = (25, 5)
+    multilook: tuple[_PositiveInt, _PositiveInt] | None = (5, 1)
     subtract_flat_earth_phase: bool = True
     subtract_topographic_phase: bool = True
     square_pixel: bool = False

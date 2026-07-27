@@ -94,9 +94,14 @@ GOLDEN_CASES = [
         id="gtc-default",
     ),
     pytest.param(
-        "S1_SLCtoCoh.xml",
+        "S1_SLCtoCoh-ML.xml",
         CoherenceConfig(),
         id="coherence-magnitude",
+    ),
+    pytest.param(
+        "S1_SLCtoCoh.xml",
+        CoherenceConfig(multilook=None),
+        id="coherence-magnitude-no-multilook",
     ),
     pytest.param(
         "S1_SLCtoIfg.xml",
@@ -105,7 +110,7 @@ GOLDEN_CASES = [
     ),
     pytest.param(
         "S1_SLCtoIfg-noTC.xml",
-        CoherenceConfig(write_complex=True),
+        CoherenceConfig(write_complex=True, multilook=None),
         id="coherence-complex-no-tc",
     ),
     pytest.param(
@@ -120,7 +125,12 @@ GOLDEN_CASES = [
     ),
     pytest.param(
         "S1_SLCtoCoh-swissALTI3D.xml",
-        CoherenceConfig(dem=_SWISSALTI3D, window=(25, 5), external_dem_apply_egm=False),
+        CoherenceConfig(
+            dem=_SWISSALTI3D,
+            window=(25, 5),
+            multilook=None,
+            external_dem_apply_egm=False,
+        ),
         id="coherence-swissalti3d",
     ),
 ]
