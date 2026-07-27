@@ -1,6 +1,6 @@
 [project]
 name = "s1bursts"
-description = "Sentinel-1 SLC burst download and InSAR processing built on CDSE and ESA SNAP GPT."
+description = "Sentinel-1 SLC burst download, SAR and InSAR processing, built on CDSE and ESA SNAP GPT."
 authors = [
   { name = "Luis Gentner" , email = "luis.gentner@geo.uzh.ch"},
 ]
@@ -79,7 +79,7 @@ dev = [
 # freezecore is consumed from GitHub (private; requires SSH access) during
 # development. Once freezecore is published on PyPI, this override should be
 # removed so that a clean public checkout resolves the pinned range from PyPI.
-freezecore = { git = "ssh://git@github.com/lqgentner/freezecore.git" }
+freezecore = { git = "ssh://git@github.com/lqgentner/freezecore.git", tag = "v0.1.0"}
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

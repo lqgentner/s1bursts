@@ -465,8 +465,8 @@ wheels = [
 
 [[package]]
 name = "freezecore"
-version = "0.1.dev6+g318938c46"
-source = { git = "ssh://git@github.com/lqgentner/freezecore.git#318938c4699ed7a03d019ac3abd608e3e1e9bf08" }
+version = "0.1.0"
+source = { git = "ssh://git@github.com/lqgentner/freezecore.git?tag=v0.1.0#815eba8c020de39514f12bc79a294751dab14549" }
 dependencies = [
     { name = "affine" },
     { name = "geopandas" },
@@ -1689,7 +1689,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "freezecore", extras = ["s3"], git = "ssh://git@github.com/lqgentner/freezecore.git" },
+    { name = "freezecore", extras = ["s3"], git = "ssh://git@github.com/lqgentner/freezecore.git?tag=v0.1.0" },
     { name = "geopandas", specifier = ">=1.1" },
     { name = "lxml", specifier = ">=5" },
     { name = "numpy", specifier = ">=2.0" },
