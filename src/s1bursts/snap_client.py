@@ -71,7 +71,7 @@ def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path
 
     Precedence:
 
-    1. ``bin_dir`` (the ``bin`` argument passed to ``ProcessingConfig``).
+    1. ``bin_dir`` (the ``bin`` argument passed to ``SNAPConfig``).
     2. ``SNAP_BIN``, a SNAP installation's ``bin`` directory.
     3. ``gpt`` discovered on ``PATH``.
 
@@ -146,13 +146,11 @@ def _extract_gpt_error(
 
 
 @dataclass
-class ProcessingConfig:
+class SNAPConfig:
     """Runtime configuration for SNAP GPT processing.
 
     Parameters
     ----------
-    file_manager : FileManager
-        File manager resolving input SLC and output product paths.
     bin : Path, optional
         A SNAP installation's ``bin`` directory, used to locate the ``gpt``
         executable. Defaults to ``SNAP_BIN``, then ``gpt`` discovered on ``PATH``.
@@ -176,7 +174,6 @@ class ProcessingConfig:
         ``SNAP_AUXDATA_PATH`` (or ``~/.snap/auxdata``).
     """
 
-    file_manager: FileManager
     bin: Path | None = None
     rasterio_profile: dict[str, Any] | None = None
     max_workers: int | None = None
@@ -252,21 +249,25 @@ class SNAPClient:
 
     Parameters
     ----------
-    config : ProcessingConfig
-        Processing configuration with file manager and graph paths.
+    file_manager : FileManager
+        File manager resolving input SLC and output product paths.
+    config : SNAPConfig | None, default None
+        Runtime configuration for SNAP GPT; defaults to ``SNAPConfig()``.
 
     """
 
-    def __init__(self, config: ProcessingConfig) -> None:
+    def __init__(self, file_manager: FileManager, config: SNAPConfig | None = None) -> None:
         """Initialize SNAP client.
 
         Parameters
         ----------
-        config : ProcessingConfig
-            Processing configuration with file manager and graph paths.
+        file_manager : FileManager
+            File manager resolving input SLC and output product paths.
+        config : SNAPConfig | None, default None
+            Runtime configuration for SNAP GPT; defaults to ``SNAPConfig()``.
         """
-        self.config = config
-        self.manager = config.file_manager
+        self.config = config or SNAPConfig()
+        self.manager = file_manager
 
     def _run_gpt(
         self,

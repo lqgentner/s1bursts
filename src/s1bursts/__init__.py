@@ -14,9 +14,9 @@ from s1bursts.errors import (
 )
 from s1bursts.filemanager import FileManager
 from s1bursts.processor import BurstProcessor
-from s1bursts.query import SearchQuery
+from s1bursts.query import Mode, OrbitDirection, Polarization, SearchQuery, SubSwath
 from s1bursts.resolution_weighter import ResolutionWeighter
-from s1bursts.snap_client import ProcessingConfig
+from s1bursts.snap_client import SNAPConfig
 from s1bursts.snap_graph import (
     BackscatterConfig,
     CoherenceConfig,
@@ -42,11 +42,15 @@ __all__ = [
     "FileManager",
     "GeocodingConfig",
     "InterferogramConfig",
+    "Mode",
     "OperationSummary",
-    "ProcessingConfig",
+    "OrbitDirection",
+    "Polarization",
     "ResolutionWeighter",
     "S1BurstsError",
+    "SNAPConfig",
     "SearchQuery",
     "SnapProcessingError",
+    "SubSwath",
     "download_burst_map",
 ]

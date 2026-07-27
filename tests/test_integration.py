@@ -22,7 +22,7 @@ import pyproj
 import pytest
 import rasterio
 
-from s1bursts import BurstDatabase, BurstProcessor, FileManager, ProcessingConfig, SearchQuery
+from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery, SNAPConfig
 from s1bursts.config import get_settings
 from s1bursts.errors import ConfigurationError
 from s1bursts.snap_client import _resolve_gpt_path
@@ -191,7 +191,8 @@ class TestSnapProcessing:
         # oversized -Xmx gets the JVM OOM-killed on smaller dev machines.
         # A single-burst RTC fits in a ~3 GB heap.
         processor = BurstProcessor(
-            ProcessingConfig(file_manager=file_manager, max_workers=1, max_ram_gb=6),
+            file_manager,
+            SNAPConfig(max_workers=1, max_ram_gb=6),
             show_progress=False,
             continue_on_error=False,
         )

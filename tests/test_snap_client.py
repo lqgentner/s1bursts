@@ -20,8 +20,8 @@ from s1bursts.errors import ConfigurationError, SnapProcessingError
 from s1bursts.snap_client import (
     BackscatterConfig,
     CoherenceConfig,
-    ProcessingConfig,
     SNAPClient,
+    SNAPConfig,
     _extract_gpt_error,
     _resolve_gpt_path,
     snap_worker_userdir,
@@ -294,12 +294,11 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SNAPClient:
     manager.get_product_path.return_value = tmp_path / "product.tif"
     manager.product_exists.return_value = False
     manager.get_slc_path.return_value = tmp_path / "slc.zip"
-    config = ProcessingConfig(
-        file_manager=manager,
+    config = SNAPConfig(
         bin=tmp_path,
         auxdata_path=tmp_path / "auxdata",
     )
-    return SNAPClient(config)
+    return SNAPClient(manager, config)
 
 
 class TestCreateBackscatter:
