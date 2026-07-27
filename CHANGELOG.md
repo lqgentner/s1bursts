@@ -13,9 +13,28 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - `Burst.mode` property deriving the acquisition mode (`IW`/`EW`) from the
   sub-swath.
 - `download_burst_map()` to explicitly fetch the SAR-MPC burst-ID map, verified against a pinned SHA-256.
+- `CoherenceConfig.multilook`, a `(n_rg_looks, n_az_looks)` multi-looking step
+  after debursting, mirroring `BackscatterConfig.multilook` and defaulting to
+  `(5, 1)`. Pass `None` to skip it.
+- `cqm_decibel` on `ResolutionWeighter.compose_rtc_lrw()` and
+  `compose_coherence_lrw()` writes the QA-CQM map in decibels, consistent with
+  Small et al. (2021,
+  [doi:10.1109/TGRS.2021.3055562](https://doi.org/10.1109/TGRS.2021.3055562)).
 
 ### Changed
 
+- **Breaking:** the root namespace is narrowed to what a pipeline is *built*
+  from: `FileManager`, `BurstDatabase`, `BurstProcessor`, `ResolutionWeighter`,
+  `SearchQuery`, `SNAPConfig`, the four graph configs, and
+  `download_burst_map()`. What a pipeline *produces* (bursts, products, summaries, ...)
+  now imports from the module it belongs to. The typical search → download → process →
+  composite flow needs none of them, so most code should need no changes.
+- **Breaking:** `ProcessingConfig` is renamed to `SNAPConfig` and no longer
+  carries `file_manager`; every remaining attribute is a SNAP parameter with a
+  default. `BurstProcessor` and `SNAPClient` now take the `FileManager` as their
+  first argument and the config as an optional second one, matching
+  `ResolutionWeighter`: `BurstProcessor(file_manager)` replaces
+  `BurstProcessor(ProcessingConfig(file_manager=fm))`.
 - Burst-ID map is now opt-in. Relative orbit number, orbit
   direction, and footprint geometry are propagated from the CDSE search response
   and from SLC filenames onto `Burst`/products, so the search → download →
@@ -49,6 +68,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   parser.
 - Relative auxdata cache paths are resolved before symlinking into per-worker
   SNAP userdirs, avoiding broken symlinks.
+- `BurstFootprintMixin.rel_orbit_number`, `orbit_direction`, `geometry`, and
+  `full_burst_id` document the `FileNotFoundError` they raise when the value was
+  not propagated and the burst map has not been downloaded.
 
 ## Removed
 

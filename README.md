@@ -1,6 +1,6 @@
 # s1bursts
 
-Sentinel-1 SLC **burst** download and InSAR processing, built on the
+Sentinel-1 SLC **burst** download, SAR and InSAR processing, built on the
 [Copernicus Data Space Ecosystem (CDSE)](https://dataspace.copernicus.eu/) and
 [ESA SNAP](https://step.esa.int/main/toolboxes/snap/) GPT.
 
@@ -31,11 +31,11 @@ practical.
 ```python
 import pandas as pd
 import pyproj
-from s1bursts import BurstDatabase, BurstProcessor, FileManager, ProcessingConfig, SearchQuery
+from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery
 
 fm = FileManager(base_dir="data")
 database = BurstDatabase(file_manager=fm)
-processor = BurstProcessor(ProcessingConfig(file_manager=fm))
+processor = BurstProcessor(file_manager=fm)
 
 # Search all 2022 acquisitions of one burst footprint (Aletsch glacier)
 bursts = database.search(
@@ -54,6 +54,26 @@ crs = pyproj.CRS("EPSG:32632")
 processor.create_backscatter(bursts, crs=crs)
 processor.create_coherences(pairs, crs=crs)
 ```
+
+## API layout
+
+`s1bursts` exports what a pipeline is *built* from — `FileManager`, the
+`BurstDatabase` / `BurstProcessor` / `ResolutionWeighter` services, and the
+configs they take (`SearchQuery`, `SNAPConfig`, `BackscatterConfig`,
+`CoherenceConfig`, `InterferogramConfig`, `GeocodingConfig`), plus
+`download_burst_map`.
+
+What a pipeline *produces* is returned by those services and imported from the
+module it belongs to:
+
+| Module | Contents |
+| --- | --- |
+| `s1bursts.burst` | `Burst`, `BurstPair`, `BurstCollection`, `BurstPairCollection` |
+| `s1bursts.product` | RTC/GTC, coherence, interferogram, and composite product types |
+| `s1bursts.summary` | `OperationSummary`, `OkResult`, `ErrorResult` |
+| `s1bursts.errors` | exception hierarchy, rooted at `S1BurstsError` |
+| `s1bursts.query` | `Polarization`, `Mode`, `SubSwath`, `OrbitDirection` literal aliases |
+| `s1bursts.dimap` | `BeamDimapDataset`, for reading SNAP BEAM-DIMAP bands directly |
 
 ## Configuration
 

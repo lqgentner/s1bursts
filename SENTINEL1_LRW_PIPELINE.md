@@ -130,7 +130,7 @@ Low-level interface to SNAP GPT:
 
 SNAP graphs are generated dynamically at call time from each per-product config in `snap_graph.py` (`BackscatterConfig`, `CoherenceConfig`, `InterferogramConfig`, plus the shared `GeocodingConfig` base). Each config exposes `to_xml()` and `to_mermaid()` for inspection. (A guided-filter coherence variant existed as an experiment and was removed in the s1bursts split.)
 
-`ProcessingConfig` is now a runtime-only struct: `bin`, `file_manager`, `max_workers`, `max_ram_gb`, `gpt_threads_per_job`, `gpt_cache_ratio`, `auxdata_dir`. It auto-resolves `resolved_max_workers`, `resolved_xmx_mb`, `resolved_threads_per_job`, `resolved_cache_mb`.
+`SNAPConfig` is a runtime-only struct: `bin`, `max_workers`, `max_ram_gb`, `gpt_threads_per_job`, `gpt_cache_ratio`, `auxdata_dir`. It auto-resolves `resolved_max_workers`, `resolved_xmx_mb`, `resolved_threads_per_job`, `resolved_cache_mb`.
 
 #### 5. **BeamDimapDataset** (`dimap.py`)
 
@@ -151,7 +151,7 @@ Wrapper around SNAP's BEAM-DIMAP format for band-level I/O, used in the complex 
 
 High-level batch processing wrapper around SNAPClient:
 
-- Parallel execution via `ThreadPoolExecutor` (controlled by `ProcessingConfig.max_workers`)
+- Parallel execution via `ThreadPoolExecutor` (controlled by `SNAPConfig.max_workers`)
 - Progress bars (rich), error handling with continue-on-failure, `OperationSummary` reporting
 - Methods:
   - `create_backscatter(bursts, crs, flatten_terrain=True)` → `OperationSummary[RTCProduct] | OperationSummary[GTCProduct]`
@@ -225,11 +225,10 @@ where $p$ is `self_weight_power` (0 = pure resolution weighting; $p > 0$ promote
 export SNAP_BIN="/path/to/snap/bin"
 ```
 
-### ProcessingConfig
+### SNAPConfig
 
 ```python
-config = ProcessingConfig(
-    file_manager=file_manager,
+config = SNAPConfig(
     max_workers=3,        # parallel SNAP jobs (default: auto)
     max_ram_gb=50,        # total RAM budget (default: auto)
     gpt_threads_per_job=5,  # SNAP -q flag (default: auto)
@@ -271,13 +270,12 @@ See the benchmarking notes in project memory for recommended settings.
 ```python
 from pathlib import Path
 from deepfreezer.sentinel1.filemanager import FileManager
-from deepfreezer.sentinel1.snap_client import ProcessingConfig, SNAPClient
+from s1bursts.snap_client import SNAPClient, SNAPConfig
 from pandas import Timestamp
 
 base_dir = Path("/path/to/data")
 file_manager = FileManager(base_dir)
-config = ProcessingConfig(file_manager=file_manager)
-snap_client = SNAPClient(config)
+snap_client = SNAPClient(file_manager)
 
 result = snap_client.create_backscatter(burst, crs=crs, config=BackscatterConfig())
 rtc_product = result.result  # RTCProduct
