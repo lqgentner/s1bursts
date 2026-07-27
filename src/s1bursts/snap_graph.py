@@ -20,7 +20,14 @@ from typing import Annotated, Any, ClassVar
 from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
 from lxml import etree
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 # Hardened parser: no entity resolution, no network access (XXE-safe).
 _XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
@@ -170,7 +177,11 @@ def _multilook(
     _add_param(p, "nRgLooks", n_rg_looks)
     _add_param(p, "nAzLooks", n_az_looks)
     _add_param(p, "outputIntensity", output_intensity)
-    _add_param(p, "grSquarePixel", value=True)
+    # Pinned off, never exposed: with grSquarePixel enabled SNAP derives
+    # nAzLooks from nRgLooks and the local geometry and silently discards the
+    # requested azimuth looks, so the applied multilook stops matching the
+    # configured one. See the note on BackscatterConfig.multilook.
+    _add_param(p, "grSquarePixel", value=False)
     return node_id
 
 
@@ -569,7 +580,13 @@ def build_backscatter_graph(cfg: BackscatterConfig) -> str:
     src = _topsar_deburst(g, "TOPSAR-Deburst", src)
     if cfg.multilook is not None:
         rg, az = cfg.multilook
-        src = _multilook(g, "Multilook", src, n_rg_looks=rg, n_az_looks=az)
+        src = _multilook(
+            g,
+            "Multilook",
+            src,
+            n_rg_looks=rg,
+            n_az_looks=az,
+        )
     if cfg.flatten_terrain:
         src = _terrain_flattening(
             g,
@@ -642,9 +659,6 @@ def build_coherence_magnitude_graph(cfg: CoherenceConfig) -> str:
         apply_egm=cfg.external_dem_apply_egm,
     )
     src = _topsar_deburst(g, "TOPSAR-Deburst", src)
-    if cfg.multilook is not None:
-        rg, az = cfg.multilook
-        src = _multilook(g, "Multilook", src, n_rg_looks=rg, n_az_looks=az)
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
             g,
@@ -764,18 +778,6 @@ def build_coherence_complex_ifg_graph(cfg: CoherenceConfig) -> str:
         nodata=cfg.external_dem_nodata,
         apply_egm=cfg.external_dem_apply_egm,
     )
-    if cfg.multilook is not None:
-        rg, az = cfg.multilook
-        # outputIntensity would collapse i_ifg/q_ifg into a single intensity
-        # band; the complex pair has to survive for the Python band math.
-        src = _multilook(
-            g,
-            "Multilook",
-            src,
-            n_rg_looks=rg,
-            n_az_looks=az,
-            output_intensity=False,
-        )
     _band_maths(
         g,
         "ReplaceZerosWithNaNs",
@@ -816,11 +818,45 @@ class GeocodingConfig(BaseModel):
     """Terrain-Correction tail parameters shared by every product type.
 
     Used directly to emit a standalone ``Terrain-Correction`` graph (e.g. for
-    the post-processing step of complex coherence) and inherited by
-    each per-product config.
+    the post-processing step of complex coherence) and inherited by each
+    per-product config.
+
+    Parameters
+    ----------
+    grid_spacing : float, default 10.0
+        Output pixel spacing in metres of the target CRS.
+    dem : str or Path, default "Copernicus 30m Global DEM"
+        DEM used for geocoding. A string selects one of SNAP's auto-download
+        DEMs; a path (or a string with a file suffix) is passed as an external
+        DEM.
+    img_resampling : str, default "BILINEAR_INTERPOLATION"
+        Resampling of the image during terrain correction.
+    dem_resampling : str, default "BILINEAR_INTERPOLATION"
+        Resampling of the DEM during terrain correction.
+    align_to_standard_grid : bool, default True
+        Snap the output to a fixed global grid, so products from different
+        bursts and dates share pixel boundaries and can be stacked without
+        resampling.
+    external_dem_nodata : float, default 0.0
+        No-data value of an external DEM.
+    external_dem_apply_egm : bool, default False
+        Convert an external DEM from EGM96 geoid heights to WGS84 ellipsoidal
+        heights, which is the reference terrain correction requires. SNAP does
+        this automatically for its built-in ACE / Copernicus / SRTM DEMs, all of
+        which are geoid-referenced; this flag is the equivalent for an external
+        one and is ignored unless ``dem`` is a path.
+
+        Set it ``True`` for an orthometric DEM (heights above mean sea level,
+        the usual case for national DEMs) and leave it ``False`` only when the
+        DEM already carries ellipsoidal heights. Note this default differs from
+        SNAP's own, which is ``True``.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True,
+        arbitrary_types_allowed=True,
+        extra="forbid",
+    )
 
     @field_validator("dem", mode="before")
     @classmethod
@@ -857,12 +893,31 @@ class GeocodingConfig(BaseModel):
 class BackscatterConfig(GeocodingConfig):
     """Configuration for the backscatter (RTC / GTC) pipeline.
 
-    ``flatten_terrain=True`` (default) inserts a ``Terrain-Flattening`` step
-    and produces an RTC product.  ``flatten_terrain=False`` skips it and
-    produces a GTC product.
+    Inherits every parameter of :class:`GeocodingConfig`.
 
-    ``multilook`` is ``(n_rg_looks, n_az_looks)``; pass ``None`` to skip the
-    ``Multilook`` step.
+    Parameters
+    ----------
+    flatten_terrain : bool, default True
+        Insert a ``Terrain-Flattening`` step and produce a radiometrically
+        terrain-corrected (RTC, gamma0) product. ``False`` skips it and
+        produces a geometrically terrain-corrected (GTC, beta0) product.
+    multilook : tuple of int or None, default (5, 1)
+        ``(n_rg_looks, n_az_looks)`` applied after debursting, before terrain
+        flattening; ``None`` skips the ``Multilook`` step. Multilooking here
+        cuts runtime sharply, because the reduced raster passes through both
+        terrain flattening and terrain correction.
+
+        SNAP's ``grSquarePixel`` option, which derives the azimuth looks from
+        the range looks and the local geometry and discards the requested
+        ``n_az_looks`` is pinned off. Therefore, the looks given are the looks applied.
+    dem_oversampling : float, default 1.0
+        DEM oversampling factor used by ``Terrain-Flattening``.
+    additional_overlap : float, default 0.2
+        Additional overlap percentage used by ``Terrain-Flattening`` when
+        searching for terrain contributions outside the tile.
+    replace_zeros_with_nan : bool, default True
+        Convert SNAP's zero fill value to NaN, so no-data does not enter later
+        averages as a valid low value.
     """
 
     flatten_terrain: bool = True
@@ -886,22 +941,69 @@ class BackscatterConfig(GeocodingConfig):
 class CoherenceConfig(GeocodingConfig):
     """Configuration for the coherence pipeline (magnitude or complex).
 
-    ``multilook`` is ``(n_rg_looks, n_az_looks)`` applied after debursting, as
-    in :class:`BackscatterConfig`; pass ``None`` to skip the ``Multilook`` step.
+    Inherits every parameter of :class:`GeocodingConfig`.
+
+    No ``Multilook`` step is applied, unlike :class:`BackscatterConfig`. It
+    would save no runtime, since it can only sit after the coregistration and
+    interferogram stages that dominate this graph, and it has no single sensible
+    placement: before the coherence estimation it merely enlarges the estimator,
+    which ``window`` already expresses, and after it, it averages coherence
+    magnitudes and so cannot reduce the small-window estimator bias. Use
+    ``window`` to set the looks and ``map_looks`` to average further.
+
+    Parameters
+    ----------
+    window : tuple of int, default (25, 5)
+        Coherence estimation window ``(n_rg, n_az)`` in single-look samples.
+        This is the only control over the number of looks entering the
+        estimator.
+    subtract_flat_earth_phase : bool, default True
+        Remove the flat-earth phase before estimating coherence.
+    subtract_topographic_phase : bool, default True
+        Remove the topographic phase using ``dem``. Required if the coherence
+        is to be averaged coherently afterwards, since it is what leaves the
+        residual phase locally smooth.
+    square_pixel : bool, default False
+        Let SNAP's ``Coherence`` operator adjust the estimation window towards
+        square ground pixels. Leave off: as with SNAP's ``grSquarePixel`` on
+        the ``Multilook`` operator, enabling it means the applied window is not
+        the requested one.
+    replace_zeros_with_nan : bool, default True
+        Convert SNAP's zero fill value to NaN.
+    write_complex : bool, default False
+        Write the complex coherence as ``coh_i`` / ``coh_q`` instead of the
+        magnitude as ``coh``. The complex form preserves the interferometric
+        phase, which is required for any later coherent averaging and is
+        irrecoverable once only the magnitude has been written.
+    map_looks : tuple of int or None, default None
+        Additional *coherent* averaging over an ``(n_rows, n_cols)`` window of
+        the geocoded grid, applied after terrain correction; the magnitude is
+        taken afterwards, so the product is a single-band ``COH``. Requires
+        ``write_complex=True``, since it needs the phase. Averaging on the map
+        grid rather than in radar geometry gives a spatially uniform ground
+        footprint, and averaging coherently rather than in magnitude is what
+        removes the small-window estimator bias.
     """
 
     window: tuple[_PositiveInt, _PositiveInt] = (25, 5)
-    multilook: tuple[_PositiveInt, _PositiveInt] | None = (5, 1)
+    map_looks: tuple[_PositiveInt, _PositiveInt] | None = None
     subtract_flat_earth_phase: bool = True
     subtract_topographic_phase: bool = True
     square_pixel: bool = False
     replace_zeros_with_nan: bool = True
     write_complex: bool = False
 
+    @model_validator(mode="after")
+    def _check_map_looks(self) -> CoherenceConfig:
+        if self.map_looks is not None and not self.write_complex:
+            msg = "map_looks requires write_complex=True; it needs the interferometric phase"
+            raise ValueError(msg)
+        return self
+
     @property
     def output_bands(self) -> list[str]:
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
-        if self.write_complex:
+        if self.write_complex and self.map_looks is None:
             return ["coh_i", "coh_q"]
         return ["coh"]
 
@@ -913,7 +1015,22 @@ class CoherenceConfig(GeocodingConfig):
 
 
 class InterferogramConfig(GeocodingConfig):
-    """Configuration for the interferogram pipeline."""
+    """Configuration for the interferogram pipeline.
+
+    Inherits every parameter of :class:`GeocodingConfig`. No ``Multilook`` step
+    is inserted, so the output stays at single-look resolution.
+
+    Parameters
+    ----------
+    subtract_flat_earth_phase : bool, default True
+        Remove the flat-earth phase from the interferogram.
+    subtract_topographic_phase : bool, default True
+        Remove the topographic phase using ``dem``.
+    square_pixel : bool, default False
+        Let SNAP adjust the interferogram window towards square ground pixels.
+    replace_zeros_with_nan : bool, default True
+        Convert SNAP's zero fill value to NaN.
+    """
 
     subtract_flat_earth_phase: bool = True
     subtract_topographic_phase: bool = True

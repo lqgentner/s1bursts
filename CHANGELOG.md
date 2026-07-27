@@ -13,9 +13,12 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - `Burst.mode` property deriving the acquisition mode (`IW`/`EW`) from the
   sub-swath.
 - `download_burst_map()` to explicitly fetch the SAR-MPC burst-ID map, verified against a pinned SHA-256.
-- `CoherenceConfig.multilook`, a `(n_rg_looks, n_az_looks)` multi-looking step
-  after debursting, mirroring `BackscatterConfig.multilook` and defaulting to
-  `(5, 1)`. Pass `None` to skip it.
+- `CoherenceConfig.map_looks`, an optional coherent box average applied to the
+  *geocoded* complex coherence before the magnitude is taken. Requires
+  `write_complex=True`; the product written is a single-band `COH`, so the
+  compositing stage is unaffected. Averaging on the map grid gives a uniform
+  ground footprint regardless of local incidence, and averaging coherently
+  rather than in magnitude is what reduces the small-window estimator bias.
 - `cqm_decibel` on `ResolutionWeighter.compose_rtc_lrw()` and
   `compose_coherence_lrw()` writes the QA-CQM map in decibels, consistent with
   Small et al. (2021,
@@ -23,6 +26,25 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Changed
 
+- **Breaking:** SNAP's `grSquarePixel` is now pinned off on the `Multilook`
+  operator and is not exposed. With it enabled (SNAP's own default, and this
+  library's behaviour until now), SNAP derives `nAzLooks` from `nRgLooks` and
+  the local geometry and **silently discards the requested azimuth looks**, so a
+  `(5, 1)` multilook was applied as `(5, 2)` for Sentinel-1 IW. Non-square pixels
+  are a correctly resampled to `grid_spacing` in geocoding (terrain correction).
+- **Breaking:** the graph configs now reject unknown fields (`extra="forbid"`)
+  instead of ignoring them.
+- **Breaking:** the coherence graphs no longer contain a `Multilook` node and
+  `CoherenceConfig.multilook` is removed. Multilooking saved no runtime there —
+  it can only sit after the coregistration and interferogram stages that
+  dominate (162 s against 165 s without it) — and it had no single sensible
+  placement: the magnitude graph applied it *after* `Coherence`, averaging
+  coherence magnitudes, while the complex graph applied it *before* the
+  estimator, enlarging it, so one name meant two different operations. Use
+  `window` to set the looks and `map_looks` to average further after terrain
+  correction. `BackscatterConfig.multilook` is unaffected: there the step
+  precedes terrain flattening and cuts runtime roughly ninefold.
+- All four graph configs now document every parameter.
 - **Breaking:** the root namespace is narrowed to what a pipeline is *built*
   from: `FileManager`, `BurstDatabase`, `BurstProcessor`, `ResolutionWeighter`,
   `SearchQuery`, `SNAPConfig`, the four graph configs, and

@@ -61,7 +61,7 @@
       <nRgLooks>5</nRgLooks>
       <nAzLooks>1</nAzLooks>
       <outputIntensity>true</outputIntensity>
-      <grSquarePixel>true</grSquarePixel>
+      <grSquarePixel>false</grSquarePixel>
     </parameters>
   </node>
   <node id="ReplaceZerosWithNaNs">

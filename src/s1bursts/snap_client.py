@@ -66,6 +66,35 @@ def _write_graph(tmp_dir: Path, name: str, xml: str) -> Path:
     return graph_file
 
 
+def _apply_map_looks(geocoded_file: Path, map_looks: tuple[int, int]) -> None:
+    """Coherently average a geocoded complex coherence and rewrite it as magnitude.
+
+    Replaces the two-band ``coh_i`` / ``coh_q`` raster at *geocoded_file* with a
+    single-band coherence magnitude, averaged over a ``(n_rows, n_cols)`` window
+    of the map grid before the modulus is taken. Averaging the complex value
+    rather than the magnitude is what suppresses the estimator's small-window
+    bias, since the noise contribution carries random phase and cancels.
+
+    Parameters
+    ----------
+    geocoded_file : Path
+        Two-band terrain-corrected complex coherence, modified in place.
+    map_looks : tuple of int
+        Averaging window as ``(n_rows, n_cols)`` in geocoded pixels.
+    """
+    n_rows, n_cols = map_looks
+    with rasterio.open(geocoded_file) as src:
+        profile = src.profile
+        coh = (src.read(1) + 1j * src.read(2)).astype(np.complex64)
+
+    averaged = sliding_window_mean(coh, win_row=n_rows, win_col=n_cols)
+    magnitude = np.abs(averaged).astype(np.float32)
+
+    profile.update(count=1, dtype="float32")
+    with rasterio.open(geocoded_file, "w", **profile) as dst:
+        dst.write(magnitude, 1)
+
+
 def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path:
     """Resolve and validate the SNAP ``gpt`` executable path.
 
@@ -542,22 +571,20 @@ class SNAPClient:
         OperationResult
             Result of the coherence processing.
         """
-        result: OperationResult[CoherenceProduct] | OperationResult[CoherenceComplexProduct]
         if config.write_complex:
-            result = self._create_coherence_complex(
+            return self._create_coherence_complex(
                 pair,
                 crs,
                 config=config,
                 overwrite=overwrite,
             )
-        else:
-            result = self._create_coherence_magnitude(
-                pair,
-                crs,
-                config=config,
-                overwrite=overwrite,
-            )
-        return cast("OperationResult[CoherenceProduct | CoherenceComplexProduct]", result)
+        magnitude = self._create_coherence_magnitude(
+            pair,
+            crs,
+            config=config,
+            overwrite=overwrite,
+        )
+        return cast("OperationResult[CoherenceProduct | CoherenceComplexProduct]", magnitude)
 
     def _create_coherence_magnitude(
         self,
@@ -619,9 +646,18 @@ class SNAPClient:
         *,
         config: CoherenceConfig,
         overwrite: bool,
-    ) -> OperationResult[CoherenceComplexProduct]:
-        """Run the no-TC ifg graph + Python complex coherence + standalone TC graph."""
-        product = CoherenceComplexProduct.from_burst_pair(pair, crs=crs)
+    ) -> OperationResult[CoherenceProduct | CoherenceComplexProduct]:
+        """Run the no-TC ifg graph + Python complex coherence + standalone TC graph.
+
+        With ``config.map_looks`` set, a coherent box average is applied on the
+        geocoded grid and the magnitude written, so the product on disk is a
+        plain ``COH`` and everything downstream is unchanged.
+        """
+        product: CoherenceProduct | CoherenceComplexProduct = (
+            CoherenceProduct.from_burst_pair(pair, crs=crs)
+            if config.map_looks is not None
+            else CoherenceComplexProduct.from_burst_pair(pair, crs=crs)
+        )
         product_path = self.manager.get_product_path(product)
 
         if not overwrite and self.manager.product_exists(product):
@@ -675,6 +711,8 @@ class SNAPClient:
                         process_params={"crs": get_epsg_string(crs)},
                         target_file=staging_file,
                     )
+                    if config.map_looks is not None:
+                        _apply_map_looks(staging_file, config.map_looks)
                     self._finalize_product(
                         staging_file,
                         product_path,
