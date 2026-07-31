@@ -77,8 +77,9 @@ module it belongs to:
 
 ## Configuration
 
-Credentials and SNAP settings are read from environment variables (or a
-`.env` file in the working directory):
+Credentials and SNAP settings are read from the process environment. Loading a
+`.env` file is left to you — call `dotenv.load_dotenv()` before the first
+s1bursts call, or export the variables (e.g. `uv run --env-file .env`):
 
 | Variable | Purpose |
 | --- | --- |
@@ -88,6 +89,7 @@ Credentials and SNAP settings are read from environment variables (or a
 | `SNAP_MAX_WORKERS` | Parallel GPT processes (default: 1) |
 | `SNAP_MAX_RAM_GB` | Total RAM budget across GPT processes in GB (default: 4) |
 | `SNAP_AUXDATA_PATH` | Shared DEM/orbit cache (default: `~/.snap/auxdata`) |
+| `SNAP_DEM_CACHE` | Where `compensate_dem_for_snap()` caches converted external DEMs (default: `~/.s1bursts/dem`) |
 
 Searching the burst catalog requires no credentials.
 
