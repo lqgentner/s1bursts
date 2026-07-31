@@ -58,6 +58,7 @@ class SNAPSettings(BaseSettings):
 
     bin: Path | None = None
     auxdata_path: Path = Path.home() / ".snap/auxdata"
+    dem_cache: Path = Path.home() / ".s1bursts/dem"
     max_workers: int = 1
     max_ram_gb: float = 4.0
     cache_ratio: float = 0.70
