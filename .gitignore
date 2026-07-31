@@ -1,5 +1,5 @@
 # Environments
-.env
+.env*
 .venv/
 
 # Storage
@@ -35,7 +35,7 @@ MANIFEST
 
 # Tools
 .mypy_cache/
-.dmypy.json
+.dmypy*.json
 dmypy.json
 .ruff_cache/
 .claude/
