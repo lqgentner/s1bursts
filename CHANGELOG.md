@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is pre-1.0 (`0.x`), minor releases may contain breaking changes.
 
+## [0.2.0] - 2026-07-31
+
+### Added
+
+- `compensate_dem_for_snap()`, which makes an external DEM sample at the position its
+  georeferencing states. SNAP reads a DEM passed as `externalDEMFile` half a DEM
+  pixel towards the lower right. The helper writes a cached copy whose geotransform
+  origin is moved onto the centre of the first pixel; elevations pass through untouched.
+  Verified against SNAP 13.0.0.
+- `SNAP_DEM_CACHE` setting (`SNAPSettings.dem_cache`, default `~/.s1bursts/dem`),
+  the directory `compensate_dem_for_snap()` caches converted DEMs in.
+
+### Changed
+
+- **Breaking:** the settings classes no longer read a `.env` file; they read the
+  process environment only. To parse an `.env` file, call `dotenv.load_dotenv()`
+  or export the variables (`uv run --env-file .env`). `get_settings()` re-reads
+  the environment on every call, so a late `load_dotenv()` is picked up.
+
 ## [0.1.1] - 2026-07-31
 
 ### Fixed
