@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is pre-1.0 (`0.x`), minor releases may contain breaking changes.
 
+## [0.1.1] - 2026-07-31
+
+### Fixed
+
+- Fixed SNAP memory leakage: `gpt` now runs with `java.io.tmpdir` pointed inside
+  the per-job SNAP userdir. SNAP's jblas extracts 30 MB of native libraries per process
+  and deletes them from a shutdown hook that `SIGKILL` skips. A run whose workers
+  were OOM-killed therefore leaked ~30 MB each until `/tmp` filled. Cleanup now belongs
+  to `snap_worker_userdir`, which removes the tree however `gpt` exited.
+
 ## [0.1.0] - 2026-07-27
 
 ### Added

@@ -319,7 +319,9 @@ class SNAPClient:
             Path where GPT should write the output file.
             The file type is determined based on the suffix.
         snap_userdir : Path
-            Per-job SNAP user directory passed via ``-J-Dsnap.userdir``.
+            Per-job SNAP user directory passed via ``-J-Dsnap.userdir``. Also
+            hosts the JVM's ``java.io.tmpdir``, so that temporary files the
+            process leaves behind are removed with the userdir.
         process_params : dict[str, str] | None, optional
             Additional processing parameters passed as ``-P`` flags.
         timeout : int, default 3600
@@ -344,6 +346,13 @@ class SNAPClient:
             for k, v in process_params.items():
                 commands.append(f"-P{k}={v}")
 
+        # The JVM ignores TMPDIR and defaults java.io.tmpdir to /tmp, where jblas
+        # extracts 30 MB of native libraries and deletes them from a shutdown hook
+        # that a SIGKILL skips. Keeping them under the userdir hands cleanup to
+        # snap_worker_userdir, which removes it however gpt died.
+        java_tmpdir = snap_userdir / "tmp"
+        java_tmpdir.mkdir(parents=True, exist_ok=True)
+
         commands.extend(
             [
                 "-t",
@@ -356,6 +365,7 @@ class SNAPClient:
                 f"{self.config.resolved_cache_mb}M",
                 f"-J-Xmx{self.config.resolved_xmx_mb}M",
                 f"-J-Dsnap.userdir={snap_userdir}",
+                f"-J-Djava.io.tmpdir={java_tmpdir}",
             ],
         )
         if target_file.suffix == ".tif":
