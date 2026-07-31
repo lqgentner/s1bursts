@@ -36,21 +36,21 @@ class TestGetSettings:
         assert first.snap.max_workers == 1
         assert second.snap.max_workers == 8
 
-    def test_reads_dotenv_file(
+    def test_ignores_dotenv_file_in_working_directory(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
+        """Loading a ``.env`` belongs to the application, not to this package."""
         monkeypatch.delenv("CDSE_USERNAME", raising=False)
         (tmp_path / ".env").write_text("CDSE_USERNAME=from-dotenv\n")
         monkeypatch.chdir(tmp_path)
 
-        assert get_settings().cdse.username == "from-dotenv"
+        assert get_settings().cdse.username is None
 
-    def test_defaults(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for var in ("SNAP_BIN", "SNAP_MAX_WORKERS", "SNAP_MAX_RAM_GB"):
             monkeypatch.delenv(var, raising=False)
-        monkeypatch.chdir(tmp_path)
 
         snap = get_settings().snap
 

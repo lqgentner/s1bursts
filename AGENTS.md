@@ -40,7 +40,7 @@ uv run pytest                  # offline unit tests (default)
 uv run pytest -m integration   # network/SNAP integration tests
 ```
 
-Unit tests are fully offline: network, CDSE credentials, the burst-map lookup tables, and SNAP GPT are mocked. Tests marked `integration` require CDSE credentials in the environment (or a `.env` file) and/or a local SNAP install (`SNAP_BIN`); they are deselected by default via `addopts`.
+Unit tests are fully offline: network, CDSE credentials, the burst-map lookup tables, and SNAP GPT are mocked. Tests marked `integration` require CDSE credentials and/or a local SNAP install (`SNAP_BIN`) exported into the environment; they are deselected by default via `addopts`.
 
 ## Code Style Guidelines
 
