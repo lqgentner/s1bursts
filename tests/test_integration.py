@@ -45,8 +45,9 @@ requires_cdse_credentials = pytest.mark.skipif(
     reason="CDSE_USERNAME / CDSE_PASSWORD not configured",
 )
 requires_cdse_s3 = pytest.mark.skipif(
-    _settings.cdse.s3.access_key_id is None or _settings.cdse.s3.secret_access_key is None,
-    reason="CDSE_S3_ACCESS_KEY_ID / CDSE_S3_SECRET_ACCESS_KEY not configured",
+    _settings.cdse.s3.profile is None
+    and (_settings.cdse.s3.access_key_id is None or _settings.cdse.s3.secret_access_key is None),
+    reason="CDSE_S3_PROFILE or CDSE_S3_ACCESS_KEY_ID / CDSE_S3_SECRET_ACCESS_KEY not configured",
 )
 
 

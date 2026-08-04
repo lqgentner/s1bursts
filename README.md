@@ -85,6 +85,7 @@ s1bursts call, or export the variables (e.g. `uv run --env-file .env`):
 | --- | --- |
 | `CDSE_USERNAME`, `CDSE_PASSWORD` | CDSE account, required for OData burst downloads ([register](https://dataspace.copernicus.eu/)) |
 | `CDSE_S3_ACCESS_KEY_ID`, `CDSE_S3_SECRET_ACCESS_KEY` | CDSE S3 keys, required for S3 burst extraction ([generate](https://eodata-s3keysmanager.dataspace.copernicus.eu/)) |
+| `CDSE_S3_PROFILE` | Alternative to the key pair: a named AWS profile in `~/.aws/credentials` holding the same keys. Takes precedence when set, and keeps the secrets out of the environment |
 | `SNAP_BIN` | Path to a SNAP installation's `bin` directory; its `gpt` executable is used for processing. Falls back to `gpt` on `PATH` if unset |
 | `SNAP_MAX_WORKERS` | Parallel GPT processes (default: 1) |
 | `SNAP_MAX_RAM_GB` | Total RAM budget across GPT processes in GB (default: 4) |

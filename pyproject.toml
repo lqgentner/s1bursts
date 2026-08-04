@@ -79,7 +79,7 @@ dev = [
 # freezecore is consumed from GitHub (private; requires SSH access) during
 # development. Once freezecore is published on PyPI, this override should be
 # removed so that a clean public checkout resolves the pinned range from PyPI.
-freezecore = { git = "ssh://git@github.com/lqgentner/freezecore.git", tag = "v0.1.0"}
+freezecore = { git = "ssh://git@github.com/lqgentner/freezecore.git"}
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
