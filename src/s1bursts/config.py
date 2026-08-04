@@ -16,6 +16,11 @@ class CDSES3Settings(BaseSettings):
 
     Loaded from ``CDSE_S3_*`` environment variables. Obtain credentials at
     https://eodata-s3keysmanager.dataspace.copernicus.eu/
+
+    Authenticate either with a named AWS profile (``CDSE_S3_PROFILE``, resolved
+    from ``~/.aws/credentials``, which keeps the keys out of the environment) or
+    with an explicit key pair (``CDSE_S3_ACCESS_KEY_ID`` and
+    ``CDSE_S3_SECRET_ACCESS_KEY``). The profile takes precedence if both are set.
     """
 
     model_config = SettingsConfigDict(
@@ -25,6 +30,7 @@ class CDSES3Settings(BaseSettings):
     )
 
     endpoint_url: str = "https://eodata.dataspace.copernicus.eu"
+    profile: str | None = None
     access_key_id: str | None = None
     secret_access_key: SecretStr | None = None
 

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is pre-1.0 (`0.x`), minor releases may contain breaking changes.
 
+## Unreleased
+
+### Added
+
+- `CDSE_S3_PROFILE` (`CDSES3Settings.profile`), a named AWS profile resolved from
+  `~/.aws/credentials` as an alternative to `CDSE_S3_ACCESS_KEY_ID` /
+  `CDSE_S3_SECRET_ACCESS_KEY`. The key pair keeps working; the profile takes
+  precedence when both are configured. Selecting a profile also removes boto's
+  environment-variable provider from the credential chain, so ambient
+  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` values can never sign CDSE
+  requests. Requires freezecore ≥ 0.3.0.
+
 ## [0.2.0] - 2026-07-31
 
 ### Added

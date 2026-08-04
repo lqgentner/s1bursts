@@ -128,19 +128,28 @@ def _make_s3_upath(s3_path: str, settings: CDSES3Settings) -> UPath:
 
     The OData S3Path starts with a leading slash (e.g. /eodata/Sentinel-1/...),
     which becomes s3://eodata/Sentinel-1/... after prepending ``s3:``.
+
+    Authenticates with the configured profile, falling back to the explicit key
+    pair. ``make_s3_upath`` rejects the two together, so only one is ever passed.
     """
-    if settings.access_key_id is None or settings.secret_access_key is None:
-        msg = (
-            "CDSE S3 credentials not configured "
-            "(CDSE_S3_ACCESS_KEY_ID / CDSE_S3_SECRET_ACCESS_KEY)."
+    if settings.profile is not None:
+        return make_s3_upath(
+            f"s3:/{s3_path}",
+            profile=settings.profile,
+            endpoint_url=settings.endpoint_url,
         )
-        raise ConfigurationError(msg)
-    return make_s3_upath(
-        f"s3:/{s3_path}",
-        key=settings.access_key_id,
-        secret=settings.secret_access_key.get_secret_value(),
-        endpoint_url=settings.endpoint_url,
+    if settings.access_key_id is not None and settings.secret_access_key is not None:
+        return make_s3_upath(
+            f"s3:/{s3_path}",
+            key=settings.access_key_id,
+            secret=settings.secret_access_key.get_secret_value(),
+            endpoint_url=settings.endpoint_url,
+        )
+    msg = (
+        "CDSE S3 credentials not configured (CDSE_S3_PROFILE, or "
+        "CDSE_S3_ACCESS_KEY_ID / CDSE_S3_SECRET_ACCESS_KEY)."
     )
+    raise ConfigurationError(msg)
 
 
 def _glob_annotation_xml(product_root: UPath, sub_swath: str, polarization: str) -> UPath:
