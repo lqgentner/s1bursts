@@ -20,8 +20,7 @@ BaseProduct
 │   │   ├── RTCProduct (gamma nought, terrain flattened; includes simulatedImage band)
 │   │   └── GTCProduct (beta nought, geometry-corrected only)
 │   └── CoregisteredProduct (two co-registered bursts)
-│       ├── CoherenceProduct (magnitude)
-│       ├── CoherenceComplexProduct (i_coh + q_coh)
+│       ├── CoherenceProduct (coherence)
 │       └── InterferogramProduct (complex interferogram)
 └── MGRSTileProduct (MGRS 10 km grid cell composite)
     ├── RTCLRWComposite (LRW amplitude composite)
@@ -47,8 +46,7 @@ BaseProduct
   - `RTCProduct`: Terrain flattened; `product_type = "RTC"`; bands: `Gamma0`, `simulatedImage`
   - `GTCProduct`: Geometry-corrected only; `product_type = "GTC"`; band: `Beta0`
 - `CoregisteredProduct`: Abstract base for co-registered burst pairs; exposes `baseline_days`
-  - `CoherenceProduct`: Coherence magnitude; `product_type = "COH"`
-  - `CoherenceComplexProduct`: Complex coherence (i + q); `product_type = "COH_CMPLX"`
+  - `CoherenceProduct`: Coherence; `product_type = "COH"`
   - `InterferogramProduct`: Complex interferogram; `product_type = "IFG"`
 - `MGRSTileProduct`: Abstract base for MGRS-tile composites
   - `RTCLRWComposite`: LRW RTC intensity composite; `product_type = "RTC_LRW"`
@@ -77,7 +75,7 @@ Centralized file system operations:
 - Directory management (`slc_dir`, `prod_dir`, `comp_dir`)
 - Path generation via a single generic engine (`_build_pattern` / `_parse_filename`) driven by per-class entries in `_PARSERS`
 - SLC: `get_slc_path(burst)`, `find_slc_bursts`
-- Product discovery: `find_rtc_products`, `find_gtc_products`, `find_coherence_products`, `find_coherence_complex_products`, `find_interferogram_products`
+- Product discovery: `find_rtc_products`, `find_gtc_products`, `find_coherence_products`, `find_interferogram_products`
 - Composite discovery: `find_rtc_lrw_products`, `find_coh_lrw_products`, `find_rtc_pass_composites`, `find_coh_pass_composites`
 - Generic helpers: `get_product_path(product)`, `product_exists(product)`
 
@@ -103,8 +101,7 @@ base_dir/
 | SLC burst | `S1_SLC_{rel_orbit:03d}_{burst_id:06d}_{sub_swath}_{polarization}_{date:%Y%m%d}.zip` |
 | RTC | `S1_RTC_{rel_orbit:03d}_{burst_id:06d}_{sub_swath}_{polarization}_{date:%Y%m%d}_{utm_zone}.tif` |
 | GTC | `S1_GTC_{rel_orbit:03d}_{burst_id:06d}_{sub_swath}_{polarization}_{date:%Y%m%d}_{utm_zone}.tif` |
-| Coherence magnitude | `S1_COH{baseline_days:02d}_{rel_orbit:03d}_{burst_id:06d}_{sub_swath}_{polarization}_{date1:%Y%m%d}_{date2:%Y%m%d}_{utm_zone}.tif` |
-| Complex coherence | `S1_COH{baseline_days:02d}_CMPLX_{rel_orbit:03d}_{burst_id:06d}_{sub_swath}_{polarization}_{date1:%Y%m%d}_{date2:%Y%m%d}_{utm_zone}.tif` |
+| Coherence | `S1_COH{baseline_days:02d}_{rel_orbit:03d}_{burst_id:06d}_{sub_swath}_{polarization}_{date1:%Y%m%d}_{date2:%Y%m%d}_{utm_zone}.tif` |
 | Interferogram | `S1_IFG{baseline_days:02d}_CMPLX_{rel_orbit:03d}_{burst_id:06d}_{sub_swath}_{polarization}_{date1:%Y%m%d}_{date2:%Y%m%d}_{utm_zone}.tif` |
 | RTC LRW composite | `S1_RTC_LRW_{mgrs_code}_{polarization}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.tif` |
 | Coherence LRW composite | `S1_COH{baseline_days:02d}_LRW_{mgrs_code}_{polarization}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.tif` |
@@ -125,29 +122,14 @@ base_dir/
 Low-level interface to SNAP GPT:
 
 - `create_backscatter(burst, crs, *, config: BackscatterConfig)`: Single burst → RTC (default) or GTC, depending on `config.flatten_terrain`. Bands: `Gamma0` + `simulatedImage` (RTC) or `Beta0` (GTC).
-- `create_coherence(pair, crs, *, config: CoherenceConfig)`: Burst pair → magnitude (default) or complex coherence depending on `config.write_complex`.
+- `create_coherence(pair, crs, *, config: CoherenceConfig)`: Burst pair → terrain-corrected coherence.
 - `create_interferogram(pair, crs, *, config: InterferogramConfig)`: Burst pair → terrain-corrected interferogram.
 
-SNAP graphs are generated dynamically at call time from each per-product config in `snap_graph.py` (`BackscatterConfig`, `CoherenceConfig`, `InterferogramConfig`, plus the shared `GeocodingConfig` base). Each config exposes `to_xml()` and `to_mermaid()` for inspection. (A guided-filter coherence variant existed as an experiment and was removed in the s1bursts split.)
+SNAP graphs are generated dynamically at call time from each per-product config in `snap_graph.py`: `BackscatterConfig`, `CoherenceConfig`, and `InterferogramConfig`. Each exposes `to_xml()` and `to_mermaid()` for inspection. They share the abstract `GeocodingConfig` base, which carries the Terrain-Correction tail parameters and declares `to_xml()` — it emits no graph of its own and cannot be instantiated. (A guided-filter coherence variant and a complex-coherence variant existed as experiments and have been removed.)
 
 `SNAPConfig` is a runtime-only struct: `bin`, `max_workers`, `max_ram_gb`, `gpt_threads_per_job`, `gpt_cache_ratio`, `auxdata_dir`. It auto-resolves `resolved_max_workers`, `resolved_xmx_mb`, `resolved_threads_per_job`, `resolved_cache_mb`.
 
-#### 5. **BeamDimapDataset** (`dimap.py`)
-
-Wrapper around SNAP's BEAM-DIMAP format for band-level I/O, used in the complex coherence pipeline:
-
-- Parses `.dim` XML to discover band names and data file paths
-- `read_band(name)`: Read a named band as float32 ndarray via rasterio
-- `write_band(name, data)`: Overwrite a band's `.img` binary in-place
-- `cleanup()`: Delete the `.dim` file and its `.data/` directory
-
-**Complex coherence pipeline:**
-
-1. SNAP `S1_SLCtoIfg-noTC.xml` → BEAM-DIMAP with `i_ifg`, `q_ifg`, `intensity1`, `intensity2`
-2. `_compute_complex_coherence()` overwrites `i_ifg`/`q_ifg` with `i_coh`/`q_coh` in-place
-3. SNAP `S1_TC.xml` geocodes the modified BEAM-DIMAP → GeoTIFF
-
-#### 6. **BurstProcessor** (`processor.py`)
+#### 5. **BurstProcessor** (`processor.py`)
 
 High-level batch processing wrapper around SNAPClient:
 
@@ -155,7 +137,7 @@ High-level batch processing wrapper around SNAPClient:
 - Progress bars (rich), error handling with continue-on-failure, `OperationSummary` reporting
 - Methods:
   - `create_backscatter(bursts, crs, flatten_terrain=True)` → `OperationSummary[RTCProduct] | OperationSummary[GTCProduct]`
-  - `create_coherences(pairs, crs, window=(25,5), magnitude=True)` → `OperationSummary[CoherenceProduct] | OperationSummary[CoherenceComplexProduct]`
+  - `create_coherences(pairs, crs, *, config: CoherenceConfig | None = None)` → `OperationSummary[CoherenceProduct]`
   - `create_interferograms(pairs, crs)` → `OperationSummary[InterferogramProduct]`
 
 **Result types** (`summary.py`):
@@ -168,7 +150,7 @@ High-level batch processing wrapper around SNAPClient:
 Use `isinstance(r, OkResult)` / `isinstance(r, ErrorResult)` to discriminate result types.
 
 
-#### 7. **ResolutionWeighter** (`resolution_weighter.py`)
+#### 6. **ResolutionWeighter** (`resolution_weighter.py`)
 
 LRW and per-pass compositing:
 
@@ -202,7 +184,7 @@ where $p$ is `self_weight_power` (0 = pure resolution weighting; $p > 0$ promote
 │ 2. Process Bursts (BurstProcessor → SNAPClient)             │
 │    ├→ RTCProduct or GTCProduct (backscatter)                │
 │    ├→ SimulationProduct (one per footprint)                 │
-│    ├→ CoherenceProduct / CoherenceComplexProduct            │
+│    ├→ CoherenceProduct                                      │
 │    └→ InterferogramProduct                                  │
 └────────────────────────┬────────────────────────────────────┘
                          ↓
@@ -299,15 +281,10 @@ processor.create_backscatter(bursts, crs=crs, config=BackscatterConfig(flatten_t
 ### Workflow 3: Process Coherence Pairs
 
 ```python
-from deepfreezer.sentinel1 import CoherenceConfig
-
 pairs = bursts.find_pairs(baseline_days=6)
 
-# Coherence magnitude with ~60m window (defaults: window_rg=15, window_az=3)
+# Coherence with ~60m window (defaults: window_rg=15, window_az=3)
 coh_summary = processor.create_coherences(pairs, crs=crs)
-
-# Complex coherence
-processor.create_coherences(pairs, crs=crs, config=CoherenceConfig(write_complex=True))
 
 # Interferograms
 processor.create_interferograms(pairs, crs=crs)

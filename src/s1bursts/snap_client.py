@@ -4,46 +4,35 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from functools import partial
 import logging
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from freezebase.raster import (
     build_rasterio_profile,
     get_epsg_string,
     rewrite_tiff,
 )
-import numpy as np
 import rasterio
 
 from s1bursts.config import get_settings
-from s1bursts.dimap import BeamDimapDataset
 from s1bursts.errors import (
     BurstError,
     ConfigurationError,
     SnapProcessingError,
 )
 from s1bursts.product import (
-    CoherenceComplexProduct,
     CoherenceProduct,
     CRSLike,
     GTCProduct,
     InterferogramProduct,
     RTCProduct,
 )
-from s1bursts.snap_graph import (
-    BackscatterConfig,
-    CoherenceConfig,
-    InterferogramConfig,
-    build_terrain_correction_graph,
-)
 from s1bursts.summary import ErrorResult, OkResult, OperationResult
-from s1bursts.utils import sliding_window_mean
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -53,6 +42,11 @@ if TYPE_CHECKING:
     from s1bursts.burst import Burst, BurstPair
     from s1bursts.config import SNAPSettings
     from s1bursts.filemanager import FileManager
+    from s1bursts.snap_graph import (
+        BackscatterConfig,
+        CoherenceConfig,
+        InterferogramConfig,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -64,35 +58,6 @@ def _write_graph(tmp_dir: Path, name: str, xml: str) -> Path:
     graph_file = tmp_dir / f"_{name}_graph.xml"
     graph_file.write_text(xml)
     return graph_file
-
-
-def _apply_map_looks(geocoded_file: Path, map_looks: tuple[int, int]) -> None:
-    """Coherently average a geocoded complex coherence and rewrite it as magnitude.
-
-    Replaces the two-band ``coh_i`` / ``coh_q`` raster at *geocoded_file* with a
-    single-band coherence magnitude, averaged over a ``(n_rows, n_cols)`` window
-    of the map grid before the modulus is taken. Averaging the complex value
-    rather than the magnitude is what suppresses the estimator's small-window
-    bias, since the noise contribution carries random phase and cancels.
-
-    Parameters
-    ----------
-    geocoded_file : Path
-        Two-band terrain-corrected complex coherence, modified in place.
-    map_looks : tuple of int
-        Averaging window as ``(n_rows, n_cols)`` in geocoded pixels.
-    """
-    n_rows, n_cols = map_looks
-    with rasterio.open(geocoded_file) as src:
-        profile = src.profile
-        coh = (src.read(1) + 1j * src.read(2)).astype(np.complex64)
-
-    averaged = sliding_window_mean(coh, win_row=n_rows, win_col=n_cols)
-    magnitude = np.abs(averaged).astype(np.float32)
-
-    profile.update(count=1, dtype="float32")
-    with rasterio.open(geocoded_file, "w", **profile) as dst:
-        dst.write(magnitude, 1)
 
 
 def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path:
@@ -555,15 +520,10 @@ class SNAPClient:
         *,
         config: CoherenceConfig,
         overwrite: bool = False,
-    ) -> OperationResult[CoherenceProduct | CoherenceComplexProduct]:
-        """Compute the coherence (magnitude or complex) from a burst pair.
+    ) -> OperationResult[CoherenceProduct]:
+        """Compute the coherence from a burst pair.
 
-        ``config.write_complex=False`` (default) runs the single-shot
-        SLC→Coherence→Terrain-Correction graph and writes a magnitude
-        GeoTIFF.  ``config.write_complex=True`` runs the no-TC ifg graph,
-        computes complex coherence in Python, then runs a standalone
-        Terrain-Correction graph; the result has ``coh_i`` / ``coh_q``
-        bands.
+        Runs the single-shot SLC→Coherence→Terrain-Correction graph.
 
         Parameters
         ----------
@@ -581,29 +541,6 @@ class SNAPClient:
         OperationResult
             Result of the coherence processing.
         """
-        if config.write_complex:
-            return self._create_coherence_complex(
-                pair,
-                crs,
-                config=config,
-                overwrite=overwrite,
-            )
-        magnitude = self._create_coherence_magnitude(
-            pair,
-            crs,
-            config=config,
-            overwrite=overwrite,
-        )
-        return cast("OperationResult[CoherenceProduct | CoherenceComplexProduct]", magnitude)
-
-    def _create_coherence_magnitude(
-        self,
-        pair: BurstPair,
-        crs: CRSLike,
-        *,
-        config: CoherenceConfig,
-        overwrite: bool,
-    ) -> OperationResult[CoherenceProduct]:
         product = CoherenceProduct.from_burst_pair(pair, crs=crs)
         product_path = self.manager.get_product_path(product)
 
@@ -648,179 +585,6 @@ class SNAPClient:
 
         logger.info("Successfully created '%s'", product_path.name)
         return OkResult(source=pair, result=product)
-
-    def _create_coherence_complex(
-        self,
-        pair: BurstPair,
-        crs: CRSLike,
-        *,
-        config: CoherenceConfig,
-        overwrite: bool,
-    ) -> OperationResult[CoherenceProduct | CoherenceComplexProduct]:
-        """Run the no-TC ifg graph + Python complex coherence + standalone TC graph.
-
-        With ``config.map_looks`` set, a coherent box average is applied on the
-        geocoded grid and the magnitude written, so the product on disk is a
-        plain ``COH`` and everything downstream is unchanged.
-        """
-        product: CoherenceProduct | CoherenceComplexProduct = (
-            CoherenceProduct.from_burst_pair(pair, crs=crs)
-            if config.map_looks is not None
-            else CoherenceComplexProduct.from_burst_pair(pair, crs=crs)
-        )
-        product_path = self.manager.get_product_path(product)
-
-        if not overwrite and self.manager.product_exists(product):
-            logger.debug(
-                "Complex coherence product already exists: '%s'",
-                product_path.name,
-            )
-            return OkResult(source=pair, result=product, skipped=True)
-
-        logger.info("Creating complex coherence product: '%s'", product_path.name)
-
-        with tempfile.TemporaryDirectory(prefix="s1bursts-") as tmp:
-            tmp_dir = Path(tmp)
-            staging_file = tmp_dir / product_path.name
-            ifg_file = staging_file.with_suffix(".tmp.dim")
-            ifg_graph = _write_graph(tmp_dir, "coherence_ifg", config.to_xml())
-            tc_graph = _write_graph(
-                tmp_dir,
-                "coherence_tc",
-                build_terrain_correction_graph(config),
-            )
-            with snap_worker_userdir(self.config.resolved_auxdata_path, tmp_dir) as snap_userdir:
-                try:
-                    primary_file = self._stage_slc(pair.primary, tmp_dir)
-                    secondary_file = self._stage_slc(pair.secondary, tmp_dir)
-                    self._run_gpt(
-                        graph=ifg_graph,
-                        source_files={
-                            "primary": primary_file,
-                            "secondary": secondary_file,
-                        },
-                        snap_userdir=snap_userdir,
-                        process_params={
-                            "swath": product.sub_swath,
-                            "polarization": product.polarization,
-                            "date1": product.date_primary.strftime("%d%b%Y"),
-                            "date2": product.date_secondary.strftime("%d%b%Y"),
-                        },
-                        target_file=ifg_file,
-                    )
-                    window_rg, window_az = config.window
-                    self._write_complex_coherence(
-                        ifg_file,
-                        window_rg=window_rg,
-                        window_az=window_az,
-                    )
-                    self._run_gpt(
-                        graph=tc_graph,
-                        source_files={"source": ifg_file},
-                        snap_userdir=snap_userdir,
-                        process_params={"crs": get_epsg_string(crs)},
-                        target_file=staging_file,
-                    )
-                    if config.map_looks is not None:
-                        _apply_map_looks(staging_file, config.map_looks)
-                    self._finalize_product(
-                        staging_file,
-                        product_path,
-                        band_names=config.output_bands,
-                    )
-                except (BurstError, FileNotFoundError, RuntimeError) as e:
-                    logger.exception("Failed to process burst pair '%s'", pair)
-                    return ErrorResult(source=pair, error=e)
-
-        logger.info("Successfully created '%s'", product_path.name)
-        return OkResult(source=pair, result=product)
-
-    def _write_complex_coherence(
-        self,
-        dim_file: Path,
-        *,
-        window_rg: int,
-        window_az: int,
-        delete_existing_bands: bool = True,
-    ) -> None:
-        r"""Read interferogram bands from a BEAM-DIMAP file and write complex coherence.
-
-        Reads ``i_ifg``, ``q_ifg``, ``intensity1``, and
-        ``intensity2`` from *dim_file*, computes complex coherence using
-        a sliding-window approach that mirrors SNAP's ``CoherenceOp``.
-        Replaces bands in existing dataset with new ``i_coh`` and ``q_coh``
-        values
-
-        The complex coherence formula is:
-
-        .. math::
-
-            \gamma = \frac{\sum(u_1 \cdot \bar{u}_2)}
-                          {\sqrt{\sum|u_1|^2 \cdot \sum|u_2|^2}}
-
-        where :math:`u_1 \cdot \bar{u}_2` is the interferogram cross-product
-        already encoded in the ``i_ifg`` / ``q_ifg`` bands by SNAP, and the
-        intensities :math:`|u_1|^2`, :math:`|u_2|^2` are in
-        ``intensity1`` / ``intensity2``.
-
-        Parameters
-        ----------
-        dim_file : Path
-            Path to the BEAM-DIMAP ``.dim`` file produced by
-            ``S1_SLCtoIfg-noTC.xml``.
-        window_rg : int
-            Coherence estimation window size in the range direction.
-        window_az : int
-            Coherence estimation window size in the azimuth direction.
-        delete_existing_bands : bool, default: True
-            Whether to delete existing bands of BEAM-DIMAP file after
-            writing complex coherence bands.
-        """
-        logger.debug(
-            "Computing complex coherence from '%s', window (rg=%d, az=%d)",
-            dim_file.name,
-            window_rg,
-            window_az,
-        )
-
-        ds = BeamDimapDataset(dim_file)
-        existing_bands = ds.band_names
-        # (Az, Rg)
-        i_ifg = ds.read_band("i_ifg").astype(np.float64)
-        q_ifg = ds.read_band("q_ifg").astype(np.float64)
-        int1 = ds.read_band("intensity1").astype(np.float64)
-        int2 = ds.read_band("intensity2").astype(np.float64)
-
-        # Complex cross-product: ifg already encodes u1 * conj(u2) from SNAP
-        complex_ifg = i_ifg + 1j * q_ifg
-
-        # NaN-safe sliding window sums (mean * window_size = sum)
-        n = window_rg * window_az
-
-        # 75 % of pixels in sliding window must be finite to produce valid output
-        sliding_mean = partial(
-            sliding_window_mean,
-            win_row=window_az,
-            win_col=window_rg,
-            min_coverage=0.75,
-        )
-        sum_ifg = sliding_mean(complex_ifg) * n
-        sum_int1 = sliding_mean(int1) * n
-        sum_int2 = sliding_mean(int2) * n
-
-        # Complex coherence = Σ(u1·ū2) / sqrt(Σ|u1|² · Σ|u2|²)
-        denom = np.sqrt(sum_int1 * sum_int2)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            coh_complex = sum_ifg / denom
-
-        # Can't use units "real" and "imaginary": Make SNAP expect a virtual intensity
-        # band immediately after; raises error in RangeDopplerGeocodingOp
-        ds.add_band("i_coh", coh_complex.real.astype(np.float32), unit="coherence")
-        ds.add_band("q_coh", coh_complex.imag.astype(np.float32), unit="coherence")
-
-        if delete_existing_bands:
-            for band in existing_bands:
-                ds.delete_band(band)
 
     def create_interferogram(
         self,

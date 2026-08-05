@@ -315,42 +315,6 @@ class CoherenceProduct(CoregisteredProduct):
         """Get product type identifier."""
         return "COH"
 
-    @property
-    def is_complex(self) -> bool:
-        """Whether the product is complex."""
-        return False
-
-
-@dataclass(repr=False, frozen=True)
-class CoherenceComplexProduct(CoregisteredProduct):
-    """Complex coherence product from burst pair.
-
-    Parameters
-    ----------
-    burst_id : int
-        Burst identifier.
-    sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"}
-        Sub-swath identifier.
-    crs : CRSLike
-        The coordinate reference system.
-    date_primary : Timestamp
-        Primary acquisition date.
-    date_secondary : Timestamp
-        Secondary acquisition date.
-    polarization : {"VV", "VH", "HH", "HV"}
-        The polarization.
-    """
-
-    @property
-    def product_type(self) -> str:
-        """Get product type identifier."""
-        return "COH_CMPLX"
-
-    @property
-    def is_complex(self) -> bool:
-        """Whether the product is complex."""
-        return True
-
 
 @dataclass(repr=False, frozen=True)
 class InterferogramProduct(CoregisteredProduct):

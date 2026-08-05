@@ -96,22 +96,12 @@ GOLDEN_CASES = [
     pytest.param(
         "S1_SLCtoCoh.xml",
         CoherenceConfig(),
-        id="coherence-magnitude",
+        id="coherence",
     ),
     pytest.param(
         "S1_SLCtoIfg.xml",
         InterferogramConfig(),
         id="interferogram",
-    ),
-    pytest.param(
-        "S1_SLCtoIfg-noTC.xml",
-        CoherenceConfig(write_complex=True),
-        id="coherence-complex-no-tc",
-    ),
-    pytest.param(
-        "S1_TC.xml",
-        GeocodingConfig(),
-        id="terrain-correction-only",
     ),
     pytest.param(
         "S1_SLCtoRTC-swissALTI3D.xml",
@@ -133,7 +123,7 @@ GOLDEN_CASES = [
 @pytest.mark.parametrize(("fixture", "config"), GOLDEN_CASES)
 def test_dynamic_graph_matches_fixture(
     fixture: str,
-    config: BackscatterConfig | CoherenceConfig | InterferogramConfig | GeocodingConfig,
+    config: BackscatterConfig | CoherenceConfig | InterferogramConfig,
 ) -> None:
     expected_xml = (FIXTURES / fixture).read_text()
     actual_xml = config.to_xml()
@@ -153,12 +143,8 @@ def test_backscatter_output_bands_gtc() -> None:
     assert BackscatterConfig(flatten_terrain=False).output_bands == ["Beta0"]
 
 
-def test_coherence_output_bands_magnitude() -> None:
+def test_coherence_output_bands() -> None:
     assert CoherenceConfig().output_bands == ["coh"]
-
-
-def test_coherence_output_bands_complex() -> None:
-    assert CoherenceConfig(write_complex=True).output_bands == ["coh_i", "coh_q"]
 
 
 def test_interferogram_output_bands() -> None:
@@ -242,6 +228,13 @@ def test_config_is_frozen() -> None:
     cfg = BackscatterConfig()
     with pytest.raises(ValueError, match="frozen"):
         cfg.flatten_terrain = False  # type: ignore[misc]
+
+
+def test_geocoding_config_is_abstract() -> None:
+    # The shared base carries only the Terrain-Correction tail; it emits no
+    # graph of its own, so it must not be instantiable.
+    with pytest.raises(TypeError, match="abstract"):
+        GeocodingConfig()  # type: ignore[abstract]
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,33 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` values can never sign CDSE
   requests. Requires freezebase ≥ 0.3.0.
 
+### Removed
+
+- **Breaking:** the complex coherence product and everything that existed only to
+  produce it: `CoherenceConfig.write_complex`, `CoherenceConfig.map_looks`,
+  `CoherenceComplexProduct`, `FileManager.find_coherence_complex_products()`, and
+  the `build_coherence_complex_ifg_graph()` graph builder. It was an experiment
+  that did not make the cut. `create_coherence()` / `create_coherences()` now
+  always write the single-band `COH` magnitude, and their return types narrow
+  from `CoherenceProduct | CoherenceComplexProduct` to `CoherenceProduct`.
+- **Breaking:** `s1bursts.dimap` (`BeamDimapDataset`) and `s1bursts.utils`
+  (`sliding_window_mean`). Both existed solely to serve the complex coherence
+  post-processing step and have no remaining caller.
+- **Breaking:** `build_terrain_correction_graph()`, and with it
+  `GeocodingConfig.to_xml()`. The standalone Terrain-Correction graph existed
+  only as the second stage of the complex coherence pipeline; every remaining
+  product runs a single-shot graph with the Terrain-Correction tail built in.
+
 ### Changed
+
+- **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
+  still carries the Terrain-Correction parameters every per-product config
+  inherits, but `to_xml()` is now an abstract method implemented by
+  `BackscatterConfig`, `CoherenceConfig`, and `InterferogramConfig`.
+  `to_mermaid()` is unchanged and still inherited from the base.
+- **Breaking:** `build_coherence_magnitude_graph()` is renamed to
+  `build_coherence_graph()`. With the complex variant gone there is only one
+  coherence graph, so the qualifier no longer distinguishes anything.
 
 - The first-party dependency `freezecore` was renamed to `freezebase` and is now
   resolved from PyPI (`freezebase[s3]>=0.3.0`) instead of a Git source. Imports

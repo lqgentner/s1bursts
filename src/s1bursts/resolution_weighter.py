@@ -320,7 +320,7 @@ class ResolutionWeighter:
         Parameters
         ----------
         coh_products : Collection[CoherenceProduct]
-            Coherence magnitude products to composite.  All must share the same
+            Coherence products to composite.  All must share the same
             polarization and ``baseline_days``.
         rtc_products : Collection[RTCProduct]
             RTC products providing the simulated area (band 2) used as weights.
@@ -613,7 +613,7 @@ class ResolutionWeighter:
         Parameters
         ----------
         coh_products : Collection[CoherenceProduct]
-            Coherence magnitude products to composite.  All must share the same
+            Coherence products to composite.  All must share the same
             ``baseline_days``.
         geobox : MGRSGeoBox
             Target MGRS grid cell.

@@ -16,7 +16,6 @@ from s1bursts.filemanager import _PARSERS, FileManager
 from s1bursts.product import (
     RTCLRWQA,
     BaseProduct,
-    CoherenceComplexProduct,
     CoherenceProduct,
     CohLRWComposite,
     CohLRWQA,
@@ -74,19 +73,6 @@ _PARSE_CASES = [
             "crs": _CRS_32N,
         },
         id="coherence",
-    ),
-    pytest.param(
-        CoherenceComplexProduct,
-        "S1_COH12_CMPLX_015_030345_IW1_VH_20150709_20150721_32N.tif",
-        {
-            "burst_id": 30345,
-            "sub_swath": "IW1",
-            "polarization": "VH",
-            "date_primary": pd.Timestamp("20150709"),
-            "date_secondary": pd.Timestamp("20150721"),
-            "crs": _CRS_32N,
-        },
-        id="coherence-complex",
     ),
     pytest.param(
         InterferogramProduct,
