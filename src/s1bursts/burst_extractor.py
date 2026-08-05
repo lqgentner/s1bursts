@@ -15,9 +15,9 @@ import tempfile
 from typing import TYPE_CHECKING
 import warnings
 
-from freezecore.download import retry_request
-from freezecore.raster import rasterio_open
-from freezecore.s3 import make_s3_upath
+from freezebase.download import retry_request
+from freezebase.raster import rasterio_open
+from freezebase.s3 import make_s3_upath
 from lxml import etree
 import rasterio
 from rasterio.control import GroundControlPoint

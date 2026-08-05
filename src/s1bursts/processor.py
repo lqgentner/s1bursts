@@ -7,7 +7,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, overload
 
-from freezecore.progress import create_progress
+from freezebase.progress import create_progress
 
 from s1bursts.snap_client import SNAPClient, SNAPConfig
 from s1bursts.snap_graph import (

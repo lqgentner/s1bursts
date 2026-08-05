@@ -8,9 +8,9 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from freezecore.download import HTTPDownloader, retry_request
-from freezecore.pandas_utils import clean_names
-from freezecore.utils import EPSG_WGS84
+from freezebase.download import HTTPDownloader, retry_request
+from freezebase.pandas_utils import clean_names
+from freezebase.utils import EPSG_WGS84
 import geopandas as gpd
 import pandas as pd
 from pydantic import SecretStr

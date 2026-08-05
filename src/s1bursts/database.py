@@ -8,7 +8,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Literal, TypeGuard
 
-from freezecore.progress import create_progress
+from freezebase.progress import create_progress
 from requests import HTTPError
 
 from s1bursts.burst import (

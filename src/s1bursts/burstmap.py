@@ -8,9 +8,9 @@ import logging
 from typing import TYPE_CHECKING, Literal, cast
 from zipfile import ZipFile
 
-from freezecore.utils import format_valid_options
-from freezecore.vectools import drop_z_if_zero, save_and_read_parquet, simplify_multipolygons
-from freezecore.vectordata import DatasetMetadata, GeoVectorData
+from freezebase.utils import format_valid_options
+from freezebase.vectools import drop_z_if_zero, save_and_read_parquet, simplify_multipolygons
+from freezebase.vectordata import DatasetMetadata, GeoVectorData
 import geopandas as gpd
 from pandas.api.types import CategoricalDtype
 
@@ -71,7 +71,7 @@ class Sentinel1Bursts(GeoVectorData):
         Parameters
         ----------
         cache_dir : str or Path or None, default: None
-            The root directory where the dataset is stored. Defaults to the 'FREEZECORE_CACHE'
+            The root directory where the dataset is stored. Defaults to the 'FREEZEBASE_CACHE'
             environment variable or the system cache directory (in that order).
         mode : {"IW", "EW"}, default: "IW"
             The Sentinel-1 acquisition mode.
@@ -163,7 +163,7 @@ def download_burst_map(cache_dir: str | Path | None = None, *, mode: Mode = "IW"
     ----------
     cache_dir : str or Path or None, default: None
         Root directory for cached dataset files. Defaults to the
-        ``FREEZECORE_CACHE`` environment variable or the system cache directory.
+        ``FREEZEBASE_CACHE`` environment variable or the system cache directory.
     mode : {"IW", "EW"}, default: "IW"
         Sentinel-1 acquisition mode.
 

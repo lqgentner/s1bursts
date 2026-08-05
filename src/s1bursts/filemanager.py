@@ -7,7 +7,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, Self
 
-from freezecore.raster import get_utm_zone_string, utm_zone_to_crs
+from freezebase.raster import get_utm_zone_string, utm_zone_to_crs
 import pandas as pd
 
 from s1bursts.burst import Burst
