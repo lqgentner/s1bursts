@@ -464,9 +464,9 @@ wheels = [
 ]
 
 [[package]]
-name = "freezecore"
-version = "0.2.1.dev15+g678cc1502"
-source = { git = "ssh://git@github.com/lqgentner/freezecore.git#678cc15026b68a28a3602f90ae0d5ecac837caad" }
+name = "freezebase"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "affine" },
     { name = "geopandas" },
@@ -483,6 +483,10 @@ dependencies = [
     { name = "shapely" },
     { name = "tenacity" },
     { name = "universal-pathlib" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/96/68/6ea08be5e9bd6642ee0eb2d69ae577c0879929d787171a66f373876ac5d8/freezebase-0.3.0.tar.gz", hash = "sha256:6ec07fee195d2abc480f9cffd6198a153fb1ee7e13e344f73df9d4336993c260", size = 64112, upload-time = "2026-08-05T11:12:11.765Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2f/21/2e3dd62ce3b1bca4bdfb49c32b4f3c9d390ed8ee4bdb108ea8815c792b83/freezebase-0.3.0-py3-none-any.whl", hash = "sha256:e9b1371af1f194fd3910336e5781dec9bb7e3b2408794630c3eec73d6205d78b", size = 46625, upload-time = "2026-08-05T11:12:10.656Z" },
 ]
 
 [package.optional-dependencies]
@@ -1659,7 +1663,7 @@ wheels = [
 name = "s1bursts"
 source = { editable = "." }
 dependencies = [
-    { name = "freezecore", extra = ["s3"] },
+    { name = "freezebase", extra = ["s3"] },
     { name = "geopandas" },
     { name = "lxml" },
     { name = "numpy" },
@@ -1689,7 +1693,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "freezecore", extras = ["s3"], git = "ssh://git@github.com/lqgentner/freezecore.git" },
+    { name = "freezebase", extras = ["s3"], specifier = ">=0.3.0" },
     { name = "geopandas", specifier = ">=1.1" },
     { name = "lxml", specifier = ">=5" },
     { name = "numpy", specifier = ">=2.0" },

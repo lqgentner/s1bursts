@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from typing import TYPE_CHECKING, Any, cast
 
-from freezecore.raster import (
+from freezebase.raster import (
     build_rasterio_profile,
     get_epsg_string,
     rewrite_tiff,

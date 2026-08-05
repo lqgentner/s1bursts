@@ -35,10 +35,7 @@ dynamic = ["version"]
 # Lower bounds reflect the oldest release that supports the required Python
 # (>=3.12) and works with this code.
 dependencies = [
-    # freezecore is the only first-party dependency. It is not yet on PyPI; see
-    # [tool.uv.sources] for the development source. Add a tested version range
-    # (e.g. `freezecore[s3]>=0.1,<0.2`) once freezecore has its first release.
-    "freezecore[s3]",
+    "freezebase[s3]>=0.3.0",
     "geopandas>=1.1",
     "lxml>=5",
     "numpy>=2.0",
@@ -74,12 +71,6 @@ dev = [
     "types-geopandas>=1.0",
     "types-requests>=2.31",
 ]
-
-[tool.uv.sources]
-# freezecore is consumed from GitHub (private; requires SSH access) during
-# development. Once freezecore is published on PyPI, this override should be
-# removed so that a clean public checkout resolves the pinned range from PyPI.
-freezecore = { git = "ssh://git@github.com/lqgentner/freezecore.git"}
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

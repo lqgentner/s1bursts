@@ -16,7 +16,14 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   precedence when both are configured. Selecting a profile also removes boto's
   environment-variable provider from the credential chain, so ambient
   `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` values can never sign CDSE
-  requests. Requires freezecore ≥ 0.3.0.
+  requests. Requires freezebase ≥ 0.3.0.
+
+### Changed
+
+- The first-party dependency `freezecore` was renamed to `freezebase` and is now
+  resolved from PyPI (`freezebase[s3]>=0.3.0`) instead of a Git source. Imports
+  moved from `freezecore.*` to `freezebase.*`; the cache environment variable it
+  reads is now `FREEZEBASE_CACHE`.
 
 ## [0.2.0] - 2026-07-31
 
