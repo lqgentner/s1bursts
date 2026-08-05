@@ -15,19 +15,16 @@ import rasterio.transform
 
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.config import SNAPSettings
-from s1bursts.dimap import BeamDimapDataset
 from s1bursts.errors import ConfigurationError, SnapProcessingError
 from s1bursts.snap_client import (
-    BackscatterConfig,
-    CoherenceConfig,
     SNAPClient,
     SNAPConfig,
     _extract_gpt_error,
     _resolve_gpt_path,
     snap_worker_userdir,
 )
+from s1bursts.snap_graph import BackscatterConfig, CoherenceConfig
 from s1bursts.summary import ErrorResult, OkResult
-from tests.test_dimap import NCOLS, NROWS, make_dimap
 
 
 def _snap_settings(
@@ -196,37 +193,6 @@ class TestResolveGptPath:
 
         with pytest.raises(ConfigurationError, match="not executable"):
             _resolve_gpt_path(explicit_bin, settings)
-
-
-class TestWriteComplexCoherence:
-    def test_replaces_ifg_bands_with_coherence(self, tmp_path: Path) -> None:
-        shape = (NROWS, NCOLS)
-        dim_path = make_dimap(
-            tmp_path,
-            {
-                "i_ifg": np.ones(shape, dtype=np.float32),
-                "q_ifg": np.zeros(shape, dtype=np.float32),
-                "intensity1": np.ones(shape, dtype=np.float32),
-                "intensity2": np.ones(shape, dtype=np.float32),
-            },
-        )
-
-        SNAPClient._write_complex_coherence(
-            MagicMock(),
-            dim_path,
-            window_rg=3,
-            window_az=3,
-        )
-
-        ds = BeamDimapDataset(dim_path)
-        assert ds.band_names == ["i_coh", "q_coh"]
-        i_coh = ds.read_band("i_coh")
-        q_coh = ds.read_band("q_coh")
-        # Interior: perfect coherence. Border: masked by the 75 % window
-        # coverage requirement.
-        np.testing.assert_allclose(i_coh[1:-1, 1:-1], 1.0, atol=1e-6)
-        np.testing.assert_allclose(q_coh[1:-1, 1:-1], 0.0, atol=1e-6)
-        assert np.isnan(i_coh[0, 0])
 
 
 class TestSnapWorkerUserdir:
@@ -409,7 +375,7 @@ class TestCreateCoherence:
     def _make_pair(self) -> BurstPair:
         return BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
 
-    def test_magnitude_path(self, client: SNAPClient) -> None:
+    def test_creates_coherence_product(self, client: SNAPClient) -> None:
         with (
             patch.object(client, "_run_gpt") as mock_gpt,
             patch.object(client, "_finalize_product") as mock_finalize,
@@ -428,25 +394,6 @@ class TestCreateCoherence:
         assert params["date1"] == "01Jan2022"
         assert params["date2"] == "13Jan2022"
         assert mock_finalize.call_args.kwargs["band_names"] == ["coh"]
-
-    def test_complex_path_runs_two_graphs(self, client: SNAPClient) -> None:
-        with (
-            patch.object(client, "_run_gpt") as mock_gpt,
-            patch.object(client, "_write_complex_coherence") as mock_write,
-            patch.object(client, "_finalize_product") as mock_finalize,
-        ):
-            result = client.create_coherence(
-                self._make_pair(),
-                crs=self.CRS_UTM32,
-                config=CoherenceConfig(write_complex=True),
-            )
-
-        assert isinstance(result, OkResult)
-        assert result.result.product_type == "COH_CMPLX"
-        # ifg graph + standalone terrain-correction graph
-        assert mock_gpt.call_count == 2
-        mock_write.assert_called_once()
-        assert mock_finalize.call_args.kwargs["band_names"] == ["coh_i", "coh_q"]
 
     def test_gpt_failure_returns_error_result(self, client: SNAPClient) -> None:
         pair = self._make_pair()

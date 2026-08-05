@@ -14,7 +14,6 @@ from s1bursts.burst import Burst
 from s1bursts.product import (
     RTCLRWQA,
     BaseProduct,
-    CoherenceComplexProduct,
     CoherenceProduct,
     CohLRWComposite,
     CohLRWQA,
@@ -88,7 +87,6 @@ _PARSERS: dict[
     RTCProduct: ("S1_RTC", _BACKSCATTER_SPEC, None),
     GTCProduct: ("S1_GTC", _BACKSCATTER_SPEC, None),
     CoherenceProduct: (r"S1_COH\d{2}", _COREGISTERED_SPEC, None),
-    CoherenceComplexProduct: (r"S1_COH\d{2}_CMPLX", _COREGISTERED_SPEC, None),
     InterferogramProduct: (r"S1_IFG\d{2}_CMPLX", _COREGISTERED_SPEC, None),
     RTCLRWComposite: ("S1_RTC_LRW", _MGRS_BASE_SPEC, None),
     CohLRWComposite: (
@@ -545,70 +543,6 @@ class FileManager:
         )
         return self._find_products(self.prod_dir, pattern, CoherenceProduct)
 
-    # ============ Complex Coherence Product Operations ============
-
-    def _get_coherence_complex_path(self, product: CoherenceComplexProduct) -> Path | UPath:
-        """Generate the file path for a complex coherence product.
-
-        Parameters
-        ----------
-        product : CoherenceComplexProduct
-            Complex coherence product metadata.
-
-        Returns
-        -------
-        Path
-            Expected path to the coherence GeoTIFF file.
-        """
-        prefix = f"S1_COH{product.baseline_days:02d}_CMPLX"
-        return self.prod_dir / self._build_pattern(prefix, _COREGISTERED_SPEC, **asdict(product))
-
-    def find_coherence_complex_products(
-        self,
-        rel_orbit_number: int | None = None,
-        burst_id: int | None = None,
-        sub_swath: str | None = None,
-        polarization: str | None = None,
-        baseline_days: int | None = None,
-        crs: CRSLike | None = None,
-    ) -> list[CoherenceComplexProduct]:
-        """Find complex coherence products matching criteria.
-
-        Note: Date filtering is not supported. Use list comprehension on results
-        if date filtering is needed.
-
-        Parameters
-        ----------
-        rel_orbit_number : int, optional
-            Filter by relative orbit number.
-        burst_id : int, optional
-            Filter by burst ID.
-        sub_swath : str, optional
-            Filter by sub-swath.
-        polarization : str, optional
-            Filter by polarization.
-        baseline_days : int, optional
-            Filter by temporal baseline.
-        crs : CRSLike, optional
-            Filter by coordinate reference system (UTM zone).
-
-        Returns
-        -------
-        list[CoherenceComplexProduct]
-            List of matching complex coherence products.
-        """
-        bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_COH{bd}_CMPLX",
-            _COREGISTERED_SPEC,
-            rel_orbit_number=rel_orbit_number,
-            burst_id=burst_id,
-            sub_swath=sub_swath,
-            polarization=polarization,
-            crs=crs,
-        )
-        return self._find_products(self.prod_dir, pattern, CoherenceComplexProduct)
-
     # ============ Interferogram Product Operations ============
 
     def _get_interferogram_path(self, product: InterferogramProduct) -> Path | UPath:
@@ -1048,8 +982,6 @@ class FileManager:
                 path = self._get_rtc_path(product)
             case GTCProduct():
                 path = self._get_gtc_path(product)
-            case CoherenceComplexProduct():
-                path = self._get_coherence_complex_path(product)
             case CoherenceProduct():
                 path = self._get_coherence_path(product)
             case InterferogramProduct():

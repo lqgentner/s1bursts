@@ -28,7 +28,6 @@ if TYPE_CHECKING:
     )
     from s1bursts.filemanager import FileManager
     from s1bursts.product import (
-        CoherenceComplexProduct,
         CoherenceProduct,
         CRSLike,
         GTCProduct,
@@ -126,7 +125,7 @@ class BurstProcessor:
         *,
         config: CoherenceConfig | None = None,
         overwrite: bool = False,
-    ) -> OperationSummary[CoherenceProduct | CoherenceComplexProduct]:
+    ) -> OperationSummary[CoherenceProduct]:
         """Create coherence products from burst pair collection.
 
         Parameters
@@ -137,8 +136,7 @@ class BurstProcessor:
             The coordinate reference system of the geocoded output.
         config : CoherenceConfig | None, default None
             Graph-shape configuration; defaults to ``CoherenceConfig()``
-            (25x5 magnitude window, Copernicus 30m DEM).  Set
-            ``write_complex=True`` to produce a complex coherence product.
+            (25x5 window, Copernicus 30m DEM).
         overwrite : bool, default False
             Whether to overwrite existing products.
 
@@ -156,7 +154,7 @@ class BurstProcessor:
                 config=cfg,
                 overwrite=overwrite,
             ),
-            item_description="Complex Coherence" if cfg.write_complex else "Coherence Magnitude",
+            item_description="Coherence",
         )
 
     def create_interferograms(

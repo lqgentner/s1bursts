@@ -15,6 +15,7 @@ runtime.
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from pathlib import Path
 from typing import Annotated, Any, ClassVar
 from xml.etree.ElementTree import Element, SubElement, indent, tostring
@@ -26,7 +27,6 @@ from pydantic import (
     Field,
     computed_field,
     field_validator,
-    model_validator,
 )
 
 # Hardened parser: no entity resolution, no network access (XXE-safe).
@@ -640,8 +640,8 @@ def _build_pair_prefix(g: Element, cfg: GeocodingConfig) -> str:
     )
 
 
-def build_coherence_magnitude_graph(cfg: CoherenceConfig) -> str:
-    """Single-shot SLC→Coherence→Terrain-Correction graph (magnitude only)."""
+def build_coherence_graph(cfg: CoherenceConfig) -> str:
+    """Single-shot SLC→Coherence→Terrain-Correction graph."""
     g = _new_graph()
     src = _build_pair_prefix(g, cfg)
     win_rg, win_az = cfg.window
@@ -759,54 +759,6 @@ def build_interferogram_graph(cfg: InterferogramConfig) -> str:
     return _emit_xml(g)
 
 
-def build_coherence_complex_ifg_graph(cfg: CoherenceConfig) -> str:
-    """Emit the *no-TC* ifg graph used by complex coherence.
-
-    Output is a BEAM-DIMAP product with bands ``i_ifg``, ``q_ifg``,
-    ``intensity1``, ``intensity2`` in radar coordinates.  Python band-math
-    (driven by the snap_client) then computes the complex coherence and
-    a separate Terrain-Correction graph projects the result.
-    """
-    g = _new_graph()
-    _build_pair_prefix(g, cfg)
-    src = _build_ifg_branched_graph(
-        g,
-        subtract_flat_earth_phase=cfg.subtract_flat_earth_phase,
-        subtract_topographic_phase=cfg.subtract_topographic_phase,
-        square_pixel=cfg.square_pixel,
-        dem=cfg.dem,
-        nodata=cfg.external_dem_nodata,
-        apply_egm=cfg.external_dem_apply_egm,
-    )
-    _band_maths(
-        g,
-        "ReplaceZerosWithNaNs",
-        src,
-        target_bands=_ifg_replace_zeros_target_bands(),
-        include_variables_element=False,
-    )
-    return _emit_xml(g)
-
-
-def build_terrain_correction_graph(cfg: GeocodingConfig) -> str:
-    """Emit a standalone ``Terrain-Correction`` graph (replaces ``S1_TC.xml``)."""
-    g = _new_graph()
-    _terrain_correction(
-        g,
-        "Terrain-Correction",
-        "${source}",
-        dem=cfg.dem,
-        nodata=cfg.external_dem_nodata,
-        apply_egm=cfg.external_dem_apply_egm,
-        img_resampling=cfg.img_resampling,
-        dem_resampling=cfg.dem_resampling,
-        grid_spacing=cfg.grid_spacing,
-        align_to_standard_grid=cfg.align_to_standard_grid,
-        standard_grid_origin=cfg.standard_grid_origin,
-    )
-    return _emit_xml(g)
-
-
 # ---------------------------------------------------------------------------
 # Layer 2: Pydantic configs
 # ---------------------------------------------------------------------------
@@ -817,9 +769,8 @@ _PositiveInt = Annotated[int, Field(gt=0)]
 class GeocodingConfig(BaseModel):
     """Terrain-Correction tail parameters shared by every product type.
 
-    Used directly to emit a standalone ``Terrain-Correction`` graph (e.g. for
-    the post-processing step of complex coherence) and inherited by each
-    per-product config.
+    Abstract: inherited by each per-product config, which supplies the graph
+    that precedes the shared Terrain-Correction tail via :meth:`to_xml`.
 
     Parameters
     ----------
@@ -881,9 +832,9 @@ class GeocodingConfig(BaseModel):
         half = self.grid_spacing / 2
         return (half, half)
 
+    @abstractmethod
     def to_xml(self) -> str:
-        """Build the standalone Terrain-Correction graph XML for this config."""
-        return build_terrain_correction_graph(self)
+        """Build the SNAP GPT graph XML for this config."""
 
     def to_mermaid(self) -> str:
         """Mermaid ``flowchart LR`` diagram source for this config's graph."""
@@ -939,17 +890,15 @@ class BackscatterConfig(GeocodingConfig):
 
 
 class CoherenceConfig(GeocodingConfig):
-    """Configuration for the coherence pipeline (magnitude or complex).
+    """Configuration for the coherence pipeline.
 
     Inherits every parameter of :class:`GeocodingConfig`.
 
     No ``Multilook`` step is applied, unlike :class:`BackscatterConfig`. It
     would save no runtime, since it can only sit after the coregistration and
-    interferogram stages that dominate this graph, and it has no single sensible
-    placement: before the coherence estimation it merely enlarges the estimator,
-    which ``window`` already expresses, and after it, it averages coherence
-    magnitudes and so cannot reduce the small-window estimator bias. Use
-    ``window`` to set the looks and ``map_looks`` to average further.
+    interferogram stages that dominate this graph, and placing it after the
+    ``Coherence`` operator averages coherence magnitudes and so cannot reduce
+    the small-window estimator bias. Use ``window`` to set the looks.
 
     Parameters
     ----------
@@ -960,9 +909,7 @@ class CoherenceConfig(GeocodingConfig):
     subtract_flat_earth_phase : bool, default True
         Remove the flat-earth phase before estimating coherence.
     subtract_topographic_phase : bool, default True
-        Remove the topographic phase using ``dem``. Required if the coherence
-        is to be averaged coherently afterwards, since it is what leaves the
-        residual phase locally smooth.
+        Remove the topographic phase using ``dem``.
     square_pixel : bool, default False
         Let SNAP's ``Coherence`` operator adjust the estimation window towards
         square ground pixels. Leave off: as with SNAP's ``grSquarePixel`` on
@@ -970,48 +917,22 @@ class CoherenceConfig(GeocodingConfig):
         the requested one.
     replace_zeros_with_nan : bool, default True
         Convert SNAP's zero fill value to NaN.
-    write_complex : bool, default False
-        Write the complex coherence as ``coh_i`` / ``coh_q`` instead of the
-        magnitude as ``coh``. The complex form preserves the interferometric
-        phase, which is required for any later coherent averaging and is
-        irrecoverable once only the magnitude has been written.
-    map_looks : tuple of int or None, default None
-        Additional *coherent* averaging over an ``(n_rows, n_cols)`` window of
-        the geocoded grid, applied after terrain correction; the magnitude is
-        taken afterwards, so the product is a single-band ``COH``. Requires
-        ``write_complex=True``, since it needs the phase. Averaging on the map
-        grid rather than in radar geometry gives a spatially uniform ground
-        footprint, and averaging coherently rather than in magnitude is what
-        removes the small-window estimator bias.
     """
 
     window: tuple[_PositiveInt, _PositiveInt] = (25, 5)
-    map_looks: tuple[_PositiveInt, _PositiveInt] | None = None
     subtract_flat_earth_phase: bool = True
     subtract_topographic_phase: bool = True
     square_pixel: bool = False
     replace_zeros_with_nan: bool = True
-    write_complex: bool = False
-
-    @model_validator(mode="after")
-    def _check_map_looks(self) -> CoherenceConfig:
-        if self.map_looks is not None and not self.write_complex:
-            msg = "map_looks requires write_complex=True; it needs the interferometric phase"
-            raise ValueError(msg)
-        return self
 
     @property
     def output_bands(self) -> list[str]:
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
-        if self.write_complex and self.map_looks is None:
-            return ["coh_i", "coh_q"]
         return ["coh"]
 
     def to_xml(self) -> str:
         """Build the coherence graph XML for this config."""
-        if self.write_complex:
-            return build_coherence_complex_ifg_graph(self)
-        return build_coherence_magnitude_graph(self)
+        return build_coherence_graph(self)
 
 
 class InterferogramConfig(GeocodingConfig):
@@ -1053,9 +974,7 @@ __all__ = [
     "GeocodingConfig",
     "InterferogramConfig",
     "build_backscatter_graph",
-    "build_coherence_complex_ifg_graph",
-    "build_coherence_magnitude_graph",
+    "build_coherence_graph",
     "build_interferogram_graph",
-    "build_terrain_correction_graph",
     "xml_to_mermaid",
 ]

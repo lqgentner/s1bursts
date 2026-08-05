@@ -21,7 +21,7 @@ practical.
   - Radiometrically terrain corrected (RTC) gamma-nought backscatter,
     including the simulated-area band for resolution weighting
   - Geometrically terrain corrected (GTC) beta-nought backscatter
-  - Coherence (magnitude or complex) and interferograms
+  - Coherence and interferograms
 - **Composite** bursts into 110 km MGRS tiles with locally resolution weighted
   (LRW) or per-orbit-pass aggregation (`ResolutionWeighter`)
 - Local filesystem or S3 storage for all products (`FileManager` + UPath)
@@ -73,7 +73,6 @@ module it belongs to:
 | `s1bursts.summary` | `OperationSummary`, `OkResult`, `ErrorResult` |
 | `s1bursts.errors` | exception hierarchy, rooted at `S1BurstsError` |
 | `s1bursts.query` | `Polarization`, `Mode`, `SubSwath`, `OrbitDirection` literal aliases |
-| `s1bursts.dimap` | `BeamDimapDataset`, for reading SNAP BEAM-DIMAP bands directly |
 
 ## Configuration
 

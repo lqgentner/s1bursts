@@ -13,7 +13,6 @@ import pytest
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.product import (
     RTCLRWQA,
-    CoherenceComplexProduct,
     CoherenceProduct,
     CohLRWComposite,
     CohPassComposite,
@@ -121,17 +120,7 @@ class TestCoregisteredProducts:
         pair = self.make_pair()
 
         assert CoherenceProduct.from_burst_pair(pair, crs=CRS_UTM32).product_type == "COH"
-        assert (
-            CoherenceComplexProduct.from_burst_pair(pair, crs=CRS_UTM32).product_type
-            == "COH_CMPLX"
-        )
         assert InterferogramProduct.from_burst_pair(pair, crs=CRS_UTM32).product_type == "IFG"
-
-    def test_is_complex(self) -> None:
-        pair = self.make_pair()
-
-        assert CoherenceProduct.from_burst_pair(pair, crs=CRS_UTM32).is_complex is False
-        assert CoherenceComplexProduct.from_burst_pair(pair, crs=CRS_UTM32).is_complex is True
 
 
 class TestMGRSTileProducts:
