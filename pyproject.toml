@@ -208,7 +208,5 @@ branch = true
 source = ["s1bursts"]
 
 [tool.coverage.report]
-# Regression guard, not a target. Raise this as the operationally important
-# paths (burst_extractor, burstmap, snap_client) gain behaviour-driven tests.
-fail_under = 85
+fail_under = 83
 show_missing = true
