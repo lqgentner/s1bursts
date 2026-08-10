@@ -27,6 +27,11 @@ class CDSES3Settings(BaseSettings):
         env_prefix="CDSE_S3_",
         case_sensitive=False,
         extra="ignore",
+        # An unconfigured GitHub Actions secret interpolates as an empty
+        # string rather than being omitted; without this, an empty string
+        # env var would be treated as set, defeating the `is None` skip
+        # guards in tests/test_integration.py.
+        env_ignore_empty=True,
     )
 
     endpoint_url: str = "https://eodata.dataspace.copernicus.eu"
@@ -45,6 +50,7 @@ class CDSESettings(BaseSettings):
         env_prefix="CDSE_",
         case_sensitive=False,
         extra="ignore",
+        env_ignore_empty=True,
     )
 
     username: str | None = None
