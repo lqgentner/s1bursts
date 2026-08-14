@@ -1,4 +1,13 @@
-"""Locally Resolution Weighted (LRW) compositing for Sentinel-1 products."""
+"""Locally Resolution Weighted (LRW) compositing for Sentinel-1 products.
+
+Implements the LRW backscatter composite and its composite quality map (CQM)
+as defined in:
+
+    Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
+    (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. IEEE
+    Transactions on Geoscience and Remote Sensing, 60, 5201814.
+    https://doi.org/10.1109/TGRS.2021.3055562
+"""
 
 from __future__ import annotations
 
@@ -71,6 +80,13 @@ class ResolutionWeighter:
         rasterio profile dictionary for GeoTIFF output. If None, uses
         float32 as dtype, nan as nodata, pixel interleave,
         deflate compression, and 512x512 tiling.
+
+    References
+    ----------
+    Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E. (2022).
+    Wide-Area Analysis-Ready Radar Backscatter Composites. *IEEE Transactions on
+    Geoscience and Remote Sensing*, 60, 5201814.
+    https://doi.org/10.1109/TGRS.2021.3055562
     """
 
     def __init__(
@@ -142,10 +158,14 @@ class ResolutionWeighter:
         cqm_decibel: bool = False,
         overwrite: bool = False,
     ) -> RTCLRWComposite | RTCLRWResult:
-        """Compute a locally resolution weighted (LRW) RTC intensity composite.
+        r"""Compute a locally resolution weighted (LRW) RTC intensity composite.
 
         Each RTC file provides two bands: band 1 (intensity / power) and band 2
-        (simulated illuminated area used as the inverse weight ``w = 1/A``).
+        (the dimensionless contributing area ratio $A$).  The local area is
+        inversely proportional to the local resolution, so each observation is
+        weighted by $W_i = (1 / A_i) / \sum_j (1 / A_j)$ and the composite is
+        $\sum_i W_i \gamma^0_i$.
+
         Bursts from the same orbit and acquisition date are mosaicked using the
         first non-NaN pixel strategy before temporal aggregation.
 
@@ -162,9 +182,10 @@ class ResolutionWeighter:
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
         clip_max_resolution : float or None, default None
-            Upper limit applied to the resolution weight ``1/area`` before
-            further processing.  Suppresses extreme weights in radar shadow
-            areas.
+            Upper limit applied to the resolution weight $W = 1 / A$
+            before further processing.  Suppresses extreme weights in radar
+            shadow areas.  Dimensionless, like $A$ itself: ``1.0`` is the
+            weight of a flat reference facet.
         decibel : bool, default False
             If ``True``, convert the aggregated composite from intensity
             (power) to decibels before writing; non-positive intensities
@@ -174,9 +195,10 @@ class ResolutionWeighter:
             composite: a number-of-observations map (``QA-NUM``) and a composite
             quality map (``QA-CQM``).
         cqm_decibel : bool, default False
-            If ``True``, write the ``QA-CQM`` map in decibels instead of square
-            metres. Independent of ``decibel``: the CQM describes the composite's
-            local resolution, not its values.
+            If ``True``, write the ``QA-CQM`` map in decibels, that is
+            $-10 \log_{10}\left(\sum_i W_i A_i\right)$. Both forms are
+            dimensionless. Independent of ``decibel``: the CQM describes the
+            composite's local resolution, not its values.
         overwrite : bool, default False
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
@@ -192,6 +214,13 @@ class ResolutionWeighter:
         ------
         ValueError
             If ``rtc_products`` is empty.
+
+        References
+        ----------
+        Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
+        (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. *IEEE
+        Transactions on Geoscience and Remote Sensing*, 60, 5201814.
+        https://doi.org/10.1109/TGRS.2021.3055562
         """
         rtc_products = list(rtc_products)
         if not rtc_products:
@@ -307,10 +336,11 @@ class ResolutionWeighter:
         cqm_decibel: bool = False,
         overwrite: bool = False,
     ) -> CohLRWComposite | CohLRWResult:
-        """Compute a locally resolution weighted (LRW) coherence composite.
+        r"""Compute a locally resolution weighted (LRW) coherence composite.
 
-        Coherence observations are weighted by the inverse simulated area
-        ``1/A`` taken from band 2 of the matched RTC files.  The match is made
+        Coherence observations are weighted by the inverse contributing area
+        $W = 1 / A$ taken from band 2 of the matched RTC files, normalized to sum
+        to one as in :meth:`compose_rtc_lrw`.  The match is made
         per ``(rel_orbit_number, date_primary)`` group: for each coherence
         group the sim-area arrays are looked up from the corresponding RTC
         products (matched by ``burst_id``, ``sub_swath``, and
@@ -332,17 +362,19 @@ class ResolutionWeighter:
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
         clip_max_resolution : float or None, default None
-            Upper limit applied to the resolution weight ``1/area`` before
-            further processing.  Suppresses extreme weights in radar shadow
-            areas.
+            Upper limit applied to the resolution weight $W = 1 / A$
+            before further processing.  Suppresses extreme weights in radar
+            shadow areas.  Dimensionless, like $A$ itself: ``1.0`` is the
+            weight of a flat reference facet.
         write_qa : bool, default False
             If ``True``, also write two auxiliary QA products alongside the
             composite: a number-of-observations map (``QA-NUM``) and a composite
             quality map (``QA-CQM``).
         cqm_decibel : bool, default False
-            If ``True``, write the ``QA-CQM`` map in decibels instead of square
-            metres. Independent of ``decibel``: the CQM describes the composite's
-            local resolution, not its values.
+            If ``True``, write the ``QA-CQM`` map in decibels, that is
+            $-10 \log_{10}\left(\sum_i W_i A_i\right)$. Both forms are
+            dimensionless. Independent of ``decibel``: the CQM describes the
+            composite's local resolution, not its values.
         overwrite : bool, default False
             Skip writing if the output file already exists.
 
@@ -356,6 +388,13 @@ class ResolutionWeighter:
         ------
         ValueError
             If ``coh_products`` is empty.
+
+        References
+        ----------
+        Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
+        (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. *IEEE
+        Transactions on Geoscience and Remote Sensing*, 60, 5201814.
+        https://doi.org/10.1109/TGRS.2021.3055562
         """
         coh_products = list(coh_products)
         if not coh_products:
@@ -878,12 +917,18 @@ class ResolutionWeighter:
         sim_area: NDArray[np.floating[Any]],
         clip_max_resolution: float | None,
     ) -> NDArray[np.floating[Any]]:
-        """Compute resolution weights from simulated illuminated area.
+        """Compute resolution weights from the simulated contributing area.
 
-        The resolution weight is ``w = 1 / sim_area``.  Invalid pixels
-        (``sim_area <= 0`` or non-finite) receive weight zero.  An optional
-        upper clip on the resolution weight ``1/area`` suppresses extreme
-        weights in shadow areas.
+        ``sim_area`` is the dimensionless normalization area ratio that
+        terrain flattening divides beta nought by (gamma-nought area over
+        beta-nought reference area), so ``A = 1`` is a flat reference facet.
+        The local area is inversely proportional to the local resolution, so
+        the resolution weight is ``w = 1 / A`` (Small et al. 2022, eq. 3-4;
+        full citation in the module docstring).
+
+        Invalid pixels (``sim_area <= 0`` or non-finite) receive weight zero.
+        An optional upper clip on ``1/A`` suppresses extreme weights in shadow
+        areas.
         """
         is_valid = (sim_area > 0) & np.isfinite(sim_area)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -913,9 +958,10 @@ class ResolutionWeighter:
     ) -> NDArray[np.float32]:
         """Composite quality map (CQM) over the first (N) axis.
 
-        Computed as ``1 / Σ(wᵢ · Aᵢ)`` where ``wᵢ`` are the resolution weights
-        normalized to sum to one and ``Aᵢ`` is the contributing area.  Uses the
-        same (clipped) weights as the composite.
+        Computed as ``1 / Σ(Wᵢ · Aᵢ)`` where ``Wᵢ`` are the resolution weights
+        normalized to sum to one and ``Aᵢ`` is the dimensionless contributing
+        area ratio.  Uses the same (clipped) weights as the composite, so it
+        describes the composite that was actually written.
         """
         weight_sum = weights.sum(axis=0)  # (H, W)
         with np.errstate(divide="ignore", invalid="ignore"):

@@ -32,7 +32,11 @@ class QaMetric(StrEnum):
     NUM = "NUM"
     """Number of valid observations contributing to each composite pixel."""
     CQM = "CQM"
-    """Composite local resolution (resolution-weighted contributing area)."""
+    """Composite local resolution: the reciprocal of the weighted relative area.
+
+    Dimensionless; high values mean high (good) local resolution. Defined in
+    Small et al. (2022), eq. 6; see :mod:`s1bursts.resolution_weighter`.
+    """
 
 
 @dataclass(frozen=True)
