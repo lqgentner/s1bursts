@@ -262,6 +262,13 @@ class ResolutionWeighter:
         UserWarning
             If an existing composite was skipped without checking its
             settings, because a file was written before s1bursts 0.3.0.
+
+        References
+        ----------
+        Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
+        (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. *IEEE
+        Transactions on Geoscience and Remote Sensing*, 60, 5201814.
+        https://doi.org/10.1109/TGRS.2021.3055562
         """
         rtc_products = list(rtc_products)
         if not rtc_products:
@@ -442,6 +449,13 @@ class ResolutionWeighter:
         UserWarning
             If an existing composite was skipped without checking its
             settings, because a file was written before s1bursts 0.3.0.
+
+        References
+        ----------
+        Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
+        (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. *IEEE
+        Transactions on Geoscience and Remote Sensing*, 60, 5201814.
+        https://doi.org/10.1109/TGRS.2021.3055562
         """
         coh_products = list(coh_products)
         if not coh_products:
