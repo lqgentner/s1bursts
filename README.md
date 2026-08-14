@@ -153,6 +153,9 @@ from s1bursts import download_burst_map
 download_burst_map(mode="IW")
 ```
 
+It is also needed for per-orbit-pass compositing, since a product's filename
+records its relative orbit number but not its pass direction.
+
 ## Installation
 
 ```bash
@@ -176,6 +179,9 @@ uv run pytest -m integration  # network/SNAP tests (needs credentials + SNAP)
 uv run ruff format && uv run ruff check --fix
 uv run pyrefly check
 ```
+
+See the [contributing guide](https://lqgentner.github.io/s1bursts/user-guide/contributing.html)
+for the integration tests, the dependency lower bounds, and how to build these docs.
 
 ## License
 

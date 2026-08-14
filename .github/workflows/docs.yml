@@ -1,0 +1,73 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-docs:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # hatch-vcs derives the version from git tags/history, and Great Docs
+          # reads commit dates for its page timestamps.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      # The `docs` group carries great-docs itself; the guide executes against
+      # the installed package, so the runtime dependencies are needed too.
+      - name: Install dependencies
+        run: uv sync --all-extras --group docs
+
+      # "Finding bursts" queries the public CDSE burst catalog (no credentials),
+      # so this step needs network egress. Nothing here downloads a burst or
+      # runs SNAP.
+      - name: Build site
+        run: uv run great-docs build
+
+      - name: Upload site artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-html
+          path: great-docs/_site
+          include-hidden-files: true
+
+  publish-docs:
+    name: Publish to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build-docs
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: docs-html
+          path: great-docs/_site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: great-docs/_site
+          include-hidden-files: true
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

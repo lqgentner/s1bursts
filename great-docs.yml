@@ -1,0 +1,185 @@
+# Great Docs Configuration
+# See https://posit-dev.github.io/great-docs/user-guide/configuration.html
+
+display_name: s1bursts
+parser: numpy
+dynamic: false
+
+# GitHub Integration
+# ------------------
+repo: https://github.com/lqgentner/s1bursts
+site_url: "https://lqgentner.github.io/s1bursts/"
+
+source:
+  enabled: true
+  branch: main
+  placement: usage
+
+
+# Author Information
+# ------------------
+authors:
+  - name: Luis Gentner
+    role: Author
+    email: luis.gentner@geo.uzh.ch
+    github: lqgentner
+    orcid: 0009-0006-4453-0881
+
+# Logo & Favicon
+# --------------
+# No logo assets exist yet. Once `assets/logo.png`, `assets/logo-dark.png`, and
+# `assets/favicon.png` are added (as in freezebase), uncomment:
+#
+# logo:
+#   light: assets/logo.png
+#   dark: assets/logo-dark.png
+#
+# favicon: assets/favicon.png
+
+hero:
+  name: false
+
+# SEO
+# ---
+# Quarto already writes correct <title>s ("s1bursts" on the homepage,
+# "Finding bursts – s1bursts" elsewhere). Great Docs' post-render step then
+# appends "| {site_name}" on top, producing "s1bursts | s1bursts", because
+# its "already templated?" guard tests for an ASCII " - " while Quarto joins
+# with an en dash (U+2013). Emitting just the page title suppresses the second
+# append. Revisit if great-docs > 0.16.0 fixes post-render.py:430.
+seo:
+  title_template: "{page_title}"
+
+# Theming
+# -------
+content_style: mint
+navbar_style: mint
+
+# Icons
+# -----
+nav_icons:
+  sidebar:
+    Installation and setup: download
+    Finding bursts: search
+    Downloading and storage: cloud-download
+    Processing with SNAP: workflow
+    Compositing: layers
+    Contributing: wrench
+
+# API Reference Structure
+# -----------------------
+reference:
+  title: "API Reference"
+  desc: >-
+    The public surface of s1bursts, grouped by the stage of the pipeline it
+    belongs to. The top-level `s1bursts` namespace re-exports what a pipeline is
+    *built* from; what a pipeline *produces* is imported from the module that
+    defines it.
+  sections:
+    - title: Searching and downloading
+      desc: >-
+        Query the CDSE burst catalog and fetch single bursts over OData or S3.
+      contents:
+        - query.SearchQuery
+        - database.BurstDatabase
+
+    - title: Burst data model
+      desc: >-
+        The acquisitions a search returns, and the interferometric pairs built
+        from them.
+      contents:
+        - burst.Burst
+        - burst.BurstPair
+        - burst.BurstCollection
+        - burst.BurstPairCollection
+
+    - title: Processing
+      desc: >-
+        Batch SNAP GPT execution and the runtime budget it runs under.
+      contents:
+        - processor.BurstProcessor
+        - snap_client.SNAPConfig
+        - snap_client.SNAPClient
+
+    - title: Graph configuration
+      desc: >-
+        The shape of the generated SNAP graph, one config per product type.
+        Every config carries the shared Terrain-Correction tail parameters.
+      contents:
+        - snap_graph.GeocodingConfig
+        - snap_graph.BackscatterConfig
+        - snap_graph.CoherenceConfig
+        - snap_graph.InterferogramConfig
+
+    - title: Storage
+      desc: >-
+        Deterministic product paths and discovery, on local disk or S3.
+      contents:
+        - filemanager.FileManager
+
+    - title: Compositing
+      desc: >-
+        Locally resolution weighted and per-orbit-pass MGRS tile composites.
+      contents:
+        - resolution_weighter.ResolutionWeighter
+
+    - title: Single-burst products
+      desc: >-
+        Metadata records returned by the processing services. They describe a
+        product; the pixels live in the GeoTIFF at its `FileManager` path.
+      contents:
+        - product.RTCProduct
+        - product.GTCProduct
+        - product.CoherenceProduct
+        - product.InterferogramProduct
+
+    - title: Composite products
+      desc: >-
+        MGRS tile composites and their quality-assurance layers.
+      contents:
+        - product.RTCLRWComposite
+        - product.CohLRWComposite
+        - product.RTCPassComposite
+        - product.CohPassComposite
+        - product.RTCLRWQA
+        - product.CohLRWQA
+        - product.RTCPassQA
+        - product.CohPassQA
+        - product.QaMetric
+
+    - title: Results and errors
+      desc: >-
+        What a batch operation reports, and the exception hierarchy that
+        separates per-item failures from environment-wide ones.
+      contents:
+        - summary.OperationSummary
+        - summary.OkResult
+        - summary.ErrorResult
+        - errors.S1BurstsError
+        - errors.ConfigurationError
+        - errors.BurstError
+        - errors.BurstNotFoundError
+        - errors.BurstDownloadError
+        - errors.SnapProcessingError
+
+    - title: Reference data and low-level access
+      desc: >-
+        The optional SAR-MPC burst-ID map, external-DEM preparation, and the
+        CDSE clients the high-level services are built on.
+      contents:
+        - burstmap.download_burst_map
+        - burstmap.Sentinel1Bursts
+        - dem.compensate_dem_for_snap
+        - cdse.CDSEAuth
+        - cdse.CDSEBurstClient
+        - cdse.CDSEResponse
+        - burst_extractor.extract_burst_from_s3
+        - snap_graph.xml_to_mermaid
+        - snap_graph.build_backscatter_graph
+        - snap_graph.build_coherence_graph
+        - snap_graph.build_interferogram_graph
+
+# Jupyter Kernel
+# --------------
+# Used to execute the `{python}` chunks in the user guide.
+jupyter: python3

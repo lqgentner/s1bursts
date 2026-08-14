@@ -84,6 +84,11 @@ validation = [
     "asf-search>=8",
     "hyp3-sdk>=7",
 ]
+# Documentation toolchain. `great-docs` renders the site via Quarto,
+# installed separately.
+docs = [
+    "great-docs>=0.16",
+]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
