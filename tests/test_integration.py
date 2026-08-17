@@ -14,6 +14,7 @@ project ``.env`` here (it is gitignored).
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -26,11 +27,23 @@ from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery, SN
 from s1bursts.config import get_settings
 from s1bursts.errors import ConfigurationError
 from s1bursts.snap_client import _resolve_gpt_path
+from tests.safe_conformance import check_burst_safe, compare_burst_safes
 
 if TYPE_CHECKING:
     from s1bursts.burst import Burst, BurstCollection
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    # `freezebase.download.HTTPDownloader` owns a `requests.Session` but exposes
+    # no `close()` or context manager, and `CDSEClient.download_burst` builds one
+    # per call. The pooled TLS connection to bursts.dataspace.copernicus.eu is
+    # therefore closed by the garbage collector, which pytest reports as an
+    # unraisable exception; under the project's `error` warning policy that fails
+    # whichever test happens to be running when the collection fires, rather than
+    # the one that opened the socket. Scoped to this module so offline tests keep
+    # failing on every warning. Remove once HTTPDownloader closes its session.
+    pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning"),
+]
 
 # Aletsch glacier burst used across all live tests (~100 MB download)
 BURST_ID = 30346
@@ -156,26 +169,75 @@ class TestDownload:
         assert slc_path.stat().st_size > 10_000_000  # sanity: tens of MB
 
     @requires_cdse_s3
-    def test_s3_extraction_produces_slc_zip(
+    def test_s3_extraction_produces_slc_zip(self, s3_extracted_burst: Path) -> None:
+        assert s3_extracted_burst.exists()
+        assert s3_extracted_burst.stat().st_size > 10_000_000
+
+
+@pytest.fixture(scope="module")
+def s3_extracted_burst(
+    database: BurstDatabase,
+    query: SearchQuery,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Path:
+    """Extract the reference burst from S3 with this package's own extractor."""
+    if _settings.cdse.s3.profile is None and (
+        _settings.cdse.s3.access_key_id is None or _settings.cdse.s3.secret_access_key is None
+    ):
+        pytest.skip("CDSE S3 credentials not configured")
+
+    burst: Burst = database.search(query)[0]
+    assert burst.parent_product_name is not None
+    save_path = tmp_path_factory.mktemp("s3-extract") / "burst-from-s3.zip"
+
+    database.client.download_burst_from_s3(
+        save_path=save_path,
+        parent_product_name=burst.parent_product_name,
+        polarization=burst.polarization,
+        sub_swath=burst.sub_swath,
+        burst_id=burst.burst_id,
+    )
+    return save_path
+
+
+class TestReferenceConformance:
+    """Validate the S3 extractor against CDSE's own product for the same burst.
+
+    CDSE generates the bursts it serves with the ESA/CloudFerro script this
+    package ports, so its product is the trusted reference: any disagreement is
+    a defect in the port, not a difference of opinion.
+    """
+
+    @requires_cdse_s3
+    def test_extracted_burst_satisfies_the_reference_contract(
         self,
-        database: BurstDatabase,
-        query: SearchQuery,
-        tmp_path: Path,
+        s3_extracted_burst: Path,
     ) -> None:
-        burst: Burst = database.search(query)[0]
-        assert burst.parent_product_name is not None
-        save_path = tmp_path / "burst-from-s3.zip"
+        violations = check_burst_safe(s3_extracted_burst, sub_swath=SUB_SWATH)
 
-        database.client.download_burst_from_s3(
-            save_path=save_path,
-            parent_product_name=burst.parent_product_name,
-            polarization=burst.polarization,
-            sub_swath=burst.sub_swath,
-            burst_id=burst.burst_id,
-        )
+        assert violations == [], "\n".join(violations)
 
-        assert save_path.exists()
-        assert save_path.stat().st_size > 10_000_000
+    @requires_cdse_credentials
+    @requires_cdse_s3
+    def test_matches_the_burst_cdse_serves_for_the_same_id(
+        self,
+        s3_extracted_burst: Path,
+        downloaded_bursts: BurstCollection,
+        database: BurstDatabase,
+    ) -> None:
+        """The S3 extraction must equal CDSE's own burst, file for file and pixel for pixel.
+
+        The single tolerated difference is the pre-1.3 GCP row offset CDSE's
+        service still emits; it is reported explicitly rather than ignored (see
+        ``tests/safe_conformance._diff_gcps``).
+        """
+        reference = database.file_manager.get_slc_path(downloaded_bursts[0])
+        assert Path(reference).exists(), "OData reference burst was not downloaded"
+
+        differences = compare_burst_safes(s3_extracted_burst, Path(reference))
+        unexpected = [d for d in differences if not d.startswith("KNOWN DEVIATION:")]
+
+        assert unexpected == [], "\n".join(unexpected)
 
 
 class TestSnapProcessing:
@@ -212,3 +274,38 @@ class TestSnapProcessing:
             # SNAP's GeoTIFF writer drops the NODATA tag; _finalize_product re-stamps it
             assert src.nodata is not None
             assert np.isnan(src.nodata)
+
+    @requires_cdse_s3
+    @requires_snap
+    def test_gpt_processes_the_exact_s3_extracted_artifact(
+        self,
+        database: BurstDatabase,
+        query: SearchQuery,
+        s3_extracted_burst: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+    ) -> None:
+        """The S3-extracted ZIP itself must be readable by SNAP, not merely well formed.
+
+        The archive produced by :func:`extract_burst_from_s3` is placed where the
+        file manager expects the SLC, so GPT consumes that exact byte stream.
+        """
+        bursts = database.search(query)[0:1]
+        file_manager = FileManager(base_dir=tmp_path_factory.mktemp("s3-snap"))
+        slc_path = Path(file_manager.get_slc_path(bursts[0]))
+        slc_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(s3_extracted_burst, slc_path)
+
+        processor = BurstProcessor(
+            file_manager,
+            SNAPConfig(max_workers=1, max_ram_gb=6),
+            show_progress=False,
+            continue_on_error=False,
+        )
+        summary = processor.create_backscatter(bursts, crs=pyproj.CRS("EPSG:32632"))
+
+        assert summary.n_failed == 0, [str(item.error) for item in summary.failed_items]
+        with rasterio.open(file_manager.get_product_path(summary.products[0])) as src:
+            assert src.crs.to_epsg() == 32632
+            assert src.count == 2
+            # A burst that decoded correctly has real signal, not an empty frame.
+            assert np.isfinite(src.read(1)).any()

@@ -178,6 +178,9 @@ suppress-dummy-args = false
     "SLF001",   # Allow accesses on "private" class members.
     "TC003",    # Runtime imports of stdlib types are fine in tests
 ]
+# The synthetic SAFE fixture reproduces a real manifest, whose namespace
+# declarations and metadata attributes genuinely run past the line limit.
+"tests/fixtures/safe_product.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["s1bursts"]

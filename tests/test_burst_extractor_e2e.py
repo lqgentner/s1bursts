@@ -1,0 +1,392 @@
+"""End-to-end burst extraction against a synthetic SAFE product.
+
+These tests run the full :func:`extract_burst_from_s3` orchestration offline.
+The S3 layer is replaced by a local directory — the catalogue lookup and the
+``UPath`` factory are the only things stubbed — so annotation parsing, burst
+resolution, every XML edit, the windowed raster read, GCP assignment, archiving
+and the upload branch all execute for real.
+
+Every extracted archive is put through ``tests/safe_conformance.py``, which
+re-derives the contract from the vendored ESA reference script rather than from
+the port, and one extraction is pinned against a committed golden record.
+"""
+
+from __future__ import annotations
+
+from itertools import count
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import numpy as np
+import pytest
+import requests
+from upath import UPath
+
+import s1bursts.burst_extractor as extractor
+from s1bursts.burst_extractor import (
+    _glob_annotation_xml,
+    _lookup_s3_path,
+    _make_s3_upath,
+    extract_burst_from_s3,
+)
+from s1bursts.config import CDSES3Settings
+from s1bursts.errors import BurstNotFoundError, ConfigurationError
+from tests.fixtures.safe_product import ProductSpec, SyntheticProduct, build_product
+from tests.safe_conformance import check_burst_safe, digest, read_burst_safe
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+GOLDEN_PATH = Path(__file__).parent / "fixtures" / "golden_burst.json"
+
+
+@pytest.fixture
+def extract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[..., tuple[SyntheticProduct, Path]]:
+    """Return a helper that builds a product and extracts one burst from it."""
+    builds = count()
+
+    def _extract(
+        spec: ProductSpec | None = None,
+        *,
+        burst_index: int = 0,
+        save_path: Path | UPath | None = None,
+    ) -> tuple[SyntheticProduct, Path]:
+        # Variants of one spec can share a product name, so each build gets its
+        # own directory.
+        source = tmp_path / f"source-{next(builds)}"
+        source.mkdir()
+        product = build_product(source, spec)
+
+        monkeypatch.setattr(extractor, "_lookup_s3_path", lambda _name: str(product.root))
+        monkeypatch.setattr(extractor, "_make_s3_upath", lambda path, _settings: UPath(path))
+
+        destination = save_path or tmp_path / "out" / "burst.zip"
+        result = extract_burst_from_s3(
+            destination,
+            parent_product_name=product.name,
+            polarization=product.spec.polarization,
+            sub_swath=product.spec.sub_swath,
+            burst_id=product.spec.burst_ids[burst_index],
+        )
+        return product, result
+
+    return _extract
+
+
+class TestExtraction:
+    @pytest.mark.parametrize(
+        ("position", "burst_index"),
+        [("first", 0), ("middle", 1), ("last", 3)],
+    )
+    def test_extracted_burst_is_conformant(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        position: str,
+        burst_index: int,
+    ) -> None:
+        """First, interior and last bursts must all satisfy the reference contract."""
+        product, zip_path = extract(burst_index=burst_index)
+
+        violations = check_burst_safe(zip_path, sub_swath=product.spec.sub_swath)
+
+        assert violations == [], f"{position} burst: {violations}"
+
+    @pytest.mark.parametrize("burst_index", [0, 1, 2, 3])
+    def test_pixels_come_from_the_right_window(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        burst_index: int,
+    ) -> None:
+        """The measurement must hold exactly the parent's rows for that burst."""
+        product, zip_path = extract(burst_index=burst_index)
+
+        burst = read_burst_safe(zip_path)
+
+        assert np.array_equal(burst.measurement, product.burst_window(burst_index + 1))
+
+    def test_burst_windows_are_distinguishable(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+    ) -> None:
+        """Guards the previous test: neighbouring bursts must not be identical."""
+        product, _ = extract(burst_index=0)
+
+        assert not np.array_equal(product.burst_window(1), product.burst_window(2))
+
+    def test_names_the_safe_directory_from_burst_metadata(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+    ) -> None:
+        product, zip_path = extract(burst_index=2)
+        burst = read_burst_safe(zip_path)
+
+        assert burst.safe_dir == (
+            f"S1A_SLC_{product.sensing_times[2][:19].replace('-', '').replace(':', '')}"
+            f"_{product.spec.burst_ids[2]:06d}_IW1_VV_{product.spec.datatake_id:06d}.SAFE"
+        )
+
+    def test_geolocation_lines_are_shifted_to_the_burst(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+    ) -> None:
+        """An interior burst keeps the whole grid, offset so its own row sits at zero."""
+        product, zip_path = extract(burst_index=2)
+        burst = read_burst_safe(zip_path)
+
+        lines = sorted({int(point["line"]) for point in burst.geolocation_points()})
+        step = product.spec.lines_per_burst
+
+        assert lines == [-2 * step, -step, 0, step, 2 * step]
+
+    def test_preserves_measurement_dtype(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+    ) -> None:
+        """SLC pixels are CInt16 and must not be silently promoted."""
+        _, zip_path = extract()
+
+        assert read_burst_safe(zip_path).raster_dtype == "complex_int16"
+
+
+class TestProductVariants:
+    def test_legacy_product_without_burst_ids(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+    ) -> None:
+        """Products predating the `burstId` field resolve via the orbital fallback."""
+        spec = ProductSpec(with_burst_id=False)
+        product, zip_path = extract(spec, burst_index=2)
+
+        assert check_burst_safe(zip_path, sub_swath="IW1") == []
+        assert f"{product.spec.burst_ids[2]:06d}" in read_burst_safe(zip_path).pattern
+
+    def test_legacy_and_modern_products_agree(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        tmp_path: Path,
+    ) -> None:
+        """Both resolution paths must select the same burst."""
+        _, modern = extract(ProductSpec(), burst_index=1, save_path=tmp_path / "modern.zip")
+        _, legacy = extract(
+            ProductSpec(with_burst_id=False),
+            burst_index=1,
+            save_path=tmp_path / "legacy.zip",
+        )
+
+        assert np.array_equal(
+            read_burst_safe(modern).measurement,
+            read_burst_safe(legacy).measurement,
+        )
+
+    @pytest.mark.parametrize(
+        ("sub_swath", "polarization"),
+        [("IW2", "VH"), ("IW3", "VV"), ("EW1", "HH"), ("EW5", "HV")],
+    )
+    def test_all_modes_and_polarizations(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        sub_swath: str,
+        polarization: str,
+    ) -> None:
+        spec = ProductSpec(sub_swath=sub_swath, polarization=polarization)
+        _, zip_path = extract(spec, burst_index=1)
+
+        assert check_burst_safe(zip_path, sub_swath=sub_swath) == []
+
+    def test_rfi_annotation_is_carried_over_and_retimed(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+    ) -> None:
+        _, zip_path = extract(ProductSpec(with_rfi=True), burst_index=1)
+        burst = read_burst_safe(zip_path)
+
+        assert burst.rfi is not None
+        assert burst.rfi.findtext("adsHeader/startTime") == burst.azimuth_start
+        assert burst.rfi.findtext("adsHeader/stopTime") == burst.azimuth_stop
+        # RFI line numbers are not shifted; the reference only retimes the header.
+        assert burst.rfi.findtext("rfiDetectionFromNoiseReportList/*/line") == str(
+            ProductSpec().lines_per_burst,
+        )
+
+    def test_product_without_rfi_omits_the_directory(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+    ) -> None:
+        _, zip_path = extract(ProductSpec(with_rfi=False))
+        burst = read_burst_safe(zip_path)
+
+        assert burst.rfi is None
+        assert not any("/rfi/" in name for name in burst.members)
+
+    def test_rejects_unknown_subswath(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="Unknown subswath"):
+            extract_burst_from_s3(
+                tmp_path / "out.zip",
+                parent_product_name="anything",
+                polarization="VV",
+                sub_swath="IW9",
+                burst_id=1,
+            )
+
+
+class TestDestination:
+    def test_writes_to_a_remote_destination(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+    ) -> None:
+        """A non-local save path takes the streamed-upload branch."""
+        remote = UPath("memory://bursts/out/burst.zip")
+        _, result = extract(save_path=remote)
+
+        assert result == remote
+        assert remote.exists()
+        assert remote.stat().st_size > 0
+
+    def test_creates_missing_parent_directories(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        tmp_path: Path,
+    ) -> None:
+        target = tmp_path / "deeply" / "nested" / "burst.zip"
+        _, result = extract(save_path=target)
+
+        assert result.exists()
+
+    def test_leaves_no_temporary_directory_behind(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        monkeypatch.setenv("TMPDIR", str(scratch))
+
+        extract()
+
+        assert list(scratch.iterdir()) == []
+
+
+class TestGoldenRecord:
+    """A committed digest of one extraction, so silent output drift fails the suite."""
+
+    def test_matches_the_golden_record(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+    ) -> None:
+        _, zip_path = extract(ProductSpec(with_rfi=True), burst_index=2)
+
+        actual = digest(zip_path)
+        expected = json.loads(GOLDEN_PATH.read_text())
+
+        assert actual == expected, (
+            "Extraction output changed. If the change is intended and matches the reference "
+            f"extractor, regenerate {GOLDEN_PATH.name} with tests/fixtures/regenerate_golden.py."
+        )
+
+
+class TestS3Lookup:
+    def test_returns_the_catalogued_s3_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, object] = {}
+
+        class _Response:
+            def raise_for_status(self) -> None: ...
+
+            def json(self) -> dict[str, object]:
+                return {"value": [{"S3Path": "/eodata/Sentinel-1/SAR/SLC/2022/08/25/x.SAFE"}]}
+
+        def _get(url: str, params: dict[str, str], timeout: int) -> _Response:
+            captured.update(url=url, params=params, timeout=timeout)
+            return _Response()
+
+        monkeypatch.setattr(requests, "get", _get)
+
+        assert _lookup_s3_path("S1A_IW_SLC.SAFE") == "/eodata/Sentinel-1/SAR/SLC/2022/08/25/x.SAFE"
+        assert captured["params"] == {"$filter": "Name eq 'S1A_IW_SLC.SAFE'"}
+
+    def test_raises_when_the_product_is_unknown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _Response:
+            def raise_for_status(self) -> None: ...
+
+            def json(self) -> dict[str, object]:
+                return {"value": []}
+
+        monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: _Response())
+
+        with pytest.raises(BurstNotFoundError, match="not found in CDSE catalogue"):
+            _lookup_s3_path("S1A_MISSING.SAFE")
+
+
+class TestS3Authentication:
+    def test_prefers_a_named_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, object] = {}
+
+        def _make(path: str, **kwargs: object) -> UPath:
+            captured.update(path=path, **kwargs)
+            return UPath("memory://root")
+
+        monkeypatch.setattr(extractor, "make_s3_upath", _make)
+        settings = CDSES3Settings(
+            profile="cdse",
+            access_key_id="key",
+            secret_access_key="secret",
+        )
+
+        _make_s3_upath("/eodata/x.SAFE", settings)
+
+        assert captured["path"] == "s3://eodata/x.SAFE"
+        assert captured["profile"] == "cdse"
+        assert "key" not in captured
+
+    def test_falls_back_to_an_explicit_key_pair(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, object] = {}
+
+        def _make(path: str, **kwargs: object) -> UPath:
+            captured.update(path=path, **kwargs)
+            return UPath("memory://root")
+
+        monkeypatch.setattr(extractor, "make_s3_upath", _make)
+        settings = CDSES3Settings(access_key_id="key", secret_access_key="secret")
+
+        _make_s3_upath("/eodata/x.SAFE", settings)
+
+        assert captured["key"] == "key"
+        assert captured["secret"] == "secret"
+        assert "profile" not in captured
+
+    def test_reports_missing_credentials(self) -> None:
+        with pytest.raises(ConfigurationError, match="CDSE S3 credentials not configured"):
+            _make_s3_upath("/eodata/x.SAFE", CDSES3Settings())
+
+    def test_incomplete_key_pair_is_not_accepted(self) -> None:
+        settings = CDSES3Settings(access_key_id="key")
+
+        with pytest.raises(ConfigurationError, match="CDSE S3 credentials not configured"):
+            _make_s3_upath("/eodata/x.SAFE", settings)
+
+
+class TestAnnotationLookup:
+    def test_finds_the_single_matching_annotation(self, tmp_path: Path) -> None:
+        product = build_product(tmp_path)
+
+        found = _glob_annotation_xml(UPath(product.root), "iw1", "vv")
+
+        assert found.name == product.annotation_name
+
+    def test_raises_when_no_annotation_matches(self, tmp_path: Path) -> None:
+        product = build_product(tmp_path)
+
+        with pytest.raises(BurstNotFoundError, match="Expected 1 annotation XML"):
+            _glob_annotation_xml(UPath(product.root), "iw3", "hh")
+
+    def test_raises_when_several_annotations_match(self, tmp_path: Path) -> None:
+        product = build_product(tmp_path)
+        duplicate = product.root / "annotation" / "s1a-iw1-slc-vv-duplicate-001.xml"
+        duplicate.write_text("<product/>")
+
+        with pytest.raises(BurstNotFoundError, match="found 2"):
+            _glob_annotation_xml(UPath(product.root), "iw1", "vv")
