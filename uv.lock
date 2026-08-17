@@ -465,7 +465,7 @@ wheels = [
 
 [[package]]
 name = "freezebase"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "affine" },
@@ -484,9 +484,9 @@ dependencies = [
     { name = "tenacity" },
     { name = "universal-pathlib" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/96/68/6ea08be5e9bd6642ee0eb2d69ae577c0879929d787171a66f373876ac5d8/freezebase-0.3.0.tar.gz", hash = "sha256:6ec07fee195d2abc480f9cffd6198a153fb1ee7e13e344f73df9d4336993c260", size = 64112, upload-time = "2026-08-05T11:12:11.765Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ee/34/653cacc455987cfc54278a43156006ad2e4068b71ac98d45e917d9559534/freezebase-0.4.0.tar.gz", hash = "sha256:321408acb0de9243fc675cc38b8e0a002a2de1c45535b01eaa2af1b8ba4f6619", size = 65458, upload-time = "2026-08-17T12:31:21.72Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2f/21/2e3dd62ce3b1bca4bdfb49c32b4f3c9d390ed8ee4bdb108ea8815c792b83/freezebase-0.3.0-py3-none-any.whl", hash = "sha256:e9b1371af1f194fd3910336e5781dec9bb7e3b2408794630c3eec73d6205d78b", size = 46625, upload-time = "2026-08-05T11:12:10.656Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/f6/81a12f13a4730b22aa1f575fe227a047c7509a2a9aa7ad9981deb33f5e69/freezebase-0.4.0-py3-none-any.whl", hash = "sha256:50ae5af75bfcfda3e3ee4aecfcb264bbe36d66bcdeedf390db82eecd8e897362", size = 46860, upload-time = "2026-08-17T12:31:20.36Z" },
 ]
 
 [package.optional-dependencies]
@@ -1693,7 +1693,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "freezebase", extras = ["s3"], specifier = ">=0.3.0,<0.4" },
+    { name = "freezebase", extras = ["s3"], specifier = ">=0.4,<0.5" },
     { name = "geopandas", specifier = ">=1.1" },
     { name = "lxml", specifier = ">=5" },
     { name = "numpy", specifier = ">=2.0" },

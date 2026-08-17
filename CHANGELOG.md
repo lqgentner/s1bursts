@@ -25,6 +25,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Changed
 
+- Requires `freezebase[s3]>=0.4,<0.5`. Burst downloads now close their
+  `HTTPDownloader` when done, releasing the connection immediately instead of
+  leaving it to the garbage collector.
 - **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
   still carries the Terrain-Correction parameters every per-product config
   inherits, but `to_xml()` is now an abstract method implemented by
@@ -35,7 +38,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   coherence graph, so the qualifier no longer distinguishes anything.
 
 - The first-party dependency `freezecore` was renamed to `freezebase` and is now
-  resolved from PyPI (`freezebase[s3]>=0.3.0`) instead of a Git source. Imports
+  resolved from PyPI instead of a Git source. Imports
   moved from `freezecore.*` to `freezebase.*`; the cache environment variable it
   reads is now `FREEZEBASE_CACHE`.
 

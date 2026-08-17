@@ -488,13 +488,14 @@ class CDSEBurstClient:
             msg = "`auth` not valid. Must be an instance of 'CDSEAuth' to download bursts."
             raise TypeError(msg)
 
-        downloader = HTTPDownloader(
+        # Closed on exit, releasing the pooled connection immediately
+        with HTTPDownloader(
             auth=self.auth,
             progress=progress,
             method="POST",
             timeout=self.request_timeout,
-        )
-        return downloader(url=url, save_dir=save_path.parent, filename=save_path.name)
+        ) as downloader:
+            return downloader(url=url, save_dir=save_path.parent, filename=save_path.name)
 
     def download_burst_from_s3(
         self,

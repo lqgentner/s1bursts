@@ -32,18 +32,7 @@ from tests.safe_conformance import check_burst_safe, compare_burst_safes
 if TYPE_CHECKING:
     from s1bursts.burst import Burst, BurstCollection
 
-pytestmark = [
-    pytest.mark.integration,
-    # `freezebase.download.HTTPDownloader` owns a `requests.Session` but exposes
-    # no `close()` or context manager, and `CDSEClient.download_burst` builds one
-    # per call. The pooled TLS connection to bursts.dataspace.copernicus.eu is
-    # therefore closed by the garbage collector, which pytest reports as an
-    # unraisable exception; under the project's `error` warning policy that fails
-    # whichever test happens to be running when the collection fires, rather than
-    # the one that opened the socket. Scoped to this module so offline tests keep
-    # failing on every warning. Remove once HTTPDownloader closes its session.
-    pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning"),
-]
+pytestmark = pytest.mark.integration
 
 # Aletsch glacier burst used across all live tests (~100 MB download)
 BURST_ID = 30346
