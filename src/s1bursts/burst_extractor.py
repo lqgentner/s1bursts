@@ -1,6 +1,28 @@
 """Python port of the Sentinel-1 burst extraction script for CDSE S3.
 
 Original script: https://github.com/eu-cdse/utilities/blob/main/sentinel1_burst_extractor.sh
+
+The port targets **byte-level parity** with that reference, which is the same
+program CDSE runs to produce the single-burst products it serves from
+``bursts.dataspace.copernicus.eu``. Extracting a burst from S3 therefore yields
+the same product as downloading it from CDSE, and the live differential test in
+``tests/test_integration.py`` asserts exactly that.
+
+Parity is the contract, so the reference's deliberate relaxations of the SAFE
+specification are reproduced rather than corrected:
+
+- ``manifest.safe`` byte-stream ``size`` attributes and ``checksum`` values are
+  blanked, not recomputed, because the edited files no longer match the parent
+  product's values.
+- The geolocation grid keeps every point of the parent product with its line
+  numbers shifted to the burst origin, so points outside the burst window carry
+  negative or out-of-range line numbers. SNAP tolerates this and uses the grid
+  for interpolation only.
+- The manifest footprint is derived from the whole shifted grid, so an interior
+  burst inherits a footprint wider than its own extent.
+
+``tests/safe_conformance.py`` re-derives these rules from the vendored reference
+script and pins them.
 """
 
 from __future__ import annotations
@@ -34,6 +56,9 @@ if TYPE_CHECKING:
     from s1bursts.config import CDSES3Settings
 
 logger = logging.getLogger(__name__)
+
+REFERENCE_SCRIPT_VERSION = "1.3"
+"""Version of the ESA/CloudFerro reference extractor this port tracks."""
 
 
 def _parse_xml(data: bytes) -> etree._Element:
@@ -356,22 +381,29 @@ def _build_footprint(root: etree._Element) -> str:
     (``line=0``, sorted by pixel), then last and first of all non-zero-line
     points (document order), closing with the first top point again.
     Format: ``"lon lat,lon lat,..."``.
+
+    The second group spans every remaining grid row rather than just the
+    extracted burst, so an interior burst inherits a footprint wider than its
+    own extent. This reproduces the reference extractor, and therefore CDSE's
+    own burst products, rather than diverging from them.
+
+    Coordinate text is copied verbatim from the annotation. That matches the
+    products CDSE serves, which carry the annotation's scientific notation
+    (``7.628802608148144e+00``). The vendored reference script instead pipes
+    each value through XPath ``number()``, whose libxml2 formatting drops to a
+    fixed 15 significant digits and would silently truncate the latitude.
     """
     pts = root.findall("geolocationGrid/geolocationGridPointList/geolocationGridPoint")
     top = sorted(
         (
-            (
-                float(p.findtext("longitude")),
-                float(p.findtext("latitude")),
-                float(p.findtext("pixel")),
-            )
+            (p.findtext("longitude"), p.findtext("latitude"), float(p.findtext("pixel")))
             for p in pts
             if int(p.findtext("line")) == 0
         ),
         key=lambda t: t[2],
     )
     nontop = [
-        (float(p.findtext("longitude")), float(p.findtext("latitude")))
+        (p.findtext("longitude"), p.findtext("latitude"))
         for p in pts
         if int(p.findtext("line")) != 0
     ]
@@ -507,10 +539,14 @@ def _extract_tiff(
         width=meta.number_of_samples,
         height=meta.number_of_lines,
     )
-    with rasterio_open(tiff_s3_path) as src:
-        profile = src.profile.copy()
-        src_tags = src.tags()
-        data = src.read(window=window)
+    # SLC measurement TIFFs carry no geotransform, so opening one warns. That is
+    # expected for this product type and says nothing the caller can act on.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
+        with rasterio_open(tiff_s3_path) as src:
+            profile = src.profile.copy()
+            src_tags = src.tags()
+            data = src.read(window=window)
     profile.update(width=meta.number_of_samples, height=meta.number_of_lines, crs=None)
     # ESA SLC measurement TIFFs are striped (tiled=False, blockysize=1). The
     # copied profile carries a blockxsize (= full-product width) that is only
