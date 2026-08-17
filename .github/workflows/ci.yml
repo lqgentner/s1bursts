@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Lets publish.yml run this exact gate before uploading anything, so a release
+  # can never ship a commit that has not passed these checks.
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -46,6 +49,13 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      - name: Install the GDAL CLI
+        # Only `gdal_translate`, and only for the test that diffs the port's
+        # raster extraction against the tool the reference extractor uses
+        # (tests/test_gdal_reference_extraction.py). That test skips without it,
+        # so this is what keeps it from silently never running. The package
+        # itself installs from wheels and needs no system GDAL.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gdal-bin
       - name: Run offline unit tests with coverage
         run: >
           uv run --python ${{ matrix.python-version }} --all-extras
@@ -84,6 +94,39 @@ jobs:
         run: uv build
       - name: Check metadata
         run: uvx twine check dist/*
+      - name: Assert the distributions carry what they claim
+        # Guards the packaging config: the wheel must ship the runtime package
+        # with its data files and typing marker, and the sdist must carry the
+        # sources and tests needed to rebuild and verify from it.
+        run: |
+          python - <<'EOF'
+          import glob, sys, tarfile, zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          required = [
+              "s1bursts/__init__.py",
+              "s1bursts/py.typed",
+              "s1bursts/burstinfo.css",
+          ]
+          missing = [name for name in required if name not in names]
+          modules = [n for n in names if n.startswith("s1bursts/") and n.endswith(".py")]
+
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          members = ["/".join(n.split("/")[1:]) for n in tarfile.open(sdist).getnames()]
+          for name in ("pyproject.toml", "README.md", "LICENSE", "CHANGELOG.md"):
+              if name not in members:
+                  missing.append(f"sdist:{name}")
+          if not any(m.startswith("tests/") for m in members):
+              missing.append("sdist:tests/")
+          if not any(m.startswith("src/s1bursts/") for m in members):
+              missing.append("sdist:src/s1bursts/")
+
+          print(f"wheel modules: {len(modules)}")
+          if missing:
+              sys.exit(f"Distributions are missing: {missing}")
+          print("packaging OK")
+          EOF
       - name: Smoke-test the wheel in a clean environment
         run: |
           uv venv /tmp/smoke

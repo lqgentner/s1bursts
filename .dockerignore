@@ -1,0 +1,28 @@
+# The SNAP image (containers/Dockerfile.snap) copies nothing from the repository
+# — it only needs the Dockerfile itself. Without this file Docker still packs and
+# ships the whole working tree to the daemon, .venv and .git included, for no
+# benefit.
+#
+# Written as an allowlist so a new large directory never silently rejoins the
+# context: everything is excluded, then the few paths a build may need are
+# added back.
+*
+
+!containers/
+
+# Kept available so an image that does install the package (a future application
+# image, or a local build for reproducing a CI run) has the sources it needs
+# without having to relax the rules above.
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+!tests/
+
+# Re-excluded because the patterns above would otherwise pull these back in.
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/

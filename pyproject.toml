@@ -35,7 +35,7 @@ dynamic = ["version"]
 # Lower bounds reflect the oldest release that supports the required Python
 # (>=3.12) and works with this code.
 dependencies = [
-    "freezebase[s3]>=0.3.0",
+    "freezebase[s3]>=0.3.0,<0.4",
     "geopandas>=1.1",
     "lxml>=5",
     "numpy>=2.0",
@@ -91,7 +91,6 @@ include = [
     "CHANGELOG.md",
     "pyproject.toml",
 ]
-exclude = [".gitignore"]
 
 [tool.ruff]
 line-length = 99
@@ -196,6 +195,10 @@ markers = [
     "integration: requires network access, CDSE credentials, and/or a local SNAP install (deselected by default; run with `pytest -m integration`)",
 ]
 filterwarnings = [
+    # Any warning this package or its dependencies raise is a finding until
+    # triaged, so the default is to fail. Add a narrow `ignore` below, with the
+    # reason and the condition for removing it, rather than widening this.
+    "error",
     # Raised inside rasterio's compiled _io.pyx read() path under NumPy 2.5 when
     # reading GeoTIFF products; only a future rasterio release (>1.5.0) can
     # fix it at the source.

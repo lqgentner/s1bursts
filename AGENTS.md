@@ -40,7 +40,31 @@ uv run pytest                  # offline unit tests (default)
 uv run pytest -m integration   # network/SNAP integration tests
 ```
 
-Unit tests are fully offline: network, CDSE credentials, the burst-map lookup tables, and SNAP GPT are mocked. Tests marked `integration` require CDSE credentials and/or a local SNAP install (`SNAP_BIN`) exported into the environment; they are deselected by default via `addopts`.
+Unit tests are fully offline: network, CDSE credentials, the burst-map lookup tables, and SNAP GPT are mocked. Tests marked `integration` require CDSE credentials and/or a local SNAP install (`SNAP_BIN`) exported into the environment; they are deselected by default via `addopts`, and skip themselves when a prerequisite is missing so the suite degrades gracefully on a partially configured machine.
+
+Set `S1BURSTS_REQUIRE_INTEGRATION=1` to turn those skips into failures. CI sets it, because every prerequisite is provided there and a run that silently skipped everything would look the same as a passing one.
+
+Unexpected warnings fail the suite (`filterwarnings = ["error", ...]` in `pyproject.toml`). Add a narrow `ignore` with its reason and removal condition rather than widening the filter.
+
+### SNAP in CI
+
+The scheduled integration workflow runs inside `ghcr.io/lqgentner/s1bursts-snap`, built from [`containers/Dockerfile.snap`](containers/Dockerfile.snap) by `.github/workflows/container.yml`. Installing SNAP per run is slow, and the Actions cache expires after seven days — which the weekly schedule sits right on top of — so the toolchain is baked into a pinned image instead.
+
+To bump SNAP: change `ARG SNAP_VERSION` in the Dockerfile, run the container workflow, then update the pinned tag in `integration.yml`.
+
+To reproduce a CI run locally:
+
+```bash
+docker build -f containers/Dockerfile.snap -t s1bursts-snap:local .
+docker run --rm -v "$PWD:/w" -w /w --env-file .env \
+    -e SNAP_BIN=/opt/esa-snap/bin \
+    -e UV_PROJECT_ENVIRONMENT=/opt/venv \
+    -e S1BURSTS_REQUIRE_INTEGRATION=1 \
+    s1bursts-snap:local \
+    sh -c 'uv sync --all-extras && uv run pytest -v -m integration'
+```
+
+`SNAP_BIN` is overridden because `.env` points at a host install, and `UV_PROJECT_ENVIRONMENT` keeps the container from overwriting the host `.venv` on the bind mount.
 
 ## Code Style Guidelines
 

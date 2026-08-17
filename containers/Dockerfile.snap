@@ -1,0 +1,72 @@
+# syntax=docker/dockerfile:1
+#
+# ESA SNAP + uv, for the scheduled integration workflow.
+# Built and published by .github/workflows/container.yml.
+#
+FROM ubuntu:24.04
+
+# SNAP bundles its own OpenJDK, so no JDK is installed here. What it needs from
+# the system:
+#   libgfortran5    - jblas unpacks native libraries that link against it
+#   fontconfig      - SNAP initialises AWT's font manager even with --nogui
+#   ca-certificates - SNAP fetches orbit files and DEM tiles over HTTPS
+#   git             - hatch-vcs derives the package version from the checkout
+#   gdal-bin        - `gdal_translate`, the tool the reference burst extractor
+#                     uses for the measurement raster; tests compare the port's
+#                     rasterio implementation against it. Not a dependency of
+#                     the package, which installs from wheels only.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        fontconfig \
+        gdal-bin \
+        git \
+        libgfortran5 \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# The Sentinel installer carries the microwave and optical toolboxes, which is
+# everything the SNAP graphs in this package use.
+ARG SNAP_VERSION=13.0.0
+ARG SNAP_DIR=/opt/esa-snap
+#
+# Install, update and warm up in one layer: the module update and the first
+# `gpt` run both rewrite files across the install, and separate layers would
+# each keep their own copy of everything they touch. The installer lives in a
+# build cache mount rather than a layer, so iterating here does not re-download
+# it.
+RUN --mount=type=cache,target=/var/cache/snap <<'INSTALL'
+set -eu
+series="$(echo "${SNAP_VERSION}" | cut -d. -f1-2)"
+installer="/var/cache/snap/esa-snap_sentinel_linux-${SNAP_VERSION}.sh"
+if [ ! -s "${installer}" ]; then
+    wget -q --tries=5 --retry-connrefused -O "${installer}.part" \
+        "https://download.esa.int/step/snap/${series}/installers/esa-snap_sentinel_linux-${SNAP_VERSION}.sh"
+    mv "${installer}.part" "${installer}"
+fi
+bash "${installer}" -q -dir "${SNAP_DIR}"
+
+# Module updates carry fixes that never reach the pinned installer, and are the
+# one thing that makes two builds of the same SNAP_VERSION differ; the
+# integration workflow records the resulting version. `--update-all` exits
+# non-zero even on success and can hang waiting on the update centre, so it is
+# bounded and its status ignored.
+timeout 1800 "${SNAP_DIR}/bin/snap" --nosplash --nogui --modules --update-all || true
+
+# Unpacks native libraries and builds the operator index, so no test run pays
+# for it.
+"${SNAP_DIR}/bin/gpt" -h > /dev/null
+INSTALL
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# No system Python on purpose: interpreters come from uv, as in development.
+ARG PYTHON_VERSION=3.13
+RUN uv python install "${PYTHON_VERSION}"
+
+# SNAP_BIN is the variable s1bursts reads to locate `gpt`.
+ENV SNAP_DIR=${SNAP_DIR}
+ENV SNAP_BIN=${SNAP_DIR}/bin
+ENV PATH="${SNAP_DIR}/bin:${PATH}"
+
+CMD ["bash"]

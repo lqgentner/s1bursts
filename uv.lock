@@ -1693,7 +1693,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "freezebase", extras = ["s3"], specifier = ">=0.3.0" },
+    { name = "freezebase", extras = ["s3"], specifier = ">=0.3.0,<0.4" },
     { name = "geopandas", specifier = ">=1.1" },
     { name = "lxml", specifier = ">=5" },
     { name = "numpy", specifier = ">=2.0" },

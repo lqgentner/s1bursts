@@ -1,0 +1,109 @@
+name: Build and push SNAP container
+
+# The SNAP image (containers/Dockerfile.snap) changes only when the SNAP version
+# is bumped, so it is built on demand rather than on a schedule. The integration
+# workflow pins a tag of it; bump that pin after publishing here.
+#
+# The package inherits this repository's visibility. That is all integration.yml
+# needs, since it authenticates with the job's GITHUB_TOKEN. Only pulls from
+# elsewhere — another repository, or a developer's machine — need more: either
+# grant that repository access under the package's Actions settings, or make the
+# package public.
+
+on:
+  workflow_dispatch:
+    inputs:
+      snap_version:
+        description: "ESA SNAP version to bake into the image"
+        type: string
+        default: "13.0.0"
+  push:
+    branches: [main]
+    paths:
+      - containers/Dockerfile.snap
+      - .github/workflows/container.yml
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-snap
+
+jobs:
+  build:
+    name: Build and push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The build holds the SNAP installer and the unpacked install at once. The
+      # runner image ships toolchains this build never uses; reclaiming them
+      # keeps it clear of the disk limit.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /usr/local/lib/node_modules \
+            /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Resolve the SNAP version to build
+        id: version
+        # On a dispatch the version comes from the input; on a push it comes
+        # from the Dockerfile's own default, so the image and the file that
+        # describes it can never disagree.
+        run: |
+          set -euo pipefail
+          version="${{ inputs.snap_version }}"
+          if [ -z "${version}" ]; then
+            version="$(grep -oP 'ARG SNAP_VERSION=\K[0-9.]+' containers/Dockerfile.snap)"
+          fi
+          echo "snap=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=snap${version}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: containers/Dockerfile.snap
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            SNAP_VERSION=${{ steps.version.outputs.snap }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Verify gpt runs in the published image
+        # A SNAP install that cannot start is the one failure this workflow must
+        # never publish silently, so the pushed image is exercised before the
+        # summary claims success.
+        run: |
+          set -euo pipefail
+          image="${REGISTRY}/${IMAGE_NAME}:${{ steps.version.outputs.tag }}"
+          docker run --rm "$image" gpt -h | head -5
+          docker run --rm "$image" sh -c 'test -x "$SNAP_BIN/gpt"'
+          docker run --rm "$image" uv --version
+
+      - name: Summary
+        run: |
+          {
+            echo "Pushed \`${REGISTRY}/${IMAGE_NAME}:${{ steps.version.outputs.tag }}\`"
+            echo ""
+            echo "Pin this tag in \`.github/workflows/integration.yml\` (\`SNAP_IMAGE\`)."
+          } >> "$GITHUB_STEP_SUMMARY"
