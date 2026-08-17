@@ -7,10 +7,12 @@ from typing import TYPE_CHECKING, NamedTuple
 import warnings as _warnings
 
 from affine import Affine
+from freezebase.mgrs import MGRSGeoBox
 import numpy as np
 from pandas import Timestamp
 from pyproj import CRS
 import pytest
+import rasterio
 
 from s1bursts.filemanager import FileManager
 from s1bursts.product import (
@@ -19,11 +21,14 @@ from s1bursts.product import (
     RTCLRWComposite,
     RTCPassComposite,
     RTCPassQA,
+    RTCProduct,
 )
 from s1bursts.resolution_weighter import ResolutionWeighter
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from numpy.typing import NDArray
 
 # ---------------------------------------------------------------------------
 # Lightweight product stubs for _stitch_by_orbit_date
@@ -801,3 +806,309 @@ class TestComposeReturns:
         assert isinstance(qa_num, RTCPassQA)
         assert qa_num.orbit_direction == "ASCENDING"
         assert fm.get_product_path(qa_num).exists()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end composites
+#
+# These drive the public compose_* methods over real GeoTIFFs on disk, so the
+# windowed reads, weighting, aggregation, COG writing, QA layers and
+# skip-existing logic all execute.
+# ---------------------------------------------------------------------------
+
+_UTM32 = CRS.from_epsg(32632)
+_MGRS_CODE = "32TMS"
+_TILE = 8
+
+
+def _geobox() -> MGRSGeoBox:
+    return MGRSGeoBox(
+        _MGRS_CODE,
+        (_TILE, _TILE),
+        Affine(10.0, 0.0, 400000.0, 0.0, -10.0, 5200000.0),
+        _UTM32,
+    )
+
+
+def _write_raster(path: Path, bands: list[NDArray]) -> None:
+    """Write a small georeferenced GeoTIFF aligned to the test geobox."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=_TILE,
+        height=_TILE,
+        count=len(bands),
+        dtype="float32",
+        crs=_UTM32,
+        transform=Affine(10.0, 0.0, 400000.0, 0.0, -10.0, 5200000.0),
+        nodata=np.nan,
+    ) as dst:
+        for index, band in enumerate(bands, 1):
+            dst.write(band.astype("float32"), index)
+
+
+def _rtc(date: str, orbit: int = 15, burst_id: int = 30346) -> RTCProduct:
+    return RTCProduct(
+        burst_id=burst_id,
+        sub_swath="IW1",
+        crs=_UTM32,
+        date=Timestamp(date),
+        polarization="VV",
+        _rel_orbit_number=orbit,
+    )
+
+
+def _coh(
+    primary: str,
+    secondary: str,
+    orbit: int = 15,
+    burst_id: int = 30346,
+) -> CoherenceProduct:
+    return CoherenceProduct(
+        burst_id=burst_id,
+        sub_swath="IW1",
+        crs=_UTM32,
+        date_primary=Timestamp(primary),
+        date_secondary=Timestamp(secondary),
+        polarization="VV",
+        _rel_orbit_number=orbit,
+    )
+
+
+class _Scene(NamedTuple):
+    weighter: ResolutionWeighter
+    manager: FileManager
+    geobox: MGRSGeoBox
+
+
+# Burst IDs used by the composite tests, and the orbit direction each stands for.
+# Products resolve `orbit_direction` through the burst-map LUT, so the table is
+# stubbed to keep these tests offline and independent of the cached map.
+_ASCENDING_BURST = 30346
+_DESCENDING_BURST = 30347
+_DIRECTION_LUT = {
+    (_ASCENDING_BURST, "IW1"): "ASCENDING",
+    (_DESCENDING_BURST, "IW1"): "DESCENDING",
+}
+
+
+@pytest.fixture
+def scene(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Scene:
+    monkeypatch.setattr(
+        "s1bursts.burst.create_s1_orbit_direction_lut",
+        lambda mode="IW": _DIRECTION_LUT,  # noqa: ARG005
+    )
+    manager = FileManager(base_dir=tmp_path)
+    return _Scene(ResolutionWeighter(manager, n_workers=2), manager, _geobox())
+
+
+def _full(value: float) -> NDArray:
+    return np.full((_TILE, _TILE), value, dtype="float32")
+
+
+class TestComposeRtcLrw:
+    def test_weights_by_simulated_area_and_writes_a_readable_composite(
+        self,
+        scene: _Scene,
+    ) -> None:
+        """The scene with the smaller simulated area must dominate the result.
+
+        Small `simulatedImage` area means fine local resolution, so Small et al.'s
+        weighting gives it the larger weight.
+        """
+        coarse, fine = _rtc("2022-08-13"), _rtc("2022-08-25")
+        _write_raster(scene.manager.get_product_path(coarse), [_full(1.0), _full(100.0)])
+        _write_raster(scene.manager.get_product_path(fine), [_full(9.0), _full(1.0)])
+
+        product = scene.weighter.compose_rtc_lrw([coarse, fine], scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(product)) as src:
+            values = src.read(1)
+            assert src.crs == _UTM32
+            assert src.shape == (_TILE, _TILE)
+        # weights 1/100 and 1/1 → (1*0.01 + 9*1) / 1.01
+        assert values == pytest.approx(np.full((_TILE, _TILE), (1 * 0.01 + 9) / 1.01), rel=1e-5)
+
+    def test_writes_the_requested_qa_layers(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(4.0)])
+
+        composite, (num_obs, cqm) = scene.weighter.compose_rtc_lrw(
+            products,
+            scene.geobox,
+            write_qa=True,
+        )
+
+        assert scene.manager.get_product_path(composite).exists()
+        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+            assert src.dtypes[0] == "uint16"
+            assert (src.read(1) == 2).all()
+        assert scene.manager.get_product_path(cqm).exists()
+
+    def test_counts_only_observed_pixels_in_the_qa_layer(self, scene: _Scene) -> None:
+        """A NaN pixel in one scene must lower that pixel's observation count."""
+        first, second = _rtc("2022-08-13"), _rtc("2022-08-25")
+        partial = _full(2.0)
+        partial[0, 0] = np.nan
+        _write_raster(scene.manager.get_product_path(first), [partial, _full(4.0)])
+        _write_raster(scene.manager.get_product_path(second), [_full(2.0), _full(4.0)])
+
+        _, (num_obs, _) = scene.weighter.compose_rtc_lrw(
+            [first, second],
+            scene.geobox,
+            write_qa=True,
+        )
+
+        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+            counts = src.read(1)
+        assert counts[0, 0] == 1
+        assert counts[1, 1] == 2
+
+    def test_skips_an_existing_composite_unless_overwritten(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(scene.manager.get_product_path(product), [_full(3.0), _full(1.0)])
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        path = scene.manager.get_product_path(composite)
+        path.write_bytes(b"sentinel: not a raster")
+
+        scene.weighter.compose_rtc_lrw(products, scene.geobox)
+
+        assert path.read_bytes() == b"sentinel: not a raster"
+
+    def test_overwrite_replaces_an_existing_composite(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(scene.manager.get_product_path(product), [_full(3.0), _full(1.0)])
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        path = scene.manager.get_product_path(composite)
+        path.write_bytes(b"stale")
+
+        scene.weighter.compose_rtc_lrw(products, scene.geobox, overwrite=True)
+
+        with rasterio.open(path) as src:
+            assert src.read(1) == pytest.approx(_full(3.0))
+
+    def test_rejects_an_empty_product_collection(self, scene: _Scene) -> None:
+        with pytest.raises(ValueError, match="must not be empty"):
+            scene.weighter.compose_rtc_lrw([], scene.geobox)
+
+    def test_reports_a_missing_product_file(self, scene: _Scene) -> None:
+        """A catalogued product whose raster was never written must fail loudly."""
+        with pytest.raises(FileNotFoundError, match="product file not found"):
+            scene.weighter.compose_rtc_lrw([_rtc("2022-08-25")], scene.geobox)
+
+
+class TestComposeCohLrw:
+    def test_weights_coherence_by_the_matching_rtc_simulated_area(
+        self,
+        scene: _Scene,
+    ) -> None:
+        """Coherence carries no area band, so weights come from the RTC of the same pass."""
+        coh_a, coh_b = _coh("2022-08-01", "2022-08-13"), _coh("2022-08-13", "2022-08-25")
+        rtc_a, rtc_b = _rtc("2022-08-01"), _rtc("2022-08-13")
+        _write_raster(scene.manager.get_product_path(coh_a), [_full(0.2)])
+        _write_raster(scene.manager.get_product_path(coh_b), [_full(0.8)])
+        _write_raster(scene.manager.get_product_path(rtc_a), [_full(1.0), _full(100.0)])
+        _write_raster(scene.manager.get_product_path(rtc_b), [_full(1.0), _full(1.0)])
+
+        product = scene.weighter.compose_coherence_lrw(
+            [coh_a, coh_b],
+            [rtc_a, rtc_b],
+            scene.geobox,
+        )
+
+        with rasterio.open(scene.manager.get_product_path(product)) as src:
+            values = src.read(1)
+        assert values == pytest.approx(
+            np.full((_TILE, _TILE), (0.2 * 0.01 + 0.8) / 1.01),
+            rel=1e-5,
+        )
+
+    def test_rejects_an_empty_product_collection(self, scene: _Scene) -> None:
+        with pytest.raises(ValueError, match="must not be empty"):
+            scene.weighter.compose_coherence_lrw([], [], scene.geobox)
+
+    def test_reports_coherence_without_a_matching_rtc(self, scene: _Scene) -> None:
+        """Every coherence group needs a simulated-area group from the same date/orbit."""
+        coh = _coh("2022-08-01", "2022-08-13")
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
+
+        with pytest.raises(ValueError, match="No matching RTC simulated area"):
+            scene.weighter.compose_coherence_lrw([coh], [], scene.geobox)
+
+    def test_writes_the_requested_qa_layers(self, scene: _Scene) -> None:
+        coh = _coh("2022-08-01", "2022-08-13")
+        rtc = _rtc("2022-08-01")
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(4.0)])
+
+        composite, (num_obs, cqm) = scene.weighter.compose_coherence_lrw(
+            [coh],
+            [rtc],
+            scene.geobox,
+            write_qa=True,
+        )
+
+        for product in (composite, num_obs, cqm):
+            assert scene.manager.get_product_path(product).exists()
+
+
+class TestComposeByPass:
+    def test_rtc_composites_are_split_by_orbit_direction(self, scene: _Scene) -> None:
+        """Ascending and descending passes must never be averaged together."""
+        ascending = _rtc("2022-08-13", orbit=15, burst_id=_ASCENDING_BURST)
+        descending = _rtc("2022-08-25", orbit=88, burst_id=_DESCENDING_BURST)
+        _write_raster(scene.manager.get_product_path(ascending), [_full(1.0), _full(1.0)])
+        _write_raster(scene.manager.get_product_path(descending), [_full(5.0), _full(1.0)])
+
+        result = scene.weighter.compose_rtc_by_pass([ascending, descending], scene.geobox)
+
+        assert set(result) == {"ASCENDING", "DESCENDING"}
+        with rasterio.open(
+            scene.manager.get_product_path(result[ascending.orbit_direction]),
+        ) as src:
+            assert src.read(1) == pytest.approx(_full(1.0))
+        with rasterio.open(
+            scene.manager.get_product_path(result[descending.orbit_direction]),
+        ) as src:
+            assert src.read(1) == pytest.approx(_full(5.0))
+
+    def test_coherence_composites_are_split_by_orbit_direction(self, scene: _Scene) -> None:
+        first = _coh("2022-08-01", "2022-08-13", orbit=15, burst_id=_ASCENDING_BURST)
+        second = _coh("2022-08-01", "2022-08-13", orbit=88, burst_id=_DESCENDING_BURST)
+        _write_raster(scene.manager.get_product_path(first), [_full(0.3)])
+        _write_raster(scene.manager.get_product_path(second), [_full(0.9)])
+
+        result = scene.weighter.compose_coherence_by_pass([first, second], scene.geobox)
+
+        assert set(result) == {"ASCENDING", "DESCENDING"}
+
+    def test_empty_input_yields_no_composites(self, scene: _Scene) -> None:
+        assert scene.weighter.compose_coherence_by_pass([], scene.geobox) == {}
+        assert scene.weighter.compose_rtc_by_pass([], scene.geobox) == {}
+
+    def test_writes_per_pass_qa(self, scene: _Scene) -> None:
+        product = _coh("2022-08-01", "2022-08-13")
+        _write_raster(scene.manager.get_product_path(product), [_full(0.4)])
+
+        result = scene.weighter.compose_coherence_by_pass([product], scene.geobox, write_qa=True)
+
+        composite, num_obs = result[product.orbit_direction]
+        assert scene.manager.get_product_path(composite).exists()
+        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+            assert (src.read(1) == 1).all()
+
+    def test_skips_existing_per_pass_composites(self, scene: _Scene) -> None:
+        product = _rtc("2022-08-13")
+        _write_raster(scene.manager.get_product_path(product), [_full(7.0), _full(1.0)])
+        first = scene.weighter.compose_rtc_by_pass([product], scene.geobox)
+        path = scene.manager.get_product_path(first[product.orbit_direction])
+        path.write_bytes(b"kept")
+
+        scene.weighter.compose_rtc_by_pass([product], scene.geobox)
+
+        assert path.read_bytes() == b"kept"

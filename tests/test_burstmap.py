@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 from unittest.mock import patch
+from zipfile import ZipFile
 
 import geopandas as gpd
 import pytest
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
 from s1bursts import burstmap
 
@@ -82,3 +83,72 @@ class TestDownloadBurstMap:
 
         get_data.assert_called_once_with(download=True)
         assert burstmap._BURSTMAP_VERSION in path.name
+
+
+class TestModeValidation:
+    @pytest.mark.parametrize("mode", ["SM", "iw", "", "IW1"])
+    def test_rejects_an_unsupported_mode(self, tmp_path: Path, mode: str) -> None:
+        with pytest.raises(ValueError, match="Invalid product"):
+            burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode=mode)
+
+    @pytest.mark.parametrize("mode", ["IW", "EW"])
+    def test_accepts_both_acquisition_modes(self, tmp_path: Path, mode: str) -> None:
+        dataset = burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode=mode)
+
+        assert dataset.mode == mode
+        assert mode.lower() in dataset.processed_path.name
+
+
+class TestPrepare:
+    """Extraction of the SpatiaLite database out of the SAR-MPC archive."""
+
+    def test_reports_an_archive_without_a_database(self, tmp_path: Path) -> None:
+        """A truncated or restructured download must fail loudly, not half-succeed."""
+        dataset = burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode="IW")
+        dataset.raw_path.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(dataset.raw_path, "w") as archive:
+            archive.writestr("S1_burstid_20220530/readme.txt", "no database here")
+
+        with pytest.raises(FileNotFoundError, match="Couldn't locate SpatiaLite database"):
+            dataset._prepare()
+
+    def test_ignores_a_database_belonging_to_the_other_mode(self, tmp_path: Path) -> None:
+        """An EW dataset must not silently fall back to the IW database."""
+        dataset = burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode="EW")
+        dataset.raw_path.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(dataset.raw_path, "w") as archive:
+            archive.writestr("S1_burstid/IW/sqlite/burstid.sqlite3", "not the EW map")
+
+        with pytest.raises(FileNotFoundError, match="Couldn't locate SpatiaLite database"):
+            dataset._prepare()
+
+    def test_reads_the_database_matching_the_requested_mode(self, tmp_path: Path) -> None:
+        """The selected member must be the mode's own SpatiaLite file."""
+        dataset = burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode="EW")
+        dataset.raw_path.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(dataset.raw_path, "w") as archive:
+            archive.writestr("S1_burstid/IW/sqlite/iw.sqlite3", "iw")
+            archive.writestr("S1_burstid/EW/sqlite/ew.sqlite3", "ew")
+
+        with (
+            patch("s1bursts.burstmap.gpd.read_file") as read_file,
+            patch(
+                "s1bursts.burstmap.save_and_read_parquet",
+            ),
+        ):
+            read_file.return_value = gpd.GeoDataFrame(
+                {
+                    "burst_id": [1],
+                    "relative_orbit_number": [15],
+                    "subswath_name": ["EW1"],
+                    "orbit_pass": ["ASCENDING"],
+                    # The real map ships 3D polygons with Z=0, which the
+                    # preparation pipeline flattens.
+                    "geometry": [
+                        Polygon([(7, 46, 0), (8, 46, 0), (8, 47, 0), (7, 47, 0), (7, 46, 0)]),
+                    ],
+                },
+            )
+            dataset._prepare()
+
+        assert read_file.call_args.args[0].read() == b"ew"

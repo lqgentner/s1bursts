@@ -211,5 +211,5 @@ branch = true
 source = ["s1bursts"]
 
 [tool.coverage.report]
-fail_under = 83
+fail_under = 90
 show_missing = true
