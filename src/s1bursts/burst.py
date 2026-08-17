@@ -488,6 +488,7 @@ class _BaseBurstCollection[TEntry]:
                 geometry="geometry",
             )
         self._validate_dataframe(df)
+        df = df.copy()
         for col in self._OPTIONAL_COLUMNS:
             if col not in df.columns:
                 df[col] = None
