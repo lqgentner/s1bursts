@@ -3,12 +3,6 @@ name: Build and push SNAP container
 # The SNAP image (containers/Dockerfile.snap) changes only when the SNAP version
 # is bumped, so it is built on demand rather than on a schedule. The integration
 # workflow pins a tag of it; bump that pin after publishing here.
-#
-# The package inherits this repository's visibility. That is all integration.yml
-# needs, since it authenticates with the job's GITHUB_TOKEN. Only pulls from
-# elsewhere — another repository, or a developer's machine — need more: either
-# grant that repository access under the package's Actions settings, or make the
-# package public.
 
 on:
   workflow_dispatch:
@@ -96,9 +90,14 @@ jobs:
         run: |
           set -euo pipefail
           image="${REGISTRY}/${IMAGE_NAME}:${{ steps.version.outputs.tag }}"
-          docker run --rm "$image" gpt -h | head -5
+          # Captured before trimming: piping straight into `head` closes the pipe
+          # after five lines, and under `pipefail` that broken pipe fails the
+          # step even though gpt ran perfectly well.
+          usage="$(docker run --rm "$image" gpt -h)"
+          printf '%s\n' "$usage" | head -5
           docker run --rm "$image" sh -c 'test -x "$SNAP_BIN/gpt"'
           docker run --rm "$image" uv --version
+          docker run --rm "$image" gdal_translate --version
 
       - name: Summary
         run: |
