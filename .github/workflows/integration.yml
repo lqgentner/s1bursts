@@ -31,6 +31,9 @@ concurrency:
 jobs:
   integration:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     # Pinned by SNAP version rather than floating on :latest, so a rebuild of
     # the image never silently changes what a scheduled run tested against.
     # Bump after publishing a new image with container.yml.
