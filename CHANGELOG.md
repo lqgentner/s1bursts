@@ -10,6 +10,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Added
 
+- `s1bursts.__version__`, read from the installed distribution metadata. The
+  version is still derived from git tags at build time by hatch-vcs; it is now
+  also reachable at runtime.
 - Runtime validation of public inputs: `SearchQuery` rejects unknown
   polarization, mode, sub-swath, orbit-direction and platform identifiers,
   requires positive burst IDs, and bounds the relative orbit number to 1-175;

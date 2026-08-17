@@ -74,7 +74,7 @@ jobs:
         run: |
           uv run python -c "import sys; print('python', sys.version)"
           uv run python -c "import rasterio; print('rasterio', rasterio.__version__)"
-          uv run python -c "import s1bursts; print('s1bursts', getattr(s1bursts, '__version__', 'n/a'))"
+          uv run python -c "import s1bursts; print('s1bursts', s1bursts.__version__)"
           echo "snap $(cat "$SNAP_DIR/VERSION.txt" 2>/dev/null || echo unknown) at $SNAP_DIR"
           "$SNAP_DIR/jre/bin/java" -version 2>&1 | head -1
 

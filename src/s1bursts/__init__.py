@@ -11,6 +11,8 @@ those services return lives alongside them, in ``s1bursts.burst``,
 ``s1bursts.product``, and ``s1bursts.summary``.
 """
 
+from importlib.metadata import version as _version
+
 from s1bursts.burstmap import download_burst_map
 from s1bursts.database import BurstDatabase
 from s1bursts.dem import compensate_dem_for_snap
@@ -25,6 +27,8 @@ from s1bursts.snap_graph import (
     GeocodingConfig,
     InterferogramConfig,
 )
+
+__version__ = _version("s1bursts")
 
 __all__ = [
     "BackscatterConfig",
