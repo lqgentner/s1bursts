@@ -10,13 +10,55 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Added
 
+- Runtime validation of public inputs: `SearchQuery` rejects unknown
+  polarization, mode, sub-swath, orbit-direction and platform identifiers,
+  requires positive burst IDs, and bounds the relative orbit number to 1-175;
+  `GeocodingConfig.grid_spacing` and `BackscatterConfig.dem_oversampling` must be
+  positive; the SNAP resampling options are restricted to the methods SNAP
+  accepts (exported as `ResamplingMethod` and `DEMResamplingMethod`); and
+  `find_pairs()` rejects a non-positive baseline or negative maximum deviation.
 - `CDSE_S3_PROFILE` (`CDSES3Settings.profile`), a named AWS profile resolved from
   `~/.aws/credentials` as an alternative to `CDSE_S3_ACCESS_KEY_ID` /
-  `CDSE_S3_SECRET_ACCESS_KEY`. The key pair keeps working; the profile takes
-  precedence when both are configured. Selecting a profile also removes boto's
-  environment-variable provider from the credential chain, so ambient
-  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` values can never sign CDSE
-  requests. Requires freezebase ≥ 0.3.0.
+  `CDSE_S3_SECRET_ACCESS_KEY`. The profile takes precedence when both are configured
+  and removes boto's environment-variable credential provider, so ambient env vars
+  can never sign CDSE requests. Requires freezebase ≥ 0.3.0.
+
+### Changed
+
+- **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
+  still carries the Terrain-Correction parameters every per-product config
+  inherits, but `to_xml()` is now an abstract method implemented by
+  `BackscatterConfig`, `CoherenceConfig`, and `InterferogramConfig`.
+  `to_mermaid()` is unchanged and still inherited from the base.
+- **Breaking:** `build_coherence_magnitude_graph()` is renamed to
+  `build_coherence_graph()`. With the complex variant gone there is only one
+  coherence graph, so the qualifier no longer distinguishes anything.
+
+- The first-party dependency `freezecore` was renamed to `freezebase` and is now
+  resolved from PyPI (`freezebase[s3]>=0.3.0`) instead of a Git source. Imports
+  moved from `freezecore.*` to `freezebase.*`; the cache environment variable it
+  reads is now `FREEZEBASE_CACHE`.
+
+### Fixed
+
+- **The compensated-DEM cache could return the wrong raster.** The cache is now
+  keyed on the source's SHA-256 content digest and a conversion schema version,
+  with a verified JSON provenance sidecar per entry, so sources sharing a
+  basename can no longer collide.
+- **Footprint coordinates in the extracted burst manifest lost precision.** They
+  were reformatted through Python's float repr, matching neither the reference
+  extractor nor the burst products CDSE serves. The annotation's coordinate text
+  is now copied verbatim, preserving every digit.
+- `BurstCollection` no longer writes through a view of the DataFrame it is given.
+  Slicing a collection triggered a pandas `SettingWithCopyWarning` and could
+  modify the caller's frame.
+- Reading an SLC measurement TIFF no longer emits a spurious
+  `NotGeoreferencedWarning`. SLC products carry GCPs rather than a geotransform,
+  so the warning said nothing the caller could act on.
+- `SNAPConfig` and `SNAPSettings` now reject resource budgets that cannot
+  describe a runnable job (`max_workers`, `gpt_threads_per_job` ≥ 1;
+  `max_ram_gb` > 0; `gpt_cache_ratio` in (0, 1]), raising `ConfigurationError`
+  with a working budget suggested instead of silently over-allocating heap.
 
 ### Removed
 
@@ -34,22 +76,6 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `GeocodingConfig.to_xml()`. The standalone Terrain-Correction graph existed
   only as the second stage of the complex coherence pipeline; every remaining
   product runs a single-shot graph with the Terrain-Correction tail built in.
-
-### Changed
-
-- **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
-  still carries the Terrain-Correction parameters every per-product config
-  inherits, but `to_xml()` is now an abstract method implemented by
-  `BackscatterConfig`, `CoherenceConfig`, and `InterferogramConfig`.
-  `to_mermaid()` is unchanged and still inherited from the base.
-- **Breaking:** `build_coherence_magnitude_graph()` is renamed to
-  `build_coherence_graph()`. With the complex variant gone there is only one
-  coherence graph, so the qualifier no longer distinguishes anything.
-
-- The first-party dependency `freezecore` was renamed to `freezebase` and is now
-  resolved from PyPI (`freezebase[s3]>=0.3.0`) instead of a Git source. Imports
-  moved from `freezecore.*` to `freezebase.*`; the cache environment variable it
-  reads is now `FREEZEBASE_CACHE`.
 
 ## [0.2.0] - 2026-07-31
 
