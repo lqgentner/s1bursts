@@ -751,6 +751,22 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         super().__init__(df)
         self._remove_timestamp_duplicates()
 
+    @staticmethod
+    def _validate_pair_search(baseline: Timedelta, max_delta: Timedelta) -> None:
+        """Reject baselines that cannot describe an interferometric pair.
+
+        Raises
+        ------
+        ValueError
+            If ``baseline`` is not positive or ``max_delta`` is negative.
+        """
+        if baseline <= Timedelta(0):
+            msg = f"`baseline` must be a positive duration, received {baseline}."
+            raise ValueError(msg)
+        if max_delta < Timedelta(0):
+            msg = f"`max_delta` must not be negative, received {max_delta}."
+            raise ValueError(msg)
+
     def find_pairs(
         self,
         baseline: Timedelta | int,
@@ -772,17 +788,20 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         Returns
         -------
         BurstPairCollection
-            Collection of burst pairs matching the baseline criteria.
+            Collection of burst pairs matching the baseline criteria. Empty if
+            no pair satisfies them.
 
         Raises
         ------
         ValueError
-            If no valid burst pairs are found.
+            If ``baseline`` is not positive or ``max_delta`` is negative.
         """
         if not isinstance(baseline, Timedelta):
             baseline = Timedelta(baseline, unit="days")
         if not isinstance(max_delta, Timedelta):
             max_delta = Timedelta(max_delta, unit="hours")
+
+        self._validate_pair_search(baseline, max_delta)
         df_bursts = self.df.sort_values("date")
         pairs = []
         renamer_1 = {

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from s1bursts.errors import SnapProcessingError
+from s1bursts.errors import ConfigurationError, SnapProcessingError
 from s1bursts.processor import BurstProcessor
 from s1bursts.snap_client import SNAPConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationSummary
@@ -83,14 +83,17 @@ class TestSNAPConfig:
         assert config.resolved_cache_mb == int(config.resolved_xmx_mb * 0.70)
         assert config.resolved_cache_mb < config.resolved_xmx_mb
 
-    def test_xmx_never_negative_for_small_ram(self, tmp_path: Path) -> None:
+    def test_ram_budget_too_small_is_reported_not_silently_exceeded(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A 1 GB budget cannot host SNAP; raising beats handing GPT an oversized heap."""
         gpt = tmp_path / "gpt"
         gpt.touch()
         gpt.chmod(0o755)
 
-        config = SNAPConfig(bin=tmp_path, max_ram_gb=1)
-
-        assert config.resolved_xmx_mb >= 512
+        with pytest.raises(ConfigurationError, match="Raise `max_ram_gb`"):
+            SNAPConfig(bin=tmp_path, max_ram_gb=1)
 
     def test_profile_defaults_merged(self, config: SNAPConfig) -> None:
         assert config.rasterio_profile is not None

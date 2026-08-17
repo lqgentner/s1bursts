@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, Literal
 from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
 from lxml import etree
@@ -764,6 +764,37 @@ def build_interferogram_graph(cfg: InterferogramConfig) -> str:
 # ---------------------------------------------------------------------------
 
 _PositiveInt = Annotated[int, Field(gt=0)]
+_PositiveFloat = Annotated[float, Field(gt=0)]
+
+# Plain assignments rather than PEP 695 `type` aliases: these annotate Pydantic
+# fields, and older Pydantic releases within the supported range do not resolve
+# a `type` alias to its value, warning and falling back to no validation.
+ResamplingMethod = Literal[
+    "NEAREST_NEIGHBOUR",
+    "BILINEAR_INTERPOLATION",
+    "CUBIC_CONVOLUTION",
+    "BISINC_5_POINT_INTERPOLATION",
+    "BISINC_11_POINT_INTERPOLATION",
+    "BISINC_21_POINT_INTERPOLATION",
+    "BICUBIC_INTERPOLATION",
+]
+"""Resampling methods SNAP's Terrain-Correction operator accepts.
+
+An unsupported name is not rejected by GPT until the graph has already run for
+minutes, so it is checked when the config is built instead.
+"""
+
+DEMResamplingMethod = Literal[
+    "NEAREST_NEIGHBOUR",
+    "BILINEAR_INTERPOLATION",
+    "CUBIC_CONVOLUTION",
+    "BISINC_5_POINT_INTERPOLATION",
+    "BISINC_11_POINT_INTERPOLATION",
+    "BISINC_21_POINT_INTERPOLATION",
+    "BICUBIC_INTERPOLATION",
+    "DELAUNAY_INTERPOLATION",
+]
+"""Resampling methods SNAP accepts for the DEM, which adds Delaunay interpolation."""
 
 
 class GeocodingConfig(BaseModel):
@@ -775,14 +806,14 @@ class GeocodingConfig(BaseModel):
     Parameters
     ----------
     grid_spacing : float, default 10.0
-        Output pixel spacing in metres of the target CRS.
+        Output pixel spacing in metres of the target CRS. Must be positive.
     dem : str or Path, default "Copernicus 30m Global DEM"
         DEM used for geocoding. A string selects one of SNAP's auto-download
         DEMs; a path (or a string with a file suffix) is passed as an external
         DEM.
-    img_resampling : str, default "BILINEAR_INTERPOLATION"
+    img_resampling : ResamplingMethod, default "BILINEAR_INTERPOLATION"
         Resampling of the image during terrain correction.
-    dem_resampling : str, default "BILINEAR_INTERPOLATION"
+    dem_resampling : DEMResamplingMethod, default "BILINEAR_INTERPOLATION"
         Resampling of the DEM during terrain correction.
     align_to_standard_grid : bool, default True
         Snap the output to a fixed global grid, so products from different
@@ -817,10 +848,10 @@ class GeocodingConfig(BaseModel):
             return Path(v)
         return v
 
-    grid_spacing: float = 10.0
+    grid_spacing: _PositiveFloat = 10.0
     dem: str | Path = "Copernicus 30m Global DEM"
-    img_resampling: str = "BILINEAR_INTERPOLATION"
-    dem_resampling: str = "BILINEAR_INTERPOLATION"
+    img_resampling: ResamplingMethod = "BILINEAR_INTERPOLATION"
+    dem_resampling: DEMResamplingMethod = "BILINEAR_INTERPOLATION"
     align_to_standard_grid: bool = True
     external_dem_nodata: float = 0.0
     external_dem_apply_egm: bool = False
@@ -862,7 +893,7 @@ class BackscatterConfig(GeocodingConfig):
         the range looks and the local geometry and discards the requested
         ``n_az_looks`` is pinned off. Therefore, the looks given are the looks applied.
     dem_oversampling : float, default 1.0
-        DEM oversampling factor used by ``Terrain-Flattening``.
+        DEM oversampling factor used by ``Terrain-Flattening``. Must be positive.
     additional_overlap : float, default 0.2
         Additional overlap percentage used by ``Terrain-Flattening`` when
         searching for terrain contributions outside the tile.
@@ -873,7 +904,7 @@ class BackscatterConfig(GeocodingConfig):
 
     flatten_terrain: bool = True
     multilook: tuple[_PositiveInt, _PositiveInt] | None = (5, 1)
-    dem_oversampling: float = 1.0
+    dem_oversampling: _PositiveFloat = 1.0
     additional_overlap: float = Field(default=0.2, ge=0.0)
     replace_zeros_with_nan: bool = True
 
@@ -971,8 +1002,10 @@ class InterferogramConfig(GeocodingConfig):
 __all__ = [
     "BackscatterConfig",
     "CoherenceConfig",
+    "DEMResamplingMethod",
     "GeocodingConfig",
     "InterferogramConfig",
+    "ResamplingMethod",
     "build_backscatter_graph",
     "build_coherence_graph",
     "build_interferogram_graph",

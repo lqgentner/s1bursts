@@ -73,10 +73,12 @@ class SNAPSettings(BaseSettings):
     bin: Path | None = None
     auxdata_path: Path = Path.home() / ".snap/auxdata"
     dem_cache: Path = Path.home() / ".s1bursts/dem"
-    max_workers: int = 1
-    max_ram_gb: float = 4.0
-    cache_ratio: float = 0.70
-    threads_per_job: int | None = None
+    max_workers: int = Field(default=1, ge=1)
+    max_ram_gb: float = Field(default=4.0, gt=0)
+    # A ratio above 1 would size the GPT tile cache larger than the heap it has
+    # to fit inside; a ratio of 0 or below would disable caching entirely.
+    cache_ratio: float = Field(default=0.70, gt=0, le=1)
+    threads_per_job: int | None = Field(default=None, ge=1)
 
 
 class Settings(BaseSettings):

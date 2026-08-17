@@ -60,16 +60,62 @@ class TestGeometry:
 
 class TestIntValidation:
     @pytest.mark.parametrize("field", ["burst_id", "abs_burst_id", "rel_orbit_number"])
-    def test_rejects_negative(self, field: str) -> None:
-        with pytest.raises(ValueError, match=f"{field} must be non-negative"):
-            SearchQuery(**{field: -1})
+    @pytest.mark.parametrize("value", [-1, 0])
+    def test_rejects_non_positive(self, field: str, value: int) -> None:
+        """Burst and orbit identifiers are 1-based, so zero is as invalid as a negative."""
+        with pytest.raises(ValueError, match=f"{field} must be"):
+            SearchQuery(**{field: value})
 
-    def test_accepts_zero_and_positive(self) -> None:
-        query = SearchQuery(burst_id=0, abs_burst_id=5, rel_orbit_number=175)
+    def test_accepts_the_full_relative_orbit_range(self) -> None:
+        assert SearchQuery(rel_orbit_number=1).rel_orbit_number == 1
+        assert SearchQuery(rel_orbit_number=175).rel_orbit_number == 175
 
-        assert query.burst_id == 0
+    def test_rejects_relative_orbit_above_the_repeat_cycle(self) -> None:
+        """Sentinel-1's repeat cycle has 175 relative orbits; 176 cannot exist."""
+        with pytest.raises(ValueError, match="rel_orbit_number must be 1-175"):
+            SearchQuery(rel_orbit_number=176)
+
+    def test_accepts_positive_identifiers(self) -> None:
+        query = SearchQuery(burst_id=30346, abs_burst_id=5, rel_orbit_number=15)
+
+        assert query.burst_id == 30346
         assert query.abs_burst_id == 5
-        assert query.rel_orbit_number == 175
+        assert query.rel_orbit_number == 15
+
+
+class TestChoiceValidation:
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("polarization", "VVV"),
+            ("mode", "SM"),
+            ("sub_swath", "IW4"),
+            ("orbit_direction", "UP"),
+            ("platform_serial_id", "Z"),
+        ],
+    )
+    def test_rejects_unknown_identifier(self, field: str, value: str) -> None:
+        """A typo must fail here, not silently return an empty result set from CDSE."""
+        with pytest.raises(ValueError, match=f"{field} must be one of"):
+            SearchQuery(**{field: value})
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("polarization", "HV"),
+            ("mode", "EW"),
+            ("sub_swath", "EW5"),
+            ("orbit_direction", "DESCENDING"),
+            ("platform_serial_id", "C"),
+        ],
+    )
+    def test_accepts_every_documented_identifier(self, field: str, value: str) -> None:
+        assert getattr(SearchQuery(**{field: value}), field) == value
+
+    def test_is_case_sensitive(self) -> None:
+        """CDSE's OData filters are case-sensitive, so lower case cannot be accepted."""
+        with pytest.raises(ValueError, match="polarization must be one of"):
+            SearchQuery(polarization="vv")
 
 
 class TestRepr:

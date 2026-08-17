@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from textwrap import dedent
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -12,6 +13,7 @@ from pyproj import CRS
 import pytest
 import rasterio
 import rasterio.transform
+from upath import UPath
 
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.config import SNAPSettings
@@ -25,6 +27,9 @@ from s1bursts.snap_client import (
 )
 from s1bursts.snap_graph import BackscatterConfig, CoherenceConfig
 from s1bursts.summary import ErrorResult, OkResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _snap_settings(
@@ -407,3 +412,300 @@ class TestCreateCoherence:
 
         assert isinstance(result, ErrorResult)
         assert result.source is pair
+
+
+class TestResourceBudget:
+    """SNAPConfig must reject a budget that cannot describe a runnable job."""
+
+    @pytest.fixture
+    def snap_bin(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        monkeypatch.delenv("SNAP_BIN", raising=False)
+        for name in ("SNAP_MAX_WORKERS", "SNAP_MAX_RAM_GB", "SNAP_CACHE_RATIO"):
+            monkeypatch.delenv(name, raising=False)
+        gpt = tmp_path / "gpt"
+        gpt.touch()
+        gpt.chmod(0o755)
+        return tmp_path
+
+    def _config(self, snap_bin: Path, **kwargs: object) -> SNAPConfig:
+        return SNAPConfig(bin=snap_bin, auxdata_path=snap_bin / "auxdata", **kwargs)
+
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            ("max_workers", 0, "max_workers` must be at least 1"),
+            ("max_workers", -2, "max_workers` must be at least 1"),
+            ("gpt_threads_per_job", 0, "gpt_threads_per_job` must be at least 1"),
+            ("max_ram_gb", 0.0, "max_ram_gb` must be positive"),
+            ("max_ram_gb", -4.0, "max_ram_gb` must be positive"),
+            ("gpt_cache_ratio", -0.5, "gpt_cache_ratio` must be greater than 0"),
+            ("gpt_cache_ratio", 1.5, "gpt_cache_ratio` must be greater than 0"),
+        ],
+    )
+    def test_rejects_out_of_range_values(
+        self,
+        snap_bin: Path,
+        field: str,
+        value: object,
+        message: str,
+    ) -> None:
+        with pytest.raises(ConfigurationError, match=message):
+            self._config(snap_bin, **{field: value})
+
+    def test_rejects_a_budget_too_small_for_one_worker(self, snap_bin: Path) -> None:
+        """3 GB of overhead plus a 512 MB heap does not fit in 3 GB."""
+        with pytest.raises(ConfigurationError, match="below the 512 MB SNAP needs"):
+            self._config(snap_bin, max_ram_gb=3, max_workers=1)
+
+    def test_rejects_a_budget_over_subscribed_by_workers(self, snap_bin: Path) -> None:
+        """8 GB is ample for one worker but leaves 16 of them 324 MB of heap each."""
+        with pytest.raises(ConfigurationError, match="16 worker"):
+            self._config(snap_bin, max_ram_gb=8, max_workers=16)
+
+    def test_error_names_a_budget_that_would_work(self, snap_bin: Path) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            self._config(snap_bin, max_ram_gb=4, max_workers=4)
+
+        suggested = float(str(excinfo.value).split("at least ")[1].split()[0])
+        widened = self._config(snap_bin, max_ram_gb=suggested, max_workers=4)
+
+        assert widened.resolved_xmx_mb >= 512
+
+    def test_never_allocates_more_heap_than_the_declared_budget(self, snap_bin: Path) -> None:
+        """The per-worker floor must not push total heap past `max_ram_gb`."""
+        config = self._config(snap_bin, max_ram_gb=16, max_workers=4)
+
+        total_heap_mb = config.resolved_xmx_mb * config.resolved_max_workers
+
+        assert total_heap_mb <= 16 * 1024
+
+    def test_cache_never_exceeds_the_heap_it_lives_in(self, snap_bin: Path) -> None:
+        config = self._config(snap_bin, max_ram_gb=16, max_workers=2, gpt_cache_ratio=1.0)
+
+        assert config.resolved_cache_mb <= config.resolved_xmx_mb
+
+    def test_accepts_a_boundary_budget(self, snap_bin: Path) -> None:
+        """Exactly the overhead plus one minimum heap must be allowed through."""
+        config = self._config(snap_bin, max_ram_gb=(3000 + 512) / 1024, max_workers=1)
+
+        assert config.resolved_xmx_mb == 512
+
+    def test_fractional_ram_budgets_are_accepted(self, snap_bin: Path) -> None:
+        config = self._config(snap_bin, max_ram_gb=6.5, max_workers=1)
+
+        assert config.resolved_xmx_mb == int(6.5 * 1024) - 3000
+
+
+class TestRunGpt:
+    """GPT invocation and failure handling, driven by a stub `gpt` executable.
+
+    The stub is a real script, so argument assembly, the subprocess call, exit
+    handling and output checks all run for real.
+    """
+
+    @pytest.fixture
+    def gpt_client(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> Callable[[str], SNAPClient]:
+        """Return a factory building a client around a stub `gpt` with given behaviour."""
+        monkeypatch.delenv("SNAP_BIN", raising=False)
+
+        def _client(script: str) -> SNAPClient:
+            gpt = tmp_path / "gpt"
+            gpt.write_text(f"#!/bin/sh\n{script}\n")
+            gpt.chmod(0o755)
+            manager = MagicMock()
+            manager.get_slc_path.return_value = tmp_path / "slc.zip"
+            config = SNAPConfig(
+                bin=tmp_path,
+                auxdata_path=tmp_path / "auxdata",
+                max_ram_gb=8,
+                gpt_threads_per_job=3,
+            )
+            return SNAPClient(manager, config)
+
+        return _client
+
+    def _invoke(self, client: SNAPClient, tmp_path: Path, target_name: str = "out.tif") -> Path:
+        return client._run_gpt(
+            graph=tmp_path / "graph.xml",
+            source_files={"primary": tmp_path / "a.zip", "secondary": tmp_path / "b.zip"},
+            target_file=tmp_path / target_name,
+            snap_userdir=tmp_path / "userdir",
+            process_params={"crs": "EPSG:32632"},
+        )
+
+    def test_passes_sources_parameters_and_resources_to_gpt(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        client = gpt_client('printf "%s\\n" "$@" > "$(dirname "$0")/argv.txt"; touch "$6"')
+
+        self._invoke(client, tmp_path)
+
+        argv = (tmp_path / "argv.txt").read_text().splitlines()
+        assert f"-Sprimary={tmp_path / 'a.zip'}" in argv
+        assert f"-Ssecondary={tmp_path / 'b.zip'}" in argv
+        assert "-Pcrs=EPSG:32632" in argv
+        assert "-q" in argv
+        assert argv[argv.index("-q") + 1] == "3"
+        assert f"-J-Xmx{client.config.resolved_xmx_mb}M" in argv
+        assert f"-c{client.config.resolved_cache_mb}M" not in argv  # -c takes a separate operand
+        assert argv[argv.index("-c") + 1] == f"{client.config.resolved_cache_mb}M"
+
+    def test_requests_geotiff_output_for_a_tif_target(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        """The explicit format suppresses GPT's XML sidecar."""
+        client = gpt_client('printf "%s\\n" "$@" > "$(dirname "$0")/argv.txt"; touch "$6"')
+
+        self._invoke(client, tmp_path)
+
+        argv = (tmp_path / "argv.txt").read_text().splitlines()
+        assert argv[argv.index("-f") + 1] == "GeoTIFF"
+
+    def test_creates_an_isolated_java_tmpdir_under_the_userdir(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        """The jblas native libraries unpack there, so they must not land in shared /tmp."""
+        client = gpt_client('printf "%s\\n" "$@" > "$(dirname "$0")/argv.txt"; touch "$6"')
+
+        self._invoke(client, tmp_path)
+
+        argv = (tmp_path / "argv.txt").read_text().splitlines()
+        assert f"-J-Djava.io.tmpdir={tmp_path / 'userdir' / 'tmp'}" in argv
+        assert (tmp_path / "userdir" / "tmp").is_dir()
+
+    def test_returns_the_target_on_success(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        client = gpt_client('touch "$6"')
+
+        result = self._invoke(client, tmp_path)
+
+        assert result == tmp_path / "out.tif"
+        assert result.exists()
+
+    def test_surfaces_snaps_own_error_text_not_just_the_exit_code(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        client = gpt_client(
+            'echo "Error: No valid orbit file found" >&2\n'
+            'echo "	at org.esa.snap.Foo" >&2\n'
+            "exit 1",
+        )
+
+        with pytest.raises(SnapProcessingError, match="No valid orbit file found"):
+            self._invoke(client, tmp_path)
+
+    def test_reports_the_exit_code(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        client = gpt_client('echo "Error: boom" >&2; exit 7')
+
+        with pytest.raises(SnapProcessingError, match=r"exit 7"):
+            self._invoke(client, tmp_path)
+
+    def test_removes_a_partial_output_after_a_failure(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        """A half-written product must not be left where a later run would trust it."""
+        client = gpt_client('touch "$6"; echo "Error: died halfway" >&2; exit 1')
+
+        with pytest.raises(SnapProcessingError):
+            self._invoke(client, tmp_path)
+
+        assert not (tmp_path / "out.tif").exists()
+
+    def test_removes_a_partial_beam_dimap_data_directory(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        client = gpt_client('touch "$6"; mkdir -p "${6%.dim}.data"; exit 1')
+
+        with pytest.raises(SnapProcessingError):
+            self._invoke(client, tmp_path, target_name="out.dim")
+
+        assert not (tmp_path / "out.dim").exists()
+        assert not (tmp_path / "out.data").exists()
+
+    def test_reports_a_timeout(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        client = gpt_client("sleep 5")
+
+        with pytest.raises(SnapProcessingError, match="GPT processing failed"):
+            client._run_gpt(
+                graph=tmp_path / "graph.xml",
+                source_files={},
+                target_file=tmp_path / "out.tif",
+                snap_userdir=tmp_path / "userdir",
+                timeout=1,
+            )
+
+    def test_reports_a_silent_run_that_produced_nothing(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        """GPT can exit zero without writing the target; that is still a failure."""
+        client = gpt_client("exit 0")
+
+        with pytest.raises(SnapProcessingError, match="output not found"):
+            self._invoke(client, tmp_path)
+
+    def test_falls_back_to_the_output_tail_without_an_error_marker(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        client = gpt_client('echo "something went wrong in the graph" >&2; exit 2')
+
+        with pytest.raises(SnapProcessingError, match="something went wrong in the graph"):
+            self._invoke(client, tmp_path)
+
+
+class TestStageSlc:
+    def test_local_slc_is_used_in_place(self, client: SNAPClient, tmp_path: Path) -> None:
+        """A local path needs no copy, so the original is handed straight to GPT."""
+        local = tmp_path / "slc.zip"
+        local.write_bytes(b"burst")
+        client.manager.get_slc_path.return_value = local
+
+        assert client._stage_slc(_make_burst("2022-08-25"), tmp_path / "work") == local
+
+    def test_remote_slc_is_copied_next_to_the_job(
+        self,
+        client: SNAPClient,
+        tmp_path: Path,
+    ) -> None:
+        """SNAP takes filesystem paths only, so an object-store SLC must be fetched."""
+        remote = UPath("memory://slcs/S1_SLC_remote.zip")
+        remote.parent.mkdir(parents=True, exist_ok=True)
+        remote.write_bytes(b"remote burst")
+        client.manager.get_slc_path.return_value = remote
+        work = tmp_path / "work"
+        work.mkdir()
+
+        staged = client._stage_slc(_make_burst("2022-08-25"), work)
+
+        assert staged == work / "S1_SLC_remote.zip"
+        assert staged.read_bytes() == b"remote burst"

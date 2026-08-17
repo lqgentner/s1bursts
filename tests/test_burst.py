@@ -420,3 +420,37 @@ class TestBurstPairCollection:
         assert isinstance(bursts, BurstCollection)
         # 2 pairs share one burst -> 3 unique bursts
         assert len(bursts) == 3
+
+
+class TestFindPairsValidation:
+    """`find_pairs` must reject baselines that cannot describe a pair."""
+
+    @staticmethod
+    def _collection() -> BurstCollection:
+        return BurstCollection.from_bursts(
+            [
+                Burst(burst_id=30346, sub_swath="IW1", polarization="VV", date=Timestamp(date))
+                for date in ("2022-08-01", "2022-08-07", "2022-08-13")
+            ],
+        )
+
+    @pytest.mark.parametrize("baseline", [0, -6])
+    def test_rejects_non_positive_baseline(self, baseline: int) -> None:
+        with pytest.raises(ValueError, match="`baseline` must be a positive duration"):
+            self._collection().find_pairs(baseline)
+
+    def test_rejects_negative_max_delta(self) -> None:
+        with pytest.raises(ValueError, match="`max_delta` must not be negative"):
+            self._collection().find_pairs(6, max_delta=-1)
+
+    def test_returns_an_empty_collection_when_nothing_matches(self) -> None:
+        """Documented contract: no match yields an empty collection, not an exception."""
+        pairs = self._collection().find_pairs(baseline=99, max_delta=1)
+
+        assert len(pairs) == 0
+
+    def test_accepts_a_zero_max_delta(self) -> None:
+        """An exact baseline is a legitimate request, so zero tolerance must pass."""
+        pairs = self._collection().find_pairs(baseline=6, max_delta=0)
+
+        assert len(pairs) == 2

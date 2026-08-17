@@ -270,3 +270,58 @@ def test_mermaid_passthrough_xml_to_mermaid_function() -> None:
     cfg = BackscatterConfig()
     direct = xml_to_mermaid(cfg.to_xml())
     assert direct == cfg.to_mermaid()
+
+
+class TestGeocodingValidation:
+    """Graph parameters that SNAP would only reject mid-run are checked up front."""
+
+    @pytest.mark.parametrize("spacing", [0, -10])
+    def test_rejects_non_positive_grid_spacing(self, spacing: float) -> None:
+        with pytest.raises(ValidationError, match="grid_spacing"):
+            BackscatterConfig(grid_spacing=spacing)
+
+    @pytest.mark.parametrize("oversampling", [0, -1.5])
+    def test_rejects_non_positive_dem_oversampling(self, oversampling: float) -> None:
+        with pytest.raises(ValidationError, match="dem_oversampling"):
+            BackscatterConfig(dem_oversampling=oversampling)
+
+    def test_rejects_an_unknown_image_resampling_method(self) -> None:
+        with pytest.raises(ValidationError, match="img_resampling"):
+            BackscatterConfig(img_resampling="LANCZOS")
+
+    def test_rejects_an_unknown_dem_resampling_method(self) -> None:
+        with pytest.raises(ValidationError, match="dem_resampling"):
+            BackscatterConfig(dem_resampling="MAGIC")
+
+    def test_rejects_lower_case_resampling_method(self) -> None:
+        """SNAP's parameter values are upper case; a lower-case name is silently ignored."""
+        with pytest.raises(ValidationError, match="img_resampling"):
+            BackscatterConfig(img_resampling="bilinear_interpolation")
+
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "NEAREST_NEIGHBOUR",
+            "BILINEAR_INTERPOLATION",
+            "CUBIC_CONVOLUTION",
+            "BISINC_5_POINT_INTERPOLATION",
+            "BISINC_11_POINT_INTERPOLATION",
+            "BISINC_21_POINT_INTERPOLATION",
+            "BICUBIC_INTERPOLATION",
+        ],
+    )
+    def test_accepts_every_supported_image_resampling_method(self, method: str) -> None:
+        config = BackscatterConfig(img_resampling=method)
+
+        assert f"<imgResamplingMethod>{method}</imgResamplingMethod>" in config.to_xml()
+
+    def test_dem_resampling_additionally_accepts_delaunay(self) -> None:
+        """SNAP offers Delaunay interpolation for the DEM but not for the image."""
+        config = BackscatterConfig(dem_resampling="DELAUNAY_INTERPOLATION")
+
+        assert "DELAUNAY_INTERPOLATION" in config.to_xml()
+        with pytest.raises(ValidationError):
+            BackscatterConfig(img_resampling="DELAUNAY_INTERPOLATION")
+
+    def test_accepts_a_fine_grid_spacing(self) -> None:
+        assert CoherenceConfig(grid_spacing=0.5).grid_spacing == 0.5

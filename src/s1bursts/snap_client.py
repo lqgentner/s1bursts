@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import logging
+import math
 import os
 from pathlib import Path
 import shutil
@@ -49,6 +50,13 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+# Non-heap memory a GPT run needs beyond `-Xmx`: JVM metaspace, thread stacks,
+# GDAL's native buffers, and enough left over for the OS page cache.
+_JVM_OVERHEAD_MB = 3_000
+
+# Smallest per-worker heap that can load SNAP's operator graph.
+_MIN_HEAP_MB = 512
 
 _AUXDATA_SUBDIRS: tuple[str, ...] = ("dem", "Orbits")
 
@@ -152,20 +160,28 @@ class SNAPConfig:
         Overrides for the rasterio profile used when rewriting GPT output
         GeoTIFFs. Merged over ``{"dtype": "float32", "nodata": "nan"}``.
     max_workers : int, optional
-        Number of parallel GPT subprocesses. Defaults to ``SNAP_MAX_WORKERS``
-        (or 1).
+        Number of parallel GPT subprocesses; at least 1. Defaults to
+        ``SNAP_MAX_WORKERS`` (or 1).
     max_ram_gb : float, optional
-        Total RAM budget across all GPT processes in GB. Defaults to
-        ``SNAP_MAX_RAM_GB`` (or 4).
+        Total RAM budget across all GPT processes in GB; must be positive and
+        large enough to give every worker a 512 MB heap on top of 3 GB of JVM
+        and OS overhead. Defaults to ``SNAP_MAX_RAM_GB`` (or 4).
     gpt_threads_per_job : int, optional
-        Threads per GPT process (``-q``). Defaults to ``SNAP_THREADS_PER_JOB``
-        or ``cpu_count // max_workers``.
+        Threads per GPT process (``-q``); at least 1. Defaults to
+        ``SNAP_THREADS_PER_JOB`` or ``cpu_count // max_workers``.
     gpt_cache_ratio : float, optional
-        Fraction of the per-process RAM budget used for the GPT tile cache
-        (``-c``). Defaults to ``SNAP_CACHE_RATIO`` (or 0.7).
+        Fraction of the per-process Java heap used for the GPT tile cache
+        (``-c``); greater than 0 and at most 1. Defaults to
+        ``SNAP_CACHE_RATIO`` (or 0.7).
     auxdata_path : Path, optional
         Shared SNAP auxdata cache (DEM tiles, orbit files). Defaults to
         ``SNAP_AUXDATA_PATH`` (or ``~/.snap/auxdata``).
+
+    Raises
+    ------
+    ConfigurationError
+        If a resource value is out of range, if the RAM budget cannot cover the
+        requested workers, or if GPT or the auxdata path cannot be resolved.
     """
 
     bin: Path | None = None
@@ -206,20 +222,62 @@ class SNAPConfig:
 
         self.resolved_auxdata_path = auxdata_path
 
+    def _validate_resources(self) -> None:
+        """Reject resource values that cannot describe a runnable job.
+
+        These are caught here rather than left to GPT, which reports an
+        out-of-range heap only after the JVM has already failed to start.
+        """
+        for name, value, minimum in (
+            ("max_workers", self.max_workers, 1),
+            ("gpt_threads_per_job", self.gpt_threads_per_job, 1),
+        ):
+            if value is not None and value < minimum:
+                msg = f"`{name}` must be at least {minimum}, received {value}."
+                raise ConfigurationError(msg)
+
+        if self.max_ram_gb is not None and self.max_ram_gb <= 0:
+            msg = f"`max_ram_gb` must be positive, received {self.max_ram_gb}."
+            raise ConfigurationError(msg)
+
+        if self.gpt_cache_ratio is not None and not 0 < self.gpt_cache_ratio <= 1:
+            msg = (
+                "`gpt_cache_ratio` must be greater than 0 and at most 1, "
+                f"received {self.gpt_cache_ratio}."
+            )
+            raise ConfigurationError(msg)
+
     def _resolve_resources(self, snap_settings: SNAPSettings) -> None:
         """Resolve GPT resource parameters from explicit values, settings, and defaults."""
+        self._validate_resources()
         n_cpus = os.cpu_count() or 4
 
         # max_workers: explicit > settings > 1
-        self.resolved_max_workers = max(1, self.max_workers or snap_settings.max_workers)
+        self.resolved_max_workers = self.max_workers or snap_settings.max_workers
 
         # total RAM budget for Xmx calculation
         ram_gb = self.max_ram_gb or snap_settings.max_ram_gb
         ram_mb = int(ram_gb * 1024)
 
-        # per-job Xmx (MB), with a floor so small RAM budgets never produce
-        # a zero or negative -Xmx value
-        self.resolved_xmx_mb = max(512, (ram_mb - 3_000) // self.resolved_max_workers)
+        # Reserve headroom for the JVM's own non-heap memory and the OS, then
+        # split what is left between workers.
+        self.resolved_xmx_mb = (ram_mb - _JVM_OVERHEAD_MB) // self.resolved_max_workers
+
+        # A heap below this cannot load SNAP's operator graph at all, so an
+        # over-subscribed budget is reported rather than quietly rounded up past
+        # the RAM the caller said was available.
+        if self.resolved_xmx_mb < _MIN_HEAP_MB:
+            required_mb = _JVM_OVERHEAD_MB + _MIN_HEAP_MB * self.resolved_max_workers
+            # Round the suggestion up, so following it actually clears the check.
+            required_gb = math.ceil(required_mb / 1024 * 100) / 100
+            msg = (
+                f"A RAM budget of {ram_gb:g} GB across {self.resolved_max_workers} worker(s) "
+                f"leaves {self.resolved_xmx_mb} MB of heap per worker, below the "
+                f"{_MIN_HEAP_MB} MB SNAP needs (after {_JVM_OVERHEAD_MB} MB of JVM and OS "
+                f"overhead). Raise `max_ram_gb` to at least {required_gb:g} "
+                f"or lower `max_workers`."
+            )
+            raise ConfigurationError(msg)
 
         # threads per job (-q)
         self.resolved_threads_per_job = (
