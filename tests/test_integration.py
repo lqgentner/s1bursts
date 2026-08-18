@@ -192,9 +192,8 @@ def s3_extracted_burst(
 class TestReferenceConformance:
     """Validate the S3 extractor against CDSE's own product for the same burst.
 
-    CDSE generates the bursts it serves with the ESA/CloudFerro script this
-    package ports, so its product is the trusted reference: any disagreement is
-    a defect in the port, not a difference of opinion.
+    Products served by CDSE's OData burst endpoint are the behavioral source of
+    truth for the S3 fallback wherever the two endpoints overlap.
     """
 
     @requires_cdse_s3
@@ -216,8 +215,8 @@ class TestReferenceConformance:
     ) -> None:
         """The S3 extraction must equal CDSE's own burst, file for file and pixel for pixel.
 
-        The single tolerated difference is the pre-1.3 GCP row offset CDSE's
-        service still emits; it is reported explicitly rather than ignored (see
+        The single tolerated difference is the GCP row offset some CDSE products
+        carry; it is reported explicitly rather than ignored (see
         ``tests/safe_conformance._diff_gcps``).
         """
         reference = database.file_manager.get_slc_path(downloaded_bursts[0])

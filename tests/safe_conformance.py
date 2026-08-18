@@ -1,10 +1,8 @@
-"""Validate an extracted single-burst SAFE against the CDSE reference contract.
+"""Validate extracted single-burst SAFE products.
 
-The checks here are written from the ESA/CloudFerro reference extractor
-(``tests/fixtures/sentinel1_burst_extractor.sh``), independently of the Python
-port, so that agreement between the two is evidence rather than tautology. The
-footprint rule in particular is re-derived from the reference's XPath/awk
-pipeline rather than reusing the port's implementation.
+The checks describe the structure and metadata observed in CDSE's OData burst
+products without reusing the Python extractor's implementation. Agreement is
+therefore useful evidence rather than a tautology.
 
 Two entry points matter:
 
@@ -44,7 +42,7 @@ NS = {
     "gml": "http://www.opengis.net/gml",
 }
 
-# The reference extractor renames every burst-specific file to this pattern:
+# CDSE burst-specific files use this pattern:
 # <15-char annotation prefix><6-digit burst id>-<compact sensing time>-<datatake>
 BURST_PATTERN = re.compile(
     r"^s1[abcd]-(?:iw[123]|ew[12345])-slc-(?:vv|vh|hh|hv)"
@@ -110,12 +108,12 @@ class BurstSafe:
         ]
 
 
-def reference_footprint(annotation: etree._Element) -> str:
-    """Recompute the manifest footprint the way the reference extractor does.
+def expected_footprint(annotation: etree._Element) -> str:
+    """Recompute the manifest footprint used by CDSE burst products.
 
-    Re-derived from lines 205-206 of ``sentinel1_burst_extractor.sh``: the first
-    and last ``line=0`` points, then the last and first of *all* remaining
-    points in document order, closing on the first point again.
+    The footprint uses the first and last ``line=0`` points, then the last and
+    first of *all* remaining points in document order, closing on the first
+    point again.
 
     Two properties of that rule are worth stating, because both look like
     defects until checked against a real CDSE burst:
@@ -124,9 +122,7 @@ def reference_footprint(annotation: etree._Element) -> str:
       extracted burst, so an interior burst inherits a footprint larger than
       itself.
     - Coordinate text is copied verbatim, keeping the annotation's scientific
-      notation. The vendored script pipes it through XPath ``number()``, but the
-      products CDSE actually serves preserve the source text, which is also the
-      only form that does not lose digits.
+      notation and precision.
     """
     points = annotation.findall("geolocationGrid/geolocationGridPointList/geolocationGridPoint")
     top = [p for p in points if int(p.findtext("line")) == 0]
@@ -337,9 +333,9 @@ def _check_manifest_metadata(burst: BurstSafe, *, sub_swath: str) -> Iterator[st
             namespaces=NS,
         )
     ]
-    expected_footprint = reference_footprint(burst.annotation)
-    if coordinates != [expected_footprint]:
-        yield f"manifest footprint is {coordinates}, expected '{expected_footprint}'"
+    footprint = expected_footprint(burst.annotation)
+    if coordinates != [footprint]:
+        yield f"manifest footprint is {coordinates}, expected '{footprint}'"
 
     swaths = [
         el.text
@@ -390,8 +386,7 @@ def _check_manifest_byte_streams(burst: BurstSafe) -> Iterator[str]:
         if member not in burst.members:
             yield f"manifest references a missing archive member '{href}'"
 
-    # The reference extractor blanks byte-stream integrity fields rather than
-    # recomputing them; CDSE's own burst products carry the same relaxation.
+    # CDSE burst products blank these fields rather than recomputing them.
     for checksum in manifest.xpath("dataObjectSection/dataObject/byteStream/checksum"):
         if (checksum.text or "") != "":
             yield f"manifest byteStream checksum was not blanked: '{checksum.text}'"
@@ -436,7 +431,7 @@ def _check_measurement(burst: BurstSafe) -> Iterator[str]:
 
 
 def check_burst_safe(zip_path: Path, *, sub_swath: str) -> list[str]:
-    """Validate an extracted burst archive against the reference contract.
+    """Validate an extracted burst archive against the CDSE product contract.
 
     Parameters
     ----------
@@ -503,7 +498,7 @@ def digest(zip_path: Path) -> dict[str, Any]:
             np.ascontiguousarray(burst.measurement).tobytes(),
         ).hexdigest(),
         "gcps": [list(gcp) for gcp in burst.gcps],
-        "footprint": reference_footprint(burst.annotation),
+        "footprint": expected_footprint(burst.annotation),
         "manifest_sha256": hashlib.sha256(_canonical_xml(burst.manifest).encode()).hexdigest(),
         "annotation_sha256": hashlib.sha256(_canonical_xml(burst.annotation).encode()).hexdigest(),
         "calibration_sha256": hashlib.sha256(
@@ -566,10 +561,9 @@ def compare_burst_safes(actual: Path, reference: Path) -> list[str]:
     if ours.raster_dtype != theirs.raster_dtype:
         differences.append(f"raster dtype {ours.raster_dtype} != {theirs.raster_dtype}")
 
-    # Compared separately from the GCP positions: the reference script's
-    # `gdal_translate` invocation has no option for a GCP SRS, so an
-    # implementation can easily produce the right points with no projection
-    # attached and still match position-for-position.
+    # Compare the CRS separately from the GCP positions: an implementation can
+    # produce the right points with no projection and still match position for
+    # position.
     if ours.raster_crs != theirs.raster_crs:
         differences.append(f"GCP CRS {ours.raster_crs!r} != {theirs.raster_crs!r}")
 
@@ -581,11 +575,9 @@ def compare_burst_safes(actual: Path, reference: Path) -> list[str]:
 def _diff_gcps(ours: BurstSafe, theirs: BurstSafe) -> Iterator[str]:
     """Diff GCPs, allowing the one deviation CDSE's service is known to have.
 
-    Release 1.3 of the reference script is titled "corrected GCPs extraction":
-    earlier revisions subtracted the burst's starting line from grid rows that
-    the annotation edit had already shifted, so every GCP row came out one whole
-    burst offset too far. The port implements the corrected behaviour, but the
-    products CDSE currently serves still carry the double shift.
+    Some products CDSE currently serves subtract the burst's starting line from
+    grid rows that were already shifted, leaving every GCP row one whole burst
+    offset too far. The S3 extractor emits the correctly shifted rows.
 
     A uniform row offset that is a whole multiple of the burst length is
     therefore reported as that known deviation rather than as a mismatch. Any
@@ -612,8 +604,7 @@ def _diff_gcps(ours: BurstSafe, theirs: BurstSafe) -> Iterator[str]:
     if len(offsets) == 1 and (offset := offsets.pop()) % lines == 0:
         yield (
             f"KNOWN DEVIATION: reference GCP rows are offset by {offset:.0f} lines "
-            f"({offset / lines:.0f} bursts), the pre-1.3 double shift; ours follow the "
-            f"corrected reference script"
+            f"({offset / lines:.0f} bursts), the known CDSE double shift"
         )
         return
 

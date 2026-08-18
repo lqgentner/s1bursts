@@ -6,9 +6,9 @@ The S3 layer is replaced by a local directory — the catalogue lookup and the
 resolution, every XML edit, the windowed raster read, GCP assignment, archiving
 and the upload branch all execute for real.
 
-Every extracted archive is put through ``tests/safe_conformance.py``, which
-re-derives the contract from the vendored ESA reference script rather than from
-the port, and one extraction is pinned against a committed golden record.
+Every extracted archive is put through the independent structural checks in
+``tests/safe_conformance.py``, and one extraction is pinned against a committed
+golden record.
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ class TestExtraction:
         position: str,
         burst_index: int,
     ) -> None:
-        """First, interior and last bursts must all satisfy the reference contract."""
+        """First, interior and last bursts must all satisfy the product contract."""
         product, zip_path = extract(burst_index=burst_index)
 
         violations = check_burst_safe(zip_path, sub_swath=product.spec.sub_swath)

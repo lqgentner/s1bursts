@@ -1,12 +1,8 @@
-"""Differential test of the raster extraction against the reference tool.
+"""Cross-check raster extraction against GDAL.
 
-Every XML edit in the port is checked against the reference script's own
-expressions in ``test_esa_reference_parity.py``, but one step has no such
-counterpart: the reference calls ``gdal_translate`` on a VRT connection string,
-where the port reads a window with rasterio and attaches the GCPs itself. Those
-are different implementations of the same operation, so this runs the
-reference's exact invocation over the synthetic SAFE product and requires the
-two rasters to agree.
+The extractor reads a window with rasterio and attaches GCPs itself. This test
+performs the equivalent operation with ``gdal_translate`` over the synthetic
+SAFE product and requires the two independent implementations to agree.
 
 Offline and fast — no S3, no network. Skips where the GDAL CLI is absent; the
 container the integration workflow uses carries it.
@@ -82,8 +78,8 @@ def extraction(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
     ours = tmp_path / "ours.tiff"
     _extract_tiff(source, ours, geoloc_pts=points, meta=meta)
 
-    # The reference's invocation, verbatim: one `gcp=` per grid point with the
-    # line already shifted, then a `srcwin` over the burst's rows.
+    # One `gcp=` per grid point with the line already shifted, then a `srcwin`
+    # over the burst's rows.
     gcps = "".join(
         f"gcp={pixel:g},{line:g},{lon:g},{lat:g},{height:g}&"
         for pixel, line, lon, lat, height in points
@@ -155,15 +151,14 @@ class TestAgainstGdalTranslate:
 
         assert ours == reference == "complex_int16"
 
-    def test_port_attaches_a_gcp_crs_the_reference_leaves_unset(
+    def test_port_attaches_a_gcp_crs_that_gdal_leaves_unset(
         self,
         extraction: dict[str, object],
     ) -> None:
-        """A deliberate divergence from the script, matching what CDSE ships.
+        """The port declares the GCP CRS used by CDSE burst products.
 
-        The reference's VRT connection string has no option for a GCP SRS, so
-        `gdal_translate` writes the points with no projection. CDSE's own burst
-        products declare EPSG:4326, and so does the port.
+        The VRT connection string has no GCP SRS option, so `gdal_translate`
+        writes the points without a projection. The port declares EPSG:4326.
         """
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)

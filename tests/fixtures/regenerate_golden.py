@@ -1,7 +1,7 @@
 """Regenerate the committed golden record for the offline burst extraction.
 
 Run this only when the extractor's output changes deliberately and the change
-has been checked against the reference extractor::
+has been checked against the CDSE product contract::
 
     uv run python tests/fixtures/regenerate_golden.py
 

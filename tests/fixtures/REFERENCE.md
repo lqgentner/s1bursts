@@ -1,21 +1,5 @@
 # Test Fixtures
 
-## Burst extractor reference
-
-`s1bursts.burst_extractor` ports CDSE's `sentinel1_burst_extractor.sh`. The CDSE script is the reference for the port's output.
-
-| | |
-| --- | --- |
-| Source | <https://github.com/eu-cdse/utilities/blob/main/sentinel1_burst_extractor.sh> |
-| Script version | 1.3 (2025-03-14, "corrected GCPs extraction") |
-| Retrieved | 2026-08-14 |
-| SHA-256 | `c17c8d1b6191bef2d7e49d85e5941407e588dbc83a2ac8de18ae3c366ef16e4e` |
-| Author | CloudFerro (jmusial@cloudferro.com), for ESA |
-
-The script is stored but not run because it needs several command-line tools and live S3 credentials. `tests/test_esa_reference_parity.py` reads its edits and checks the port against them; the pinned digest detects upstream changes.
-
-`s1bursts.burst_extractor.REFERENCE_SCRIPT_VERSION` records the version used by the port.
-
 ## OPERA RTC-S1 reference
 
 Product goldens show whether SNAP output changed, but not whether it is correct. The JPL OPERA Level-2 products provide an independent check because they use the same inputs (single Sentinel-1 bursts and Copernicus

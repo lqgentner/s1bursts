@@ -1,1 +1,1 @@
-"""Test fixtures: synthetic SAFE products, SNAP graphs, and the vendored ESA reference script."""
+"""Synthetic SAFE products, reference records, and SNAP graphs used by tests."""

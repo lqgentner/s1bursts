@@ -186,7 +186,7 @@ def test_build_footprint_structure() -> None:
 
     # top row sorted by pixel: (10.0, 50.0) → (11.0, 50.1)
     # nontop (all non-zero-line points): first=(10.1,51.0), last=(11.1,51.1)
-    # Coordinate text is copied verbatim (see tests/test_esa_reference_parity.py).
+    # Coordinate text is copied verbatim.
     assert fp == "10.0 50.0,11.0 50.1,11.1 51.1,10.1 51.0,10.0 50.0"
 
 

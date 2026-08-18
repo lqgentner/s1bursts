@@ -1,15 +1,16 @@
-"""Python port of the Sentinel-1 burst extraction script for CDSE S3.
+"""Extract Sentinel-1 bursts from parent SLC products in CDSE S3.
 
-Original script: https://github.com/eu-cdse/utilities/blob/main/sentinel1_burst_extractor.sh
+The implementation was inspired by CDSE's
+`Sentinel-1 burst extractor v1.3
+<https://github.com/eu-cdse/utilities/blob/main/sentinel1_burst_extractor.sh>`_.
+The script is retained as a provenance reference, not a validation source;
+products served by CDSE's burst endpoint define the expected behavior.
 
-The port targets **byte-level parity** with that reference, which is the same
-program CDSE runs to produce the single-burst products it serves from
-``bursts.dataspace.copernicus.eu``. Extracting a burst from S3 therefore yields
-the same product as downloading it from CDSE, and the live differential test in
-``tests/test_integration.py`` asserts exactly that.
+The extractor provides a fallback for bursts that CDSE's OData endpoint cannot
+serve. Its output follows the structure of CDSE's own single-burst products,
+and ``tests/test_integration.py`` compares the two routes where they overlap.
 
-Parity is the contract, so the reference's deliberate relaxations of the SAFE
-specification are reproduced rather than corrected:
+The following properties of CDSE burst products are retained:
 
 - ``manifest.safe`` byte-stream ``size`` attributes and ``checksum`` values are
   blanked, not recomputed, because the edited files no longer match the parent
@@ -21,8 +22,7 @@ specification are reproduced rather than corrected:
 - The manifest footprint is derived from the whole shifted grid, so an interior
   burst inherits a footprint wider than its own extent.
 
-``tests/safe_conformance.py`` re-derives these rules from the vendored reference
-script and pins them.
+``tests/safe_conformance.py`` checks these rules independently of the extractor.
 """
 
 from __future__ import annotations
@@ -56,9 +56,6 @@ if TYPE_CHECKING:
     from s1bursts.config import CDSES3Settings
 
 logger = logging.getLogger(__name__)
-
-REFERENCE_SCRIPT_VERSION = "1.3"
-"""Version of the ESA/CloudFerro reference extractor this port tracks."""
 
 
 def _parse_xml(data: bytes) -> etree._Element:
@@ -384,14 +381,11 @@ def _build_footprint(root: etree._Element) -> str:
 
     The second group spans every remaining grid row rather than just the
     extracted burst, so an interior burst inherits a footprint wider than its
-    own extent. This reproduces the reference extractor, and therefore CDSE's
-    own burst products, rather than diverging from them.
+    own extent. This matches the products CDSE serves.
 
     Coordinate text is copied verbatim from the annotation. That matches the
     products CDSE serves, which carry the annotation's scientific notation
-    (``7.628802608148144e+00``). The vendored reference script instead pipes
-    each value through XPath ``number()``, whose libxml2 formatting drops to a
-    fixed 15 significant digits and would silently truncate the latitude.
+    (``7.628802608148144e+00``) without losing precision.
     """
     pts = root.findall("geolocationGrid/geolocationGridPointList/geolocationGridPoint")
     top = sorted(
