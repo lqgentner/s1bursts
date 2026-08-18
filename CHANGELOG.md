@@ -10,6 +10,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Added
 
+- `prepare_dem_for_snap()` converts an orthometric external DEM to WGS 84
+  ellipsoidal heights when given a compound source CRS (for example,
+  `EPSG:4326+3855` for Copernicus GLO-30), while applying SNAP's half-pixel
+  geotransform compensation in the same cached raster pass. PROJ grids can be
+  downloaded explicitly with `download_missing_grids=True`.
 - `s1bursts.__version__`, read from the installed distribution metadata. The
   version is still derived from git tags at build time by hatch-vcs; it is now
   also reachable at runtime.
@@ -28,6 +33,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Changed
 
+- **Breaking:** `compensate_dem_for_snap()` is renamed to
+  `prepare_dem_for_snap()` to reflect that it can now apply both the pixel
+  shift and vertical datum conversion of an external DEM for SNAP.
 - Requires `freezebase[s3]>=0.4,<0.5`. Burst downloads now close their
   `HTTPDownloader` when done, releasing the connection immediately instead of
   leaving it to the garbage collector.

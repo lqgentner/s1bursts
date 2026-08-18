@@ -831,7 +831,10 @@ class GeocodingConfig(BaseModel):
         Set it ``True`` for an orthometric DEM (heights above mean sea level,
         the usual case for national DEMs) and leave it ``False`` only when the
         DEM already carries ellipsoidal heights. Note this default differs from
-        SNAP's own, which is ``True``.
+        SNAP's own, which is ``True``. Leave it ``False`` for a DEM returned by
+        :func:`s1bursts.prepare_dem_for_snap`, which has already been converted
+        to ellipsoidal heights. SNAP only applies EGM96, so preprocess DEMs in
+        other vertical datums such as EGM2008 instead of enabling this option.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(

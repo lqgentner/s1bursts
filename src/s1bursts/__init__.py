@@ -15,7 +15,7 @@ from importlib.metadata import version as _version
 
 from s1bursts.burstmap import download_burst_map
 from s1bursts.database import BurstDatabase
-from s1bursts.dem import compensate_dem_for_snap
+from s1bursts.dem import prepare_dem_for_snap
 from s1bursts.filemanager import FileManager
 from s1bursts.processor import BurstProcessor
 from s1bursts.query import SearchQuery
@@ -41,6 +41,6 @@ __all__ = [
     "ResolutionWeighter",
     "SNAPConfig",
     "SearchQuery",
-    "compensate_dem_for_snap",
     "download_burst_map",
+    "prepare_dem_for_snap",
 ]

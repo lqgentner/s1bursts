@@ -1,4 +1,4 @@
-"""Tests for the SNAP half-pixel DEM compensation."""
+"""Tests for the SNAP DEM preparation."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -13,11 +14,14 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
+import s1bursts.dem as dem_module
 from s1bursts.dem import (
     CACHE_SCHEMA_VERSION,
     COMPENSATED_TAG,
     PROVENANCE_SUFFIX,
-    compensate_dem_for_snap,
+    TARGET_CRS,
+    VERTICAL_CONVERSION_TAG,
+    prepare_dem_for_snap,
 )
 
 if TYPE_CHECKING:
@@ -28,25 +32,36 @@ ORIGIN_X = 7.0 - RES / 2
 ORIGIN_Y = 47.0 + RES / 2
 
 
-def _write_dem(path: Path, *, dtype: str = "float32", count: int = 1, fill: float | None) -> Path:
+def _write_dem(
+    path: Path,
+    *,
+    dtype: str = "float32",
+    count: int = 1,
+    fill: float | None,
+    width: int = 30,
+    height: int = 20,
+    tiled: bool = False,
+) -> Path:
     """Write a small georeferenced DEM, optionally filled with a constant."""
     data = (
-        np.full((count, 20, 30), fill, dtype=dtype)
+        np.full((count, height, width), fill, dtype=dtype)
         if fill is not None
-        else np.arange(20 * 30, dtype=dtype).reshape(1, 20, 30).repeat(count, axis=0)
+        else np.arange(height * width, dtype=dtype).reshape(1, height, width).repeat(count, axis=0)
     )
     path.parent.mkdir(parents=True, exist_ok=True)
+    block_options = {"tiled": True, "blockxsize": 16, "blockysize": 16} if tiled else {}
     with rasterio.open(
         path,
         "w",
         driver="GTiff",
-        width=30,
-        height=20,
+        width=width,
+        height=height,
         count=count,
         dtype=dtype,
         crs="EPSG:4326",
         transform=from_origin(ORIGIN_X, ORIGIN_Y, RES, RES),
         nodata=np.nan if dtype.startswith("float") else 0,
+        **block_options,
     ) as dst:
         dst.write(data)
     return path
@@ -61,8 +76,19 @@ def make_dem(tmp_path: Path) -> Callable[..., Path]:
         dtype: str = "float32",
         count: int = 1,
         fill: float | None = None,
+        width: int = 30,
+        height: int = 20,
+        tiled: bool = False,
     ) -> Path:
-        return _write_dem(tmp_path / name, dtype=dtype, count=count, fill=fill)
+        return _write_dem(
+            tmp_path / name,
+            dtype=dtype,
+            count=count,
+            fill=fill,
+            width=width,
+            height=height,
+            tiled=tiled,
+        )
 
     return _make
 
@@ -71,14 +97,14 @@ def _sidecar_of(entry: Path) -> Path:
     return entry.with_name(entry.name + PROVENANCE_SUFFIX)
 
 
-class TestCompensateForSnap:
+class TestPrepareForSnap:
     def test_moves_origin_onto_first_pixel_centre(
         self,
         make_dem: Callable[..., Path],
         tmp_path: Path,
     ) -> None:
         dem = make_dem()
-        out = compensate_dem_for_snap(dem, cache_dir=tmp_path / "cache")
+        out = prepare_dem_for_snap(dem, cache_dir=tmp_path / "cache")
 
         with rasterio.open(dem) as src, rasterio.open(out) as dst:
             assert dst.transform.c == pytest.approx(src.transform.c + RES / 2)
@@ -93,7 +119,7 @@ class TestCompensateForSnap:
         tmp_path: Path,
     ) -> None:
         dem = make_dem()
-        out = compensate_dem_for_snap(dem, cache_dir=tmp_path / "cache")
+        out = prepare_dem_for_snap(dem, cache_dir=tmp_path / "cache")
 
         with rasterio.open(dem) as src, rasterio.open(out) as dst:
             assert dst.res == src.res
@@ -102,7 +128,7 @@ class TestCompensateForSnap:
             assert np.array_equal(src.read(), dst.read(), equal_nan=True)
 
     def test_tags_the_copy(self, make_dem: Callable[..., Path], tmp_path: Path) -> None:
-        out = compensate_dem_for_snap(make_dem(), cache_dir=tmp_path / "cache")
+        out = prepare_dem_for_snap(make_dem(), cache_dir=tmp_path / "cache")
 
         with rasterio.open(out) as dst:
             assert dst.tags()[COMPENSATED_TAG] == "1"
@@ -110,7 +136,7 @@ class TestCompensateForSnap:
     def test_handles_integer_dtype(self, make_dem: Callable[..., Path], tmp_path: Path) -> None:
         """The float predictor is invalid for integers, so the dtype must pick it."""
         dem = make_dem(dtype="int16")
-        out = compensate_dem_for_snap(dem, cache_dir=tmp_path / "cache")
+        out = prepare_dem_for_snap(dem, cache_dir=tmp_path / "cache")
 
         with rasterio.open(dem) as src, rasterio.open(out) as dst:
             assert dst.dtypes == src.dtypes
@@ -118,7 +144,7 @@ class TestCompensateForSnap:
 
     def test_handles_multiple_bands(self, make_dem: Callable[..., Path], tmp_path: Path) -> None:
         dem = make_dem(count=3)
-        out = compensate_dem_for_snap(dem, cache_dir=tmp_path / "cache")
+        out = prepare_dem_for_snap(dem, cache_dir=tmp_path / "cache")
 
         with rasterio.open(dem) as src, rasterio.open(out) as dst:
             assert dst.count == 3
@@ -127,10 +153,10 @@ class TestCompensateForSnap:
     def test_reuses_cached_copy(self, make_dem: Callable[..., Path], tmp_path: Path) -> None:
         dem = make_dem()
         cache = tmp_path / "cache"
-        first = compensate_dem_for_snap(dem, cache_dir=cache)
+        first = prepare_dem_for_snap(dem, cache_dir=cache)
         stamp = first.stat().st_mtime_ns
 
-        second = compensate_dem_for_snap(dem, cache_dir=cache)
+        second = prepare_dem_for_snap(dem, cache_dir=cache)
 
         assert second == first
         assert second.stat().st_mtime_ns == stamp
@@ -142,7 +168,7 @@ class TestCompensateForSnap:
     ) -> None:
         dem = make_dem()
         cache = tmp_path / "cache"
-        out = compensate_dem_for_snap(dem, cache_dir=cache)
+        out = prepare_dem_for_snap(dem, cache_dir=cache)
         with rasterio.open(out) as dst:
             before = dst.read(1)[0, 0]
 
@@ -151,7 +177,7 @@ class TestCompensateForSnap:
             src.write(np.full((1, 20, 30), 42.0, dtype="float32"))
         dem.touch()
 
-        with rasterio.open(compensate_dem_for_snap(dem, cache_dir=cache)) as dst:
+        with rasterio.open(prepare_dem_for_snap(dem, cache_dir=cache)) as dst:
             assert dst.read(1)[0, 0] != before
             assert dst.read(1)[0, 0] == pytest.approx(42.0)
 
@@ -161,19 +187,19 @@ class TestCompensateForSnap:
         tmp_path: Path,
     ) -> None:
         cache = tmp_path / "cache"
-        compensate_dem_for_snap(make_dem(), cache_dir=cache)
+        prepare_dem_for_snap(make_dem(), cache_dir=cache)
 
         assert not list(cache.glob("*.partial"))
 
     def test_missing_dem_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError, match="DEM not found"):
-            compensate_dem_for_snap(tmp_path / "absent.tif", cache_dir=tmp_path / "cache")
+            prepare_dem_for_snap(tmp_path / "absent.tif", cache_dir=tmp_path / "cache")
 
     def test_rejects_dem_already_in_cache(self, make_dem: Callable[..., Path]) -> None:
         dem = make_dem()
 
         with pytest.raises(ValueError, match="already inside"):
-            compensate_dem_for_snap(dem, cache_dir=dem.parent)
+            prepare_dem_for_snap(dem, cache_dir=dem.parent)
 
     def test_defaults_cache_dir_to_settings(
         self,
@@ -184,9 +210,362 @@ class TestCompensateForSnap:
         cache = tmp_path / "from-env"
         monkeypatch.setenv("SNAP_DEM_CACHE", str(cache))
 
-        out = compensate_dem_for_snap(make_dem())
+        out = prepare_dem_for_snap(make_dem())
 
         assert out.parent == cache
+
+
+class _OffsetTransformer:
+    """Small deterministic stand-in for a PROJ vertical transformer."""
+
+    def __init__(self, offset: float = 10.0) -> None:
+        self.offset = offset
+        self.description = f"Test vertical offset of {offset} metres"
+        self.calls: list[tuple[np.ndarray, np.ndarray, np.ndarray, bool]] = []
+
+    def transform(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        z: np.ndarray,
+        *,
+        errcheck: bool,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        self.calls.append((x.copy(), y.copy(), z.copy(), errcheck))
+        return x, y, z + self.offset
+
+
+class TestVerticalConversion:
+    def test_converts_at_original_pixel_centres(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        dem = make_dem(fill=100.0)
+        transformer = _OffsetTransformer()
+        monkeypatch.setattr(
+            dem_module,
+            "_get_transformer",
+            lambda *_args, **_kwargs: transformer,
+        )
+
+        out = prepare_dem_for_snap(
+            dem,
+            source_crs="EPSG:4326+3855",
+            cache_dir=tmp_path / "cache",
+        )
+
+        with rasterio.open(out) as src:
+            assert np.all(src.read(1) == pytest.approx(110.0))
+            assert src.tags()[VERTICAL_CONVERSION_TAG] == "1"
+        x, y, z, errcheck = transformer.calls[0]
+        assert x[0] == pytest.approx(7.0)
+        assert y[0] == pytest.approx(47.0)
+        assert np.all(z == pytest.approx(100.0))
+        assert errcheck is True
+
+    def test_uses_offsets_for_every_tiled_window(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        dem = make_dem(fill=100.0, width=32, height=32, tiled=True)
+        transformer = _OffsetTransformer()
+        monkeypatch.setattr(
+            dem_module,
+            "_get_transformer",
+            lambda *_args, **_kwargs: transformer,
+        )
+
+        prepare_dem_for_snap(
+            dem,
+            source_crs="EPSG:4326+3855",
+            cache_dir=tmp_path / "cache",
+        )
+
+        assert len(transformer.calls) == 4
+        last_x, last_y, _, _ = transformer.calls[-1]
+        assert last_x[0] == pytest.approx(7.0 + 16 * RES)
+        assert last_y[0] == pytest.approx(47.0 - 16 * RES)
+        assert last_x[-1] == pytest.approx(7.0 + 31 * RES)
+        assert last_y[-1] == pytest.approx(47.0 - 31 * RES)
+
+    def test_preserves_nodata_and_promotes_integer_dem(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        dem = make_dem(dtype="int16", fill=2.0)
+        with rasterio.open(dem, "r+") as src:
+            data = src.read(1)
+            data[0, 0] = 0
+            src.write(data, 1)
+        monkeypatch.setattr(
+            dem_module,
+            "_get_transformer",
+            lambda *_args, **_kwargs: _OffsetTransformer(),
+        )
+
+        out = prepare_dem_for_snap(
+            dem,
+            source_crs="EPSG:4326+3855",
+            cache_dir=tmp_path / "cache",
+        )
+
+        with rasterio.open(out) as src:
+            assert src.dtypes == ("float32",)
+            assert src.read(1)[0, 0] == pytest.approx(0.0)
+            assert src.read(1)[0, 1] == pytest.approx(12.0)
+
+    def test_preserves_nan_and_converts_every_band(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        dem = make_dem(count=3, fill=5.0)
+        with rasterio.open(dem, "r+") as src:
+            data = src.read()
+            data[:, 0, 0] = np.nan
+            src.write(data)
+        transformer = _OffsetTransformer()
+        monkeypatch.setattr(
+            dem_module,
+            "_get_transformer",
+            lambda *_args, **_kwargs: transformer,
+        )
+
+        out = prepare_dem_for_snap(
+            dem,
+            source_crs="EPSG:4326+3855",
+            cache_dir=tmp_path / "cache",
+        )
+
+        with rasterio.open(out) as src:
+            data = src.read()
+            assert np.isnan(data[:, 0, 0]).all()
+            assert np.all(data[:, 0, 1] == pytest.approx(15.0))
+        assert len(transformer.calls) == 3
+        assert all(len(call[2]) == 599 for call in transformer.calls)
+
+    @pytest.mark.parametrize(
+        ("source_crs", "message"),
+        [
+            ("EPSG:4326", "source_crs must be a compound"),
+            ("not-a-crs", "Invalid source CRS"),
+        ],
+    )
+    def test_rejects_invalid_source_crs(
+        self,
+        source_crs: str,
+        message: str,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        with pytest.raises(ValueError, match=message):
+            prepare_dem_for_snap(
+                make_dem(),
+                source_crs=source_crs,
+                cache_dir=tmp_path / "cache",
+            )
+
+    def test_rejects_horizontal_crs_mismatch(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        with pytest.raises(ValueError, match="does not match"):
+            prepare_dem_for_snap(
+                make_dem(),
+                source_crs="EPSG:2056+5728",
+                cache_dir=tmp_path / "cache",
+            )
+
+    def test_conversion_settings_have_distinct_cache_entries(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        dem = make_dem(fill=3.0)
+        cache = tmp_path / "cache"
+        monkeypatch.setattr(
+            dem_module,
+            "_get_transformer",
+            lambda *_args, **_kwargs: _OffsetTransformer(),
+        )
+
+        unchanged = prepare_dem_for_snap(dem, cache_dir=cache)
+        converted = prepare_dem_for_snap(
+            dem,
+            source_crs="EPSG:4326+3855",
+            cache_dir=cache,
+        )
+
+        assert unchanged != converted
+        record = json.loads(_sidecar_of(converted).read_text())
+        assert record["target_crs"] == TARGET_CRS
+        assert record["source_crs"] == "EPSG:9518"
+        assert record["transformer_description"] == "Test vertical offset of 10.0 metres"
+        assert record["proj_version"] == dem_module.proj_version_str
+
+    def test_cached_conversion_does_not_need_the_grid_again(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        dem = make_dem(fill=3.0)
+        cache = tmp_path / "cache"
+        monkeypatch.setattr(
+            dem_module,
+            "_get_transformer",
+            lambda *_args, **_kwargs: _OffsetTransformer(),
+        )
+        first = prepare_dem_for_snap(
+            dem,
+            source_crs="EPSG:4326+3855",
+            cache_dir=cache,
+        )
+        monkeypatch.setattr(
+            dem_module,
+            "_get_transformer",
+            lambda *_args, **_kwargs: pytest.fail("cache hit requested a transformer"),
+        )
+
+        second = prepare_dem_for_snap(
+            dem,
+            source_crs="EPSG:4326+3855",
+            cache_dir=cache,
+        )
+
+        assert second == first
+
+
+class TestTransformationGrids:
+    @staticmethod
+    def _group(*, best_available: bool, transformer: object | None = None) -> SimpleNamespace:
+        grid = SimpleNamespace(short_name="test-grid.tif", available=False)
+        operation = SimpleNamespace(grids=[grid])
+        return SimpleNamespace(
+            best_available=best_available,
+            transformers=[] if transformer is None else [transformer],
+            unavailable_operations=[] if best_available else [operation],
+        )
+
+    def test_missing_grid_error_is_actionable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        group = self._group(best_available=False)
+        monkeypatch.setattr(dem_module, "_new_transformer_group", lambda _source_crs: group)
+
+        with pytest.raises(RuntimeError, match=r"test-grid\.tif.*download_missing_grids"):
+            dem_module._get_transformer(
+                dem_module.CRS("EPSG:4326+3855"),
+                download_missing_grids=False,
+            )
+
+    def test_opt_in_download_rebuilds_transformer(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        transformer = _OffsetTransformer()
+        groups = iter(
+            [
+                self._group(best_available=False),
+                self._group(best_available=True, transformer=transformer),
+            ],
+        )
+        downloaded: list[object] = []
+        monkeypatch.setattr(
+            dem_module,
+            "_new_transformer_group",
+            lambda _source_crs: next(groups),
+        )
+        monkeypatch.setattr(dem_module, "_download_grids", downloaded.append)
+
+        result = dem_module._get_transformer(
+            dem_module.CRS("EPSG:4326+3855"),
+            download_missing_grids=True,
+        )
+
+        assert result is transformer
+        assert len(downloaded) == 1
+
+    def test_failed_opt_in_does_not_recommend_the_flag_again(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        group = self._group(best_available=False)
+        monkeypatch.setattr(dem_module, "_new_transformer_group", lambda _source_crs: group)
+        monkeypatch.setattr(dem_module, "_download_grids", lambda _group: None)
+
+        with pytest.raises(RuntimeError, match="Downloading was enabled") as error:
+            dem_module._get_transformer(
+                dem_module.CRS("EPSG:4326+3855"),
+                download_missing_grids=True,
+            )
+
+        assert "Pass download_missing_grids=True" not in str(error.value)
+
+    def test_downloads_open_grids_and_publishes_atomically(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_dir = tmp_path / "proj"
+        calls: list[tuple[Path, bool]] = []
+        grid = SimpleNamespace(short_name="test-grid.tif", available=False)
+
+        class DownloadGroup:
+            def __init__(self) -> None:
+                self.unavailable_operations = [SimpleNamespace(grids=[grid])]
+
+            @staticmethod
+            def download_grids(*, directory: Path, open_license: bool) -> None:
+                calls.append((directory, open_license))
+                (directory / "test-grid.tif").write_bytes(b"complete-grid")
+
+        monkeypatch.setattr(
+            dem_module.datadir,
+            "get_user_data_dir",
+            lambda *, create: str(user_dir),  # noqa: ARG005
+        )
+        user_dir.mkdir()
+
+        dem_module._download_grids(DownloadGroup())  # type: ignore[arg-type]
+
+        assert calls[0][1] is True
+        assert (user_dir / "test-grid.tif").read_bytes() == b"complete-grid"
+        assert not list(user_dir.glob("s1bursts-proj-*"))
+
+    def test_download_raises_when_no_open_grid_is_available(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_dir = tmp_path / "proj"
+        grid = SimpleNamespace(short_name="restricted-grid.gtx", available=False)
+
+        class DownloadGroup:
+            def __init__(self) -> None:
+                self.unavailable_operations = [SimpleNamespace(grids=[grid])]
+
+            @staticmethod
+            def download_grids(*, directory: Path, open_license: bool) -> None:
+                assert directory.is_dir()
+                assert open_license is True
+
+        monkeypatch.setattr(
+            dem_module.datadir,
+            "get_user_data_dir",
+            lambda *, create: str(user_dir),  # noqa: ARG005
+        )
+        user_dir.mkdir()
+
+        with pytest.raises(RuntimeError, match=r"No directly downloadable open-license.*manually"):
+            dem_module._download_grids(DownloadGroup())  # type: ignore[arg-type]
 
 
 class TestCacheIdentity:
@@ -202,8 +581,8 @@ class TestCacheIdentity:
         old = first.stat().st_mtime - 3600
         os.utime(second, (old, old))
 
-        out_first = compensate_dem_for_snap(first, cache_dir=cache)
-        out_second = compensate_dem_for_snap(second, cache_dir=cache)
+        out_first = prepare_dem_for_snap(first, cache_dir=cache)
+        out_second = prepare_dem_for_snap(second, cache_dir=cache)
 
         assert out_first != out_second
         with rasterio.open(out_first) as src:
@@ -216,12 +595,12 @@ class TestCacheIdentity:
         cache = tmp_path / "cache"
         dem = _write_dem(tmp_path / "dem.tif", fill=1.0)
         stat = dem.stat()
-        compensate_dem_for_snap(dem, cache_dir=cache)
+        prepare_dem_for_snap(dem, cache_dir=cache)
 
         _write_dem(dem, fill=2.0)
         os.utime(dem, (stat.st_atime, stat.st_mtime))
 
-        with rasterio.open(compensate_dem_for_snap(dem, cache_dir=cache)) as src:
+        with rasterio.open(prepare_dem_for_snap(dem, cache_dir=cache)) as src:
             assert src.read(1)[0, 0] == pytest.approx(2.0)
 
     def test_identical_content_under_different_names_shares_one_entry(
@@ -233,7 +612,7 @@ class TestCacheIdentity:
         first = _write_dem(tmp_path / "a" / "dem.tif", fill=3.0)
         second = _write_dem(tmp_path / "b" / "dem.tif", fill=3.0)
 
-        assert compensate_dem_for_snap(first, cache_dir=cache) == compensate_dem_for_snap(
+        assert prepare_dem_for_snap(first, cache_dir=cache) == prepare_dem_for_snap(
             second,
             cache_dir=cache,
         )
@@ -244,7 +623,7 @@ class TestCacheIdentity:
         tmp_path: Path,
     ) -> None:
         dem = make_dem()
-        out = compensate_dem_for_snap(dem, cache_dir=tmp_path / "cache")
+        out = prepare_dem_for_snap(dem, cache_dir=tmp_path / "cache")
 
         record = json.loads(_sidecar_of(out).read_text())
         assert record["source_path"] == str(dem.resolve())
@@ -265,10 +644,10 @@ class TestCacheIntegrity:
     ) -> None:
         cache = tmp_path / "cache"
         dem = make_dem(fill=5.0)
-        out = compensate_dem_for_snap(dem, cache_dir=cache)
+        out = prepare_dem_for_snap(dem, cache_dir=cache)
         out.write_bytes(out.read_bytes()[:100])
 
-        again = compensate_dem_for_snap(dem, cache_dir=cache)
+        again = prepare_dem_for_snap(dem, cache_dir=cache)
 
         assert again == out
         with rasterio.open(again) as src:
@@ -282,10 +661,10 @@ class TestCacheIntegrity:
         """Same-size garbage must fail the structural check, not slip through."""
         cache = tmp_path / "cache"
         dem = make_dem(fill=5.0)
-        out = compensate_dem_for_snap(dem, cache_dir=cache)
+        out = prepare_dem_for_snap(dem, cache_dir=cache)
         out.write_bytes(b"\x00" * out.stat().st_size)
 
-        with rasterio.open(compensate_dem_for_snap(dem, cache_dir=cache)) as src:
+        with rasterio.open(prepare_dem_for_snap(dem, cache_dir=cache)) as src:
             assert src.read(1)[0, 0] == pytest.approx(5.0)
 
     def test_missing_provenance_forces_a_rewrite(
@@ -295,10 +674,10 @@ class TestCacheIntegrity:
     ) -> None:
         cache = tmp_path / "cache"
         dem = make_dem(fill=5.0)
-        out = compensate_dem_for_snap(dem, cache_dir=cache)
+        out = prepare_dem_for_snap(dem, cache_dir=cache)
         _sidecar_of(out).unlink()
 
-        assert compensate_dem_for_snap(dem, cache_dir=cache) == out
+        assert prepare_dem_for_snap(dem, cache_dir=cache) == out
         assert _sidecar_of(out).exists()
 
     def test_unreadable_provenance_forces_a_rewrite(
@@ -308,10 +687,10 @@ class TestCacheIntegrity:
     ) -> None:
         cache = tmp_path / "cache"
         dem = make_dem()
-        out = compensate_dem_for_snap(dem, cache_dir=cache)
+        out = prepare_dem_for_snap(dem, cache_dir=cache)
         _sidecar_of(out).write_text("{not json")
 
-        assert compensate_dem_for_snap(dem, cache_dir=cache) == out
+        assert prepare_dem_for_snap(dem, cache_dir=cache) == out
         assert json.loads(_sidecar_of(out).read_text())["schema_version"] == CACHE_SCHEMA_VERSION
 
     def test_stale_schema_version_forces_a_rewrite(
@@ -321,13 +700,13 @@ class TestCacheIntegrity:
     ) -> None:
         cache = tmp_path / "cache"
         dem = make_dem()
-        out = compensate_dem_for_snap(dem, cache_dir=cache)
+        out = prepare_dem_for_snap(dem, cache_dir=cache)
         sidecar = _sidecar_of(out)
         record = json.loads(sidecar.read_text())
         record["schema_version"] = CACHE_SCHEMA_VERSION - 1
         sidecar.write_text(json.dumps(record))
 
-        compensate_dem_for_snap(dem, cache_dir=cache)
+        prepare_dem_for_snap(dem, cache_dir=cache)
 
         assert json.loads(sidecar.read_text())["schema_version"] == CACHE_SCHEMA_VERSION
 
@@ -338,7 +717,7 @@ class TestCacheIntegrity:
     ) -> None:
         cache = tmp_path / "cache"
         dem = make_dem()
-        out = compensate_dem_for_snap(dem, cache_dir=cache)
+        out = prepare_dem_for_snap(dem, cache_dir=cache)
         with rasterio.open(out, "r+") as dst:
             dst.update_tags(**{COMPENSATED_TAG: "0"})
         # Keep the recorded size in step so the tag check, not the size check, decides.
@@ -347,8 +726,26 @@ class TestCacheIntegrity:
         record["output_size"] = out.stat().st_size
         sidecar.write_text(json.dumps(record))
 
-        with rasterio.open(compensate_dem_for_snap(dem, cache_dir=cache)) as src:
+        with rasterio.open(prepare_dem_for_snap(dem, cache_dir=cache)) as src:
             assert src.tags()[COMPENSATED_TAG] == "1"
+
+    def test_entry_with_wrong_vertical_conversion_tag_is_rewritten(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        cache = tmp_path / "cache"
+        dem = make_dem()
+        out = prepare_dem_for_snap(dem, cache_dir=cache)
+        with rasterio.open(out, "r+") as dst:
+            dst.update_tags(**{VERTICAL_CONVERSION_TAG: "1"})
+        sidecar = _sidecar_of(out)
+        record = json.loads(sidecar.read_text())
+        record["output_size"] = out.stat().st_size
+        sidecar.write_text(json.dumps(record))
+
+        with rasterio.open(prepare_dem_for_snap(dem, cache_dir=cache)) as src:
+            assert src.tags()[VERTICAL_CONVERSION_TAG] == "0"
 
 
 class TestConcurrency:
@@ -362,7 +759,7 @@ class TestConcurrency:
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(
-                pool.map(lambda _: compensate_dem_for_snap(dem, cache_dir=cache), range(8)),
+                pool.map(lambda _: prepare_dem_for_snap(dem, cache_dir=cache), range(8)),
             )
 
         assert len(set(results)) == 1

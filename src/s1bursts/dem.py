@@ -1,4 +1,4 @@
-"""Make an external DEM sample correctly under SNAP."""
+"""Prepare an external DEM for use by SNAP."""
 
 from __future__ import annotations
 
@@ -7,10 +7,14 @@ import json
 import logging
 from pathlib import Path
 from secrets import token_hex
+from tempfile import TemporaryDirectory
 import time
 from typing import Any
+import warnings
 
 import numpy as np
+from pyproj import CRS, Transformer, datadir, proj_version_str
+from pyproj.transformer import TransformerGroup
 import rasterio
 from rasterio.errors import RasterioError
 from rasterio.transform import Affine
@@ -22,11 +26,13 @@ logger = logging.getLogger(__name__)
 # Marks a copy as deliberately offset, so it cannot be mistaken for a canonical
 # DEM if it turns up outside the cache.
 COMPENSATED_TAG = "SNAP_HALF_PIXEL_COMPENSATED"
+VERTICAL_CONVERSION_TAG = "SNAP_VERTICAL_DATUM_CONVERTED"
 
-# Bumping this invalidates every cache entry. Raise it whenever the conversion
-# changes in a way that alters the written raster (offset, dtype handling,
-# compression, block layout), so that stale entries are never reused.
-CACHE_SCHEMA_VERSION = 1
+TARGET_CRS = "EPSG:4979"
+
+# Bumping this invalidates every cache entry. Raise it whenever preparation
+# changes in a way that alters the written raster or its cache identity.
+CACHE_SCHEMA_VERSION = 2
 
 # Suffix of the JSON provenance sidecar written next to each cache entry.
 PROVENANCE_SUFFIX = ".provenance.json"
@@ -43,16 +49,27 @@ def _file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _cache_entry(dem: Path, cache_dir: Path, source_digest: str) -> Path:
-    """Return the cache path for a source content digest.
+def _preparation_digest(source_crs: str | None) -> str:
+    """Return a stable digest of options that affect the prepared raster."""
+    payload = json.dumps(
+        {"source_crs": source_crs, "target_crs": TARGET_CRS if source_crs else None},
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
-    The name carries the schema version and a prefix of the source's content
-    digest, so two different DEMs never share an entry no matter how their
-    files are named.
-    """
+
+def _cache_entry(
+    dem: Path,
+    cache_dir: Path,
+    source_digest: str,
+    preparation_digest: str,
+) -> Path:
+    """Return the cache path for source content and preparation options."""
     stem = Path(dem.name).stem
     suffix = "".join(Path(dem.name).suffixes) or ".tif"
-    return cache_dir / f"{stem}-v{CACHE_SCHEMA_VERSION}-{source_digest[:16]}{suffix}"
+    return cache_dir / (
+        f"{stem}-v{CACHE_SCHEMA_VERSION}-{source_digest[:16]}-{preparation_digest[:12]}{suffix}"
+    )
 
 
 def _read_provenance(sidecar: Path) -> dict[str, Any] | None:
@@ -64,29 +81,32 @@ def _read_provenance(sidecar: Path) -> dict[str, Any] | None:
     return record if isinstance(record, dict) else None
 
 
-def _entry_is_intact(dest: Path) -> bool:
-    """Check the written raster still opens and is still marked as compensated."""
+def _entry_is_intact(dest: Path, *, converted: bool) -> bool:
+    """Check that the prepared raster opens and carries the expected tags."""
     try:
         with rasterio.open(dest) as src:
-            tagged = src.tags().get(COMPENSATED_TAG) == "1"
+            tags = src.tags()
+            tagged = tags.get(COMPENSATED_TAG) == "1"
+            conversion_matches = tags.get(VERTICAL_CONVERSION_TAG) == str(int(converted))
     except (RasterioError, OSError):
-        logger.warning("Compensated DEM '%s' could not be opened; rewriting", dest.name)
+        logger.warning("Prepared DEM '%s' could not be opened; rewriting", dest.name)
         return False
 
-    if not tagged:
-        logger.warning("Compensated DEM '%s' lost its compensation tag; rewriting", dest.name)
+    if not tagged or not conversion_matches:
+        logger.warning("Prepared DEM '%s' has unexpected preparation tags; rewriting", dest.name)
         return False
     return True
 
 
-def _cache_entry_is_valid(dest: Path, sidecar: Path, source_digest: str) -> bool:
-    """Check that a cache entry matches its provenance and is readable.
-
-    Verifies the recorded source identity and schema version, then confirms the
-    written raster is intact: the byte size must match what was recorded, the
-    file must open, and it must carry the compensation tag. A truncated or
-    overwritten entry therefore fails rather than being handed to SNAP.
-    """
+def _cache_entry_is_valid(
+    dest: Path,
+    sidecar: Path,
+    source_digest: str,
+    preparation_digest: str,
+    *,
+    converted: bool,
+) -> bool:
+    """Check that a cache entry matches its provenance and is readable."""
     if not dest.exists():
         return False
 
@@ -97,6 +117,7 @@ def _cache_entry_is_valid(dest: Path, sidecar: Path, source_digest: str) -> bool
 
     matches_source = (
         record.get("source_sha256") == source_digest
+        and record.get("preparation_sha256") == preparation_digest
         and record.get("schema_version") == CACHE_SCHEMA_VERSION
         and record.get("compensated_tag") == COMPENSATED_TAG
     )
@@ -105,38 +126,210 @@ def _cache_entry_is_valid(dest: Path, sidecar: Path, source_digest: str) -> bool
         return False
 
     if dest.stat().st_size != record.get("output_size"):
-        logger.warning("Compensated DEM '%s' has an unexpected size; rewriting", dest.name)
+        logger.warning("Prepared DEM '%s' has an unexpected size; rewriting", dest.name)
         return False
 
-    return _entry_is_intact(dest)
+    return _entry_is_intact(dest, converted=converted)
 
 
-def _compensate(dem: Path, dest: Path) -> None:
-    """Write the half-pixel-shifted copy of ``dem`` to ``dest``.
+def _normalise_source_crs(dem: Path, source_crs: str | None) -> tuple[CRS | None, str | None]:
+    """Validate and canonicalise the optional compound source CRS."""
+    if source_crs is None:
+        return None, None
 
-    A unique suffix keeps concurrent writers from clobbering one another's
-    partial file; the rename that publishes it is atomic.
-    """
+    try:
+        compound = CRS.from_user_input(source_crs)
+    except Exception as err:
+        msg = f"Invalid source CRS '{source_crs}'"
+        raise ValueError(msg) from err
+
+    horizontal = [
+        part for part in compound.sub_crs_list if part.is_geographic or part.is_projected
+    ]
+    vertical = [part for part in compound.sub_crs_list if part.is_vertical]
+    if not compound.is_compound or len(horizontal) != 1 or len(vertical) != 1:
+        msg = (
+            "source_crs must be a compound horizontal and vertical CRS, "
+            "for example 'EPSG:4326+3855'"
+        )
+        raise ValueError(msg)
+
+    with rasterio.open(dem) as src:
+        if src.crs is None:
+            msg = f"DEM has no horizontal CRS: '{dem}'"
+            raise ValueError(msg)
+        raster_crs = CRS.from_wkt(src.crs.to_wkt())
+
+    if not horizontal[0].equals(raster_crs, ignore_axis_order=True):
+        msg = (
+            f"source_crs horizontal component '{horizontal[0].to_string()}' does not match "
+            f"DEM CRS '{raster_crs.to_string()}'"
+        )
+        raise ValueError(msg)
+
+    authority = compound.to_authority()
+    canonical = (
+        f"{authority[0]}:{authority[1]}"
+        if authority is not None
+        else compound.to_wkt("WKT2_2019", pretty=False)
+    )
+    return compound, canonical
+
+
+def _new_transformer_group(source_crs: CRS) -> TransformerGroup:
+    """Build a strict transformer group without leaking pyproj's missing-grid warning."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Best transformation is not available due to missing Grid.*",
+            category=UserWarning,
+        )
+        return TransformerGroup(
+            source_crs,
+            TARGET_CRS,
+            always_xy=True,
+            allow_ballpark=False,
+        )
+
+
+def _missing_grid_names(group: TransformerGroup) -> list[str]:
+    """Return the unique names of grids unavailable to a transformer group."""
+    return sorted(
+        {
+            grid.short_name
+            for operation in group.unavailable_operations
+            for grid in operation.grids
+            if not grid.available
+        },
+    )
+
+
+def _download_grids(group: TransformerGroup) -> None:
+    """Download open transformation grids and publish each file atomically."""
+    names = _missing_grid_names(group)
+    logger.info("Downloading PROJ transformation grid(s): %s", ", ".join(names))
+
+    user_dir: Path | None = None
+    published: list[str] = []
+    try:
+        user_dir = Path(datadir.get_user_data_dir(create=True))
+        with TemporaryDirectory(prefix="s1bursts-proj-", dir=user_dir) as temporary:
+            temporary_dir = Path(temporary)
+            group.download_grids(directory=temporary_dir, open_license=True)
+            for downloaded in temporary_dir.iterdir():
+                if downloaded.is_file():
+                    downloaded.replace(user_dir / downloaded.name)
+                    published.append(downloaded.name)
+    except (OSError, RuntimeError) as err:
+        location = f" to '{user_dir}'" if user_dir is not None else ""
+        msg = f"Could not download PROJ transformation grid(s) {', '.join(names)}{location}"
+        raise RuntimeError(msg) from err
+
+    if not published:
+        msg = (
+            f"No directly downloadable open-license PROJ grid is available for "
+            f"{', '.join(names)}. Install the required grid manually."
+        )
+        raise RuntimeError(msg)
+
+
+def _get_transformer(source_crs: CRS, *, download_missing_grids: bool) -> Transformer:
+    """Return the best exact vertical transformer, downloading grids if requested."""
+    group = _new_transformer_group(source_crs)
+    if not group.best_available and download_missing_grids:
+        _download_grids(group)
+        group = _new_transformer_group(source_crs)
+
+    if not group.best_available or not group.transformers:
+        names = _missing_grid_names(group)
+        detail = f" Missing grid(s): {', '.join(names)}." if names else ""
+        advice = (
+            " Downloading was enabled, but no exact transformation became available; "
+            "install the remaining grid manually."
+            if download_missing_grids
+            else " Pass download_missing_grids=True or install the grids with pyproj sync."
+        )
+        msg = (
+            f"No exact PROJ transformation from '{source_crs.to_string()}' to {TARGET_CRS}."
+            f"{detail}{advice}"
+        )
+        raise RuntimeError(msg)
+    return group.transformers[0]
+
+
+def _pixel_centres(
+    transform: Affine,
+    window: rasterio.windows.Window,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return two arrays containing every pixel centre in a raster window."""
+    columns, rows = np.meshgrid(
+        np.arange(window.col_off, window.col_off + window.width, dtype="float64") + 0.5,
+        np.arange(window.row_off, window.row_off + window.height, dtype="float64") + 0.5,
+    )
+    x = transform.a * columns + transform.b * rows + transform.c
+    y = transform.d * columns + transform.e * rows + transform.f
+    return x, y
+
+
+def _convert_elevations(
+    data: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    transformer: Transformer,
+    nodata: float | None,
+) -> None:
+    """Convert valid elevation samples in an array in place."""
+    for band in data:
+        valid = np.isfinite(band)
+        if nodata is not None and np.isfinite(nodata):
+            valid &= band != nodata
+        if not valid.any():
+            continue
+        _, _, transformed = transformer.transform(
+            x[valid],
+            y[valid],
+            band[valid],
+            errcheck=True,
+        )
+        band[valid] = transformed
+
+
+def _prepare(dem: Path, dest: Path, transformer: Transformer | None) -> None:
+    """Write a SNAP-prepared copy of ``dem`` to ``dest`` atomically."""
     partial = dest.with_name(f"{dest.name}.{token_hex(8)}.partial")
     try:
         with rasterio.open(dem) as src:
+            source_dtype = np.dtype(src.dtypes[0])
+            output_dtype = (
+                np.dtype("float32")
+                if transformer is not None and np.issubdtype(source_dtype, np.integer)
+                else source_dtype
+            )
             profile = src.profile.copy()
             profile.update(
                 transform=src.transform * Affine.translation(0.5, 0.5),
+                dtype=output_dtype.name,
                 driver="GTiff",
                 tiled=True,
                 blockxsize=512,
                 blockysize=512,
                 compress="deflate",
-                # Horizontal differencing is only defined for integers; floating
-                # point elevations need the dedicated float predictor.
-                predictor=3 if np.issubdtype(np.dtype(src.dtypes[0]), np.floating) else 2,
+                predictor=3 if np.issubdtype(output_dtype, np.floating) else 2,
                 BIGTIFF="IF_SAFER",
             )
             with rasterio.open(partial, "w", **profile) as dst:
-                dst.update_tags(**{COMPENSATED_TAG: "1"})
+                dst.update_tags(
+                    **{
+                        COMPENSATED_TAG: "1",
+                        VERTICAL_CONVERSION_TAG: str(int(transformer is not None)),
+                    },
+                )
                 for _, window in src.block_windows(1):
-                    dst.write(src.read(window=window), window=window)
+                    data = src.read(window=window, out_dtype=output_dtype)
+                    if transformer is not None:
+                        x, y = _pixel_centres(src.transform, window)
+                        _convert_elevations(data, x, y, transformer, src.nodata)
+                    dst.write(data, window=window)
         partial.replace(dest)
     except BaseException:
         partial.unlink(missing_ok=True)
@@ -154,65 +347,90 @@ def _write_provenance(sidecar: Path, record: dict[str, Any]) -> None:
         raise
 
 
-def compensate_dem_for_snap(dem: Path, *, cache_dir: Path | None = None) -> Path:
-    """Return a copy of ``dem`` that SNAP samples at the right position.
+def prepare_dem_for_snap(
+    dem: Path,
+    *,
+    source_crs: str | None = None,
+    download_missing_grids: bool = False,
+    cache_dir: Path | None = None,
+) -> Path:
+    """Return an external DEM prepared for SNAP's sampling and height conventions.
 
-    Writes a copy whose geotransform origin sits on the centre of the first pixel
-    rather than on its outer corner, which is where SNAP expects it.
+    The output geotransform is shifted by half a pixel because SNAP interprets an
+    external DEM's origin as the centre of its first pixel. When ``source_crs`` is
+    supplied, elevations are also transformed from that compound horizontal and
+    vertical CRS to WGS 84 ellipsoidal heights (EPSG:4979).
 
-    The result is correct **only** when read with SNAP's convention: GDAL, rasterio
-    and QGIS place it half a pixel off. It carries a ``SNAP_HALF_PIXEL_COMPENSATED``
-    tag and must not be used for anything but ``externalDEMFile``.
-
-    The copy is cached so that a pipeline processing many bursts against one DEM
-    pays for the conversion once. The cache is keyed by the source's content
-    digest. Each entry is written with a JSON provenance sidecar that is checked,
-    along with the entry's own integrity, before the entry is reused.
-    Writes are atomic, so concurrent workers may call this on the same DEM.
+    The result is correct **only** when read by SNAP and must only be passed as an
+    ``externalDEMFile``. Set SNAP's ``externalDEMApplyEGM`` parameter to ``False``.
+    Prepared copies are cached by source content and conversion settings.
 
     Parameters
     ----------
     dem : Path
-        Local DEM to convert. A DEM held on object storage has to be copied to
-        disk first, since SNAP takes a filesystem path.
+        Local DEM to prepare.
+    source_crs : str, optional
+        Compound CRS describing the DEM's horizontal and orthometric references,
+        for example ``"EPSG:4326+3855"`` for Copernicus GLO-30. If omitted,
+        elevations pass through unchanged.
+    download_missing_grids : bool, default False
+        Download required open-license PROJ grids when they are not installed.
     cache_dir : Path, optional
-        Directory to write the copy to. Defaults to ``SNAP_DEM_CACHE``
+        Directory for prepared copies. Defaults to ``SNAP_DEM_CACHE``
         (``~/.s1bursts/dem``).
 
     Returns
     -------
     Path
-        Path to the compensated copy.
+        Path to the prepared copy.
 
     Raises
     ------
     FileNotFoundError
         If ``dem`` does not exist.
     ValueError
-        If ``dem`` resolves into ``cache_dir``.
+        If the source CRS is invalid or inconsistent with the DEM.
+    RuntimeError
+        If no exact vertical transformation is available.
+    pyproj.exceptions.ProjError
+        If any DEM pixel falls outside the selected transformation's valid area.
     """
     if not dem.exists():
         msg = f"DEM not found: '{dem}'"
         raise FileNotFoundError(msg)
 
+    compound_crs, canonical_source_crs = _normalise_source_crs(dem, source_crs)
+    preparation_digest = _preparation_digest(canonical_source_crs)
+
     cache_dir = cache_dir or get_settings().snap.dem_cache
     cache_dir.mkdir(parents=True, exist_ok=True)
-
     if dem.resolve().parent == cache_dir.resolve():
-        msg = f"DEM is already inside the compensated-DEM cache: '{dem}'"
+        msg = f"DEM is already inside the prepared-DEM cache: '{dem}'"
         raise ValueError(msg)
 
     source_digest = _file_digest(dem)
-    dest = _cache_entry(dem, cache_dir, source_digest)
+    dest = _cache_entry(dem, cache_dir, source_digest, preparation_digest)
     sidecar = dest.with_name(dest.name + PROVENANCE_SUFFIX)
+    converted = compound_crs is not None
 
-    if _cache_entry_is_valid(dest, sidecar, source_digest):
-        logger.debug("Reusing compensated DEM '%s'", dest)
+    if _cache_entry_is_valid(
+        dest,
+        sidecar,
+        source_digest,
+        preparation_digest,
+        converted=converted,
+    ):
+        logger.debug("Reusing prepared DEM '%s'", dest)
         return dest
 
-    logger.info("Writing SNAP-compensated DEM '%s' -> '%s'", dem, dest)
+    transformer = (
+        _get_transformer(compound_crs, download_missing_grids=download_missing_grids)
+        if compound_crs is not None
+        else None
+    )
+    logger.info("Writing SNAP-prepared DEM '%s' -> '%s'", dem, dest)
     start = time.perf_counter()
-    _compensate(dem, dest)
+    _prepare(dem, dest, transformer)
     _write_provenance(
         sidecar,
         {
@@ -221,6 +439,13 @@ def compensate_dem_for_snap(dem: Path, *, cache_dir: Path | None = None) -> Path
             "source_path": str(dem.resolve()),
             "source_sha256": source_digest,
             "source_size": dem.stat().st_size,
+            "source_crs": canonical_source_crs,
+            "target_crs": TARGET_CRS if converted else None,
+            "transformer_description": transformer.description
+            if transformer is not None
+            else None,
+            "proj_version": proj_version_str,
+            "preparation_sha256": preparation_digest,
             "output_name": dest.name,
             "output_size": dest.stat().st_size,
             "pixel_offset": [0.5, 0.5],
