@@ -19,14 +19,10 @@ only meaningful against a stated SNAP, Java, DEM and OPERA product version.
 
 from __future__ import annotations
 
-from contextlib import suppress
-import hashlib
 import json
 import os
 from pathlib import Path
-import platform
 import shutil
-import subprocess
 import sys
 from typing import TYPE_CHECKING, Any
 
@@ -37,7 +33,6 @@ import pyproj
 # `tests` package resolves the same way it does under pytest.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import s1bursts
 from s1bursts import (
     BurstDatabase,
     BurstProcessor,
@@ -45,9 +40,6 @@ from s1bursts import (
     SearchQuery,
     SNAPConfig,
 )
-from s1bursts.config import get_settings
-from s1bursts.errors import ConfigurationError
-from s1bursts.snap_client import _resolve_gpt_path
 from s1bursts.snap_graph import BackscatterConfig
 from tests.opera_validation import (
     BLOCK,
@@ -57,110 +49,36 @@ from tests.opera_validation import (
     Scene,
     agreement,
     percentile_offset_db,
-    read_aligned,
 )
+from tests.raster_comparison import read_aligned
+from tests.validation_toolchain import processing_fingerprint, toolchain
 
 if TYPE_CHECKING:
+    from asf_search import ASFSession
+
     from s1bursts.query import Polarization
 
 RECORD_PATH = Path(__file__).parent / "opera_reference.json"
 
-PER_ACQUISITION_COLLECTION = "OPERA_L2_RTC-S1_V1"
-STATIC_COLLECTION = "OPERA_L2_RTC-S1-STATIC_V1"
+# ASF distributes both as one dataset, told apart by processing level.
+PER_ACQUISITION_LEVEL = "RTC"
+STATIC_LEVEL = "RTC-STATIC"
 
 
-def _snap_home() -> Path | None:
-    """Directory the resolved ``gpt`` lives under, if one resolves at all."""
-    with suppress(ConfigurationError, OSError):
-        return Path(_resolve_gpt_path(None, get_settings().snap)).parent.parent
-    return None
+def processing_config() -> BackscatterConfig:
+    """Graph configuration every scene is processed with."""
+    return BackscatterConfig(grid_spacing=GRID_SPACING)
 
 
-def _snap_version() -> str:
-    """SNAP's own version string, or ``"unknown"`` if it cannot be read."""
-    snap_home = _snap_home()
-    if snap_home is not None:
-        with suppress(OSError):
-            return (snap_home / "VERSION.txt").read_text().strip()
-    return "unknown"
-
-
-def processing_fingerprint(scene: Scene) -> str:
-    """Short hash of everything that determines the raster this script produces.
-
-    Products are cached on disk so that a regeneration interrupted part-way
-    through gigabytes of downloads can resume. That cache must not survive a
-    change to the processing itself, because the reason to regenerate is
-    usually a SNAP upgrade or a graph change -- reusing an old raster would
-    record the new toolchain beside measurements from the old one.
-
-    The SNAP version and the graph XML are hashed rather than the package
-    version, so that unrelated commits do not needlessly discard hours of work.
-
-    Raises
-    ------
-    RuntimeError
-        If the SNAP version cannot be read. Provenance may degrade to
-        ``"unknown"``, but a cache key must not: two different SNAP versions
-        would then hash alike and the stale products this key exists to discard
-        would be reused.
-    """
-    snap_version = _snap_version()
-    if snap_version == "unknown":
-        msg = (
-            "cannot read the SNAP version, so cached products cannot be keyed "
-            "safely; set SNAP_BIN (or run with `--env-file .env`) before regenerating"
-        )
-        raise RuntimeError(msg)
-
-    config = BackscatterConfig(grid_spacing=GRID_SPACING)
-    material = f"{snap_version}\n{scene.crs}\n{config.to_xml()}"
-    return hashlib.sha256(material.encode()).hexdigest()[:12]
-
-
-def _toolchain() -> dict[str, Any]:
-    """Record the versions the numbers below are only meaningful against.
-
-    Provenance is best-effort: a missing version string must degrade to
-    ``"unknown"`` rather than abort a regeneration that already cost tens of
-    minutes of downloads and GPT runs.
-    """
-    snap_home = _snap_home()
-    snap_version = _snap_version()
-
-    # SNAP bundles its own JRE, and that is the one GPT actually runs on.
-    java = shutil.which("java")
-    if snap_home is not None and (snap_home / "jre" / "bin" / "java").exists():
-        java = str(snap_home / "jre" / "bin" / "java")
-
-    java_version = "unknown"
-    if java:
-        with suppress(OSError, subprocess.SubprocessError, IndexError):
-            result = subprocess.run(  # noqa: S603
-                [java, "-version"],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
-            )
-            java_version = (result.stderr or result.stdout).splitlines()[0].strip()
-
-    return {
-        "s1bursts": getattr(s1bursts, "__version__", "unknown"),
-        "snap": snap_version,
-        "java": java_version,
-        "python": platform.python_version(),
-        "numpy": np.__version__,
-        "dem": "Copernicus 30m Global DEM (SNAP auto-download)",
-        "grid_spacing_m": GRID_SPACING,
-        "block_size_px": BLOCK,
-    }
+def scene_fingerprint(scene: Scene) -> str:
+    """Cache key for this scene's processed product; see `processing_fingerprint`."""
+    return processing_fingerprint(processing_config(), scene.crs)
 
 
 def fetch_opera(
     scene: Scene,
     destination: Path,
-    earthaccess: Any,
+    session: ASFSession,
 ) -> tuple[dict[str, Path], list[str]]:
     """Download the per-acquisition and STATIC granules for one scene.
 
@@ -173,41 +91,59 @@ def fetch_opera(
     tuple of (dict, list of str)
         The downloaded files, mapped from ``"acq:<layer>"`` / ``"static:<layer>"``,
         and the source acquisitions the static granule was derived from.
+
+    Raises
+    ------
+    RuntimeError
+        If a search does not match exactly one granule, or the static granule
+        was not derived from the acquisition ``Scene.static_date`` names.
     """
+    # Imported here, not at module scope: `asf_search` lives in the optional
+    # `validation` dependency group, and tests/test_opera_validation.py imports
+    # this module's helpers without it installed.
+    import asf_search  # noqa: PLC0415
+
     destination.mkdir(parents=True, exist_ok=True)
     wanted = {
-        PER_ACQUISITION_COLLECTION: (
-            f"*{scene.burst_tag}_{scene.gamma0_date.replace('-', '')}*",
+        PER_ACQUISITION_LEVEL: (
+            scene.search_window(scene.gamma0_date),
             (*(f"_{pol}.tif" for pol in scene.polarizations), "_mask.tif"),
         ),
-        STATIC_COLLECTION: (
-            f"*{scene.burst_tag}*",
+        STATIC_LEVEL: (
+            None,
             ("_rtc_anf_gamma0_to_beta0.tif", "_mask.tif"),
         ),
     }
 
     found: dict[str, Path] = {}
     static_sources: list[str] = []
-    for collection, (pattern, suffixes) in wanted.items():
-        granules = earthaccess.search_data(
-            short_name=collection,
-            granule_name=pattern,
-            count=5,
+    for level, (window, suffixes) in wanted.items():
+        # The static granule is dated by the mission, not by an acquisition, so
+        # only the per-acquisition search takes a time window.
+        window_arguments = {} if window is None else {"start": window[0], "end": window[1]}
+        granules = asf_search.search(
+            dataset=asf_search.DATASET.OPERA_S1,
+            processingLevel=level,
+            operaBurstID=scene.opera_burst_id,
+            maxResults=5,
+            **window_arguments,
         )
         if len(granules) != 1:
+            names = [granule.properties["fileID"] for granule in granules]
             msg = (
-                f"expected exactly one {collection} granule matching {pattern}, "
-                f"found {len(granules)}; disambiguate the search before regenerating"
+                f"expected exactly one OPERA {level} granule for "
+                f"{scene.opera_burst_id}, found {names}; disambiguate the search "
+                "before regenerating"
             )
             raise RuntimeError(msg)
         granule = granules[0]
 
-        if collection is STATIC_COLLECTION:
+        if level == STATIC_LEVEL:
             # The static layers encode the orbit of the one acquisition they were
             # derived from, so SNAP must process that same acquisition. Verify it
             # here rather than trusting `Scene.static_date` to have stayed correct
             # across an OPERA reprocessing.
-            static_sources = list(granule["umm"].get("InputGranules", []))
+            static_sources = list(granule.umm.get("InputGranules", []))
             stamp = scene.static_date.replace("-", "")
             if not any(stamp in source for source in static_sources):
                 msg = (
@@ -217,12 +153,15 @@ def fetch_opera(
                 )
                 raise RuntimeError(msg)
 
-        urls = [link for link in granule.data_links() if link.endswith(suffixes)]
+        # The granule's own URL is its HDF5 bundle; the GeoTIFF layers this
+        # comparison reads hang off it as additional URLs.
+        links = [granule.properties["url"], *(granule.properties.get("additionalUrls") or [])]
+        urls = [link for link in links if link.endswith(suffixes)]
         missing = [url for url in urls if not (destination / url.rsplit("/", 1)[-1]).exists()]
         if missing:
-            earthaccess.download(missing, str(destination))
+            asf_search.download_urls(urls=missing, path=str(destination), session=session)
 
-        kind = "static" if collection is STATIC_COLLECTION else "acq"
+        kind = "static" if level == STATIC_LEVEL else "acq"
         for url in urls:
             name = url.rsplit("/", 1)[-1]
             layer = name.rsplit("v1.0", 1)[-1].lstrip("_")
@@ -237,7 +176,7 @@ def process(scene: Scene, acquisition: str, polarization: Polarization, work: Pa
     graph change starts from a clean raster instead of silently reusing the
     previous one.
     """
-    fingerprint = processing_fingerprint(scene)
+    fingerprint = scene_fingerprint(scene)
     product = work / f"{scene.name}-{polarization}-{acquisition}-{fingerprint}.tif"
     if product.exists():
         return product
@@ -270,7 +209,7 @@ def process(scene: Scene, acquisition: str, polarization: Polarization, work: Pa
     result = processor.create_backscatter(
         bursts,
         crs=pyproj.CRS(scene.crs),
-        config=BackscatterConfig(grid_spacing=GRID_SPACING),
+        config=processing_config(),
         overwrite=True,
     )
     if result.n_failed:
@@ -283,9 +222,9 @@ def process(scene: Scene, acquisition: str, polarization: Polarization, work: Pa
     return product
 
 
-def compare_scene(scene: Scene, work: Path, earthaccess: Any) -> dict:
+def compare_scene(scene: Scene, work: Path, session: ASFSession) -> dict:
     """Run both comparisons for one scene and return its record entry."""
-    files, static_sources = fetch_opera(scene, work / "opera", earthaccess)
+    files, static_sources = fetch_opera(scene, work / "opera", session)
     block_key = f"block_{BLOCK}x{BLOCK}_{int(BLOCK * GRID_SPACING)}m"
 
     entry: dict[str, Any] = {
@@ -296,7 +235,7 @@ def compare_scene(scene: Scene, work: Path, earthaccess: Any) -> dict:
         "static_source_acquisition": scene.static_date,
         "opera_granules": sorted({path.name for path in files.values()}),
         "opera_static_source_granules": static_sources,
-        "processing_fingerprint": processing_fingerprint(scene),
+        "processing_fingerprint": scene_fingerprint(scene),
         "gamma0": {},
     }
 
@@ -339,17 +278,28 @@ def compare_scene(scene: Scene, work: Path, earthaccess: Any) -> dict:
     return entry
 
 
+def login() -> ASFSession:
+    """Open an ASF session with the Earthdata credentials in the environment.
+
+    Raises
+    ------
+    RuntimeError
+        If the credentials are not set.
+    """
+    # Imported here, not at module scope: `asf_search` lives in the optional
+    # `validation` dependency group.
+    import asf_search  # noqa: PLC0415
+
+    username = os.environ.get("EOSDIS_USERNAME")
+    password = os.environ.get("EOSDIS_PASSWORD")
+    if not (username and password):
+        msg = "set EOSDIS_USERNAME and EOSDIS_PASSWORD (or run with `--env-file .env`)"
+        raise RuntimeError(msg)
+    return asf_search.ASFSession().auth_with_creds(username, password)
+
+
 def main() -> int:
     """Regenerate the record, for one named scene or all of them."""
-    os.environ.setdefault("EARTHDATA_USERNAME", os.environ.get("EOSDIS_USERNAME", ""))
-    os.environ.setdefault("EARTHDATA_PASSWORD", os.environ.get("EOSDIS_PASSWORD", ""))
-    # Imported here, not at module scope: `earthaccess` lives in the optional
-    # `validation` dependency group, and tests/test_opera_validation.py imports
-    # this module's helpers without it installed.
-    import earthaccess  # noqa: PLC0415
-
-    earthaccess.login(strategy="environment")
-
     requested = sys.argv[1] if len(sys.argv) > 1 else None
     scenes = [s for s in SCENES if requested is None or s.name == requested]
     if not scenes:
@@ -369,9 +319,10 @@ def main() -> int:
     )
     work.mkdir(parents=True, exist_ok=True)
 
+    session = login()
     for scene in scenes:
         print(f"=== {scene.name} ({scene.burst_tag}) ===", flush=True)
-        record[scene.name] = compare_scene(scene, work, earthaccess)
+        record[scene.name] = compare_scene(scene, work, session)
         block_key = f"block_{BLOCK}x{BLOCK}_{int(BLOCK * GRID_SPACING)}m"
         for polarization, stats in record[scene.name]["gamma0"].items():
             print(f"  {polarization} bias: {stats[block_key]['median_dB_bias']} dB")
@@ -379,7 +330,11 @@ def main() -> int:
             f"  ANF ratio: {record[scene.name]['anf']['layover_shadow_excluded']['median_ratio']}",
         )
 
-    record["_toolchain"] = _toolchain()
+    record["_toolchain"] = toolchain(
+        dem="Copernicus 30m Global DEM (SNAP auto-download)",
+        grid_spacing_m=GRID_SPACING,
+        block_size_px=BLOCK,
+    )
     RECORD_PATH.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     print(f"\nWrote {RECORD_PATH}")
     return 0

@@ -1,0 +1,312 @@
+{
+  "_toolchain": {
+    "block_size_px": 3,
+    "dem": "Copernicus 30m Global DEM (SNAP auto-download)",
+    "grid_spacing_m": 20.0,
+    "hyp3_job_type": "INSAR_ISCE_BURST",
+    "hyp3_looks": "5x1",
+    "java": "openjdk version \"21.0.6\" 2025-01-21 LTS",
+    "numpy": "2.5.1",
+    "python": "3.13.13",
+    "s1bursts": "0.2.1.dev26+g98c1178c9.d20260818",
+    "snap": "13.0.0"
+  },
+  "alps-iw1": {
+    "alignment": {
+      "shape": [
+        1938,
+        4877
+      ],
+      "x_offset_px": -202,
+      "y_offset_px": -82
+    },
+    "asf_granules": [
+      "S1_030346_IW1_20220825T171549_VV_E345-BURST",
+      "S1_030346_IW1_20220906T171550_VV_84E1-BURST"
+    ],
+    "block_3x3_60m": {
+      "median_diff_hyp3_minus_ours": 0.18388,
+      "median_hyp3": 0.33487,
+      "median_ours": 0.18477,
+      "n": 438412,
+      "pearson": 0.84827,
+      "robust_scatter": 0.08659,
+      "spearman": 0.71276
+    },
+    "compared_px": 4093602,
+    "crs": "EPSG:32632",
+    "description": "Aletsch: extreme relief and land cover from bare rock to forest, spanning the full coherence range within one burst",
+    "full_burst_id": "015_030346_IW1",
+    "geolocation": {
+      "best_shift_px": [
+        0,
+        -1
+      ],
+      "correlation": {
+        "-1,-1": 0.79338,
+        "-1,-2": 0.77956,
+        "-1,-3": 0.75914,
+        "-1,0": 0.79355,
+        "-1,1": 0.77862,
+        "-1,2": 0.7557,
+        "-1,3": 0.73189,
+        "-2,-1": 0.77466,
+        "-2,-2": 0.76303,
+        "-2,-3": 0.74617,
+        "-2,0": 0.77595,
+        "-2,1": 0.7655,
+        "-2,2": 0.74731,
+        "-2,3": 0.7267,
+        "-3,-1": 0.74771,
+        "-3,-2": 0.73969,
+        "-3,-3": 0.72732,
+        "-3,0": 0.749,
+        "-3,1": 0.7427,
+        "-3,2": 0.73024,
+        "-3,3": 0.71433,
+        "0,-1": 0.79419,
+        "0,-2": 0.78116,
+        "0,-3": 0.76102,
+        "0,0": 0.7925,
+        "0,1": 0.77635,
+        "0,2": 0.75275,
+        "0,3": 0.72914,
+        "1,-1": 0.77608,
+        "1,-2": 0.76734,
+        "1,-3": 0.75167,
+        "1,0": 0.77308,
+        "1,1": 0.75896,
+        "1,2": 0.73951,
+        "1,3": 0.7192,
+        "2,-1": 0.7493,
+        "2,-2": 0.74482,
+        "2,-3": 0.73463,
+        "2,0": 0.7461,
+        "2,1": 0.73598,
+        "2,2": 0.72161,
+        "2,3": 0.70539,
+        "3,-1": 0.72443,
+        "3,-2": 0.72204,
+        "3,-3": 0.71512,
+        "3,0": 0.72182,
+        "3,1": 0.71444,
+        "3,2": 0.70348,
+        "3,3": 0.69006
+      },
+      "max_shift_px": 3,
+      "peak_contrast": 0.03317,
+      "peak_on_boundary": false,
+      "subpixel_shift_m": [
+        -9.14,
+        -12.3
+      ],
+      "subpixel_shift_px": [
+        -0.4572,
+        -0.6148
+      ]
+    },
+    "hyp3_job": {
+      "credit_cost": 1,
+      "job_id": "51060dd3-8395-49da-9030-59f9c6807091",
+      "looks": "5x1",
+      "name": "s1bursts-alps-iw1-20220825-20220906",
+      "plugin": "hyp3_isce2",
+      "plugin_version": "3.0.2",
+      "processor": "ISCE",
+      "processor_version": "2.6.5",
+      "product": "S1_030346_IW1_20220825_20220906_VV_INT20_C7D0",
+      "request_time": "2026-08-18T10:14:59+00:00"
+    },
+    "per_pixel": {
+      "median_diff_hyp3_minus_ours": 0.18592,
+      "median_hyp3": 0.34299,
+      "median_ours": 0.19139,
+      "n": 4093602,
+      "pearson": 0.7925,
+      "robust_scatter": 0.11704,
+      "spearman": 0.63656
+    },
+    "polarization": "VV",
+    "processing_fingerprint": "7021f4ee932a",
+    "quantiles": {
+      "q10": {
+        "diff_hyp3_minus_ours": 0.1816,
+        "hyp3": 0.24628,
+        "ours": 0.06468
+      },
+      "q25": {
+        "diff_hyp3_minus_ours": 0.17562,
+        "hyp3": 0.28167,
+        "ours": 0.10605
+      },
+      "q50": {
+        "diff_hyp3_minus_ours": 0.1516,
+        "hyp3": 0.34299,
+        "ours": 0.19139
+      },
+      "q75": {
+        "diff_hyp3_minus_ours": 0.18065,
+        "hyp3": 0.57662,
+        "ours": 0.39597
+      },
+      "q90": {
+        "diff_hyp3_minus_ours": 0.29124,
+        "hyp3": 0.88102,
+        "ours": 0.58978
+      }
+    },
+    "reference_acquisition": "2022-08-25",
+    "reference_spread": 0.63474,
+    "secondary_acquisition": "2022-09-06",
+    "temporal_baseline_days": 12
+  },
+  "mojave-iw1": {
+    "alignment": {
+      "shape": [
+        1882,
+        4647
+      ],
+      "x_offset_px": -514,
+      "y_offset_px": -93
+    },
+    "asf_granules": [
+      "S1_151219_IW1_20230601T135230_VV_822B-BURST",
+      "S1_151219_IW1_20230613T135230_VV_1D61-BURST"
+    ],
+    "block_3x3_60m": {
+      "median_diff_hyp3_minus_ours": 0.17526,
+      "median_hyp3": 0.99157,
+      "median_ours": 0.80883,
+      "n": 442203,
+      "pearson": 0.33386,
+      "robust_scatter": 0.10254,
+      "spearman": 0.50166
+    },
+    "compared_px": 4136904,
+    "crs": "EPSG:32611",
+    "description": "Mojave Desert: arid and stable, holding high coherence over almost the whole burst where the two estimators must converge",
+    "full_burst_id": "071_151219_IW1",
+    "geolocation": {
+      "best_shift_px": [
+        0,
+        -2
+      ],
+      "correlation": {
+        "-1,-1": 0.31512,
+        "-1,-2": 0.31648,
+        "-1,-3": 0.31448,
+        "-1,0": 0.31178,
+        "-1,1": 0.30819,
+        "-1,2": 0.30323,
+        "-1,3": 0.29727,
+        "-2,-1": 0.30886,
+        "-2,-2": 0.31072,
+        "-2,-3": 0.30977,
+        "-2,0": 0.3053,
+        "-2,1": 0.3018,
+        "-2,2": 0.29791,
+        "-2,3": 0.2933,
+        "-3,-1": 0.29986,
+        "-3,-2": 0.30212,
+        "-3,-3": 0.30228,
+        "-3,0": 0.29647,
+        "-3,1": 0.29327,
+        "-3,2": 0.29042,
+        "-3,3": 0.2872,
+        "0,-1": 0.31578,
+        "0,-2": 0.31674,
+        "0,-3": 0.31448,
+        "0,0": 0.31285,
+        "0,1": 0.30964,
+        "0,2": 0.30431,
+        "0,3": 0.29818,
+        "1,-1": 0.30958,
+        "1,-2": 0.31054,
+        "1,-3": 0.309,
+        "1,0": 0.30752,
+        "1,1": 0.30505,
+        "1,2": 0.30083,
+        "1,3": 0.29582,
+        "2,-1": 0.29939,
+        "2,-2": 0.30029,
+        "2,-3": 0.29985,
+        "2,0": 0.29799,
+        "2,1": 0.29649,
+        "2,2": 0.29403,
+        "2,3": 0.29077,
+        "3,-1": 0.28861,
+        "3,-2": 0.28952,
+        "3,-3": 0.28957,
+        "3,0": 0.28757,
+        "3,1": 0.28673,
+        "3,2": 0.28554,
+        "3,3": 0.28375
+      },
+      "max_shift_px": 3,
+      "peak_contrast": 0.00226,
+      "peak_on_boundary": false,
+      "subpixel_shift_m": [
+        -9.2,
+        -35.96
+      ],
+      "subpixel_shift_px": [
+        -0.4598,
+        -1.7981
+      ]
+    },
+    "hyp3_job": {
+      "credit_cost": 1,
+      "job_id": "5f332cbc-d4ea-4d75-8fb5-2e2f56b19367",
+      "looks": "5x1",
+      "name": "s1bursts-mojave-iw1-20230601-20230613",
+      "plugin": "hyp3_isce2",
+      "plugin_version": "3.0.2",
+      "processor": "ISCE",
+      "processor_version": "2.6.5",
+      "product": "S1_151219_IW1_20230601_20230613_VV_INT20_0B42",
+      "request_time": "2026-08-18T10:15:01+00:00"
+    },
+    "per_pixel": {
+      "median_diff_hyp3_minus_ours": 0.17695,
+      "median_hyp3": 0.99217,
+      "median_ours": 0.80805,
+      "n": 4136904,
+      "pearson": 0.31285,
+      "robust_scatter": 0.10605,
+      "spearman": 0.4763
+    },
+    "polarization": "VV",
+    "processing_fingerprint": "f9781e50fe07",
+    "quantiles": {
+      "q10": {
+        "diff_hyp3_minus_ours": 0.36041,
+        "hyp3": 0.94408,
+        "ours": 0.58368
+      },
+      "q25": {
+        "diff_hyp3_minus_ours": 0.26974,
+        "hyp3": 0.98021,
+        "ours": 0.71047
+      },
+      "q50": {
+        "diff_hyp3_minus_ours": 0.18412,
+        "hyp3": 0.99217,
+        "ours": 0.80805
+      },
+      "q75": {
+        "diff_hyp3_minus_ours": 0.12679,
+        "hyp3": 0.99635,
+        "ours": 0.86956
+      },
+      "q90": {
+        "diff_hyp3_minus_ours": 0.09266,
+        "hyp3": 0.99803,
+        "ours": 0.90538
+      }
+    },
+    "reference_acquisition": "2023-06-01",
+    "reference_spread": 0.05395,
+    "secondary_acquisition": "2023-06-13",
+    "temporal_baseline_days": 12
+  }
+}

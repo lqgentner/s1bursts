@@ -6,7 +6,7 @@
     "java": "openjdk version \"21.0.6\" 2025-01-21 LTS",
     "numpy": "2.5.1",
     "python": "3.13.13",
-    "s1bursts": "0.2.1.dev25+g6b2d5744d.d20260817",
+    "s1bursts": "0.2.1.dev26+g98c1178c9.d20260818",
     "snap": "13.0.0"
   },
   "alps-iw1": {

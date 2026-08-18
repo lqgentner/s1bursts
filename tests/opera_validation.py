@@ -1,36 +1,6 @@
-"""Cross-validation of the SNAP-derived products against OPERA RTC-S1.
+"""Helpers and scene definitions for OPERA validation tests.
 
-SNAP is the reference implementation for this package's processing, so its
-output cannot be validated against itself. OPERA RTC-S1, produced by NASA/JPL
-with ISCE3, provides an independent reference: it is generated per burst under
-the same ESA burst-ID scheme, geocoded to 30 m in UTM using the Copernicus
-GLO-30 DEM, and reports gamma-0 as linear power. The processing chain is the
-only substantial difference between the two products.
-
-Two layers are compared, each subject to a condition that must be met for the
-result to be meaningful.
-
-``gamma0``
-    Compared after averaging in power over blocks. Per-pixel differences are
-    dominated by speckle and by the difference in effective resolution between
-    this package's multilooked product and OPERA's native 30 m posting; only
-    the block bias supports a statement about radiometry. Averaging is
-    performed in power, not in decibels.
-
-``simulatedImage`` and ``rtc_anf_gamma0_to_beta0``
-    The area normalization factor *A*. Since gamma-0 = beta-0 / *A*, the factor
-    converting gamma-0 back to beta-0 is *A*, which SNAP writes as
-    ``simulatedImage``. The layer depends only on geometry and the DEM, so
-    comparing it isolates terrain flattening and geocoding from calibration and
-    speckle. OPERA ships it only in the static granule, which is derived from
-    the single acquisition named in the granule's ``InputGranules`` field and
-    is not time-invariant: another acquisition of the same burst differs by
-    about 2% at the median and 9% at the 90th percentile, exceeding the
-    difference between processors. Process the acquisition recorded in
-    ``Scene.static_date``.
-
-See ``fixtures/REFERENCE.md`` for the full description of the reference and its
-conditions.
+See ``fixtures/REFERENCE.md`` for the comparison design and requirements.
 """
 
 from __future__ import annotations
@@ -38,12 +8,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date as _date
 from datetime import timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-import rasterio
-from rasterio.windows import Window
+
+from tests.raster_comparison import block_mean
 
 if TYPE_CHECKING:
     from s1bursts.query import Polarization, SubSwath
@@ -82,8 +51,19 @@ class Scene:
 
     @property
     def burst_tag(self) -> str:
-        """OPERA's burst identifier, e.g. ``T015-030346-IW1``."""
+        """OPERA's burst identifier as its granule names spell it, ``T015-030346-IW1``."""
         return f"T{self.track:03d}-{self.burst_id:06d}-{self.sub_swath}"
+
+    @property
+    def opera_burst_id(self) -> str:
+        """The same identifier as the catalog indexes it, ``T015_030346_IW1``.
+
+        CMR's ``operaBurstID`` field separates the parts with underscores where
+        the granule names use hyphens. Searching with the hyphenated form
+        matches nothing rather than failing, so the two spellings are kept
+        apart here.
+        """
+        return self.burst_tag.replace("-", "_")
 
     def search_window(self, acquisition: str) -> tuple[str, str]:
         """Return a +/-1 day window around an acquisition date, for ``SearchQuery``."""
@@ -117,100 +97,11 @@ SCENES: tuple[Scene, ...] = (
 )
 
 
-def read_aligned(
-    path_a: Path,
-    path_b: Path,
-    band_name: str,
-) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Read a band from two rasters over their shared geographic extent.
-
-    Products of the same burst from different acquisitions have different
-    extents *and* different origins, so cropping both from ``(0, 0)`` compares
-    pixels hundreds of columns apart. The window is computed in world
-    coordinates instead; the origins differ by whole pixels, so it is exact and
-    involves no resampling.
-
-    Parameters
-    ----------
-    path_a, path_b : pathlib.Path
-        Rasters to compare. They must share a CRS and resolution.
-    band_name : str
-        Band description to read. Falls back to the first band for writers that
-        set no descriptions, such as OPERA's single-band GeoTIFFs.
-
-    Returns
-    -------
-    tuple of (numpy.ndarray, numpy.ndarray, dict)
-        The two bands on the shared window, and the alignment it used.
-
-    Raises
-    ------
-    ValueError
-        If the rasters differ in CRS or resolution, sit on incompatible grids,
-        or do not overlap.
-    """
-    with rasterio.open(path_a) as src_a, rasterio.open(path_b) as src_b:
-        if src_a.crs != src_b.crs:
-            msg = f"CRS mismatch: {src_a.crs} vs {src_b.crs}"
-            raise ValueError(msg)
-        if src_a.res != src_b.res:
-            msg = f"resolution mismatch: {src_a.res} vs {src_b.res}"
-            raise ValueError(msg)
-        res_x, res_y = src_a.res
-
-        offset_x = (src_b.transform.c - src_a.transform.c) / res_x
-        offset_y = (src_a.transform.f - src_b.transform.f) / res_y
-        if abs(offset_x - round(offset_x)) > 1e-6 or abs(offset_y - round(offset_y)) > 1e-6:
-            msg = (
-                "rasters are not on a common grid: origins differ by "
-                f"({offset_x}, {offset_y}) pixels, which is not whole"
-            )
-            raise ValueError(msg)
-
-        left = max(src_a.bounds.left, src_b.bounds.left)
-        right = min(src_a.bounds.right, src_b.bounds.right)
-        bottom = max(src_a.bounds.bottom, src_b.bounds.bottom)
-        top = min(src_a.bounds.top, src_b.bounds.top)
-        if right <= left or top <= bottom:
-            msg = "rasters do not overlap"
-            raise ValueError(msg)
-
-        def shared_window(src: rasterio.DatasetReader) -> Window:
-            return Window(
-                round((left - src.transform.c) / res_x),
-                round((src.transform.f - top) / res_y),
-                round((right - left) / res_x),
-                round((top - bottom) / res_y),
-            )
-
-        def band_index(src: rasterio.DatasetReader) -> int:
-            names = list(src.descriptions)
-            return names.index(band_name) + 1 if band_name in names else 1
-
-        array_a = src_a.read(band_index(src_a), window=shared_window(src_a)).astype("float64")
-        array_b = src_b.read(band_index(src_b), window=shared_window(src_b)).astype("float64")
-        alignment = {
-            "x_offset_px": round(offset_x),
-            "y_offset_px": round(offset_y),
-            "shape": list(array_a.shape),
-        }
-
-    return array_a, array_b, alignment
-
-
-def block_mean(values: np.ndarray, valid: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
-    """Average ``values`` in power over ``k`` x ``k`` blocks of valid pixels."""
-    rows = (values.shape[0] // k) * k
-    cols = (values.shape[1] // k) * k
-    blocks = np.where(valid, values, 0.0)[:rows, :cols].reshape(rows // k, k, cols // k, k)
-    counts = valid[:rows, :cols].reshape(rows // k, k, cols // k, k)
-    total = blocks.sum(axis=(1, 3))
-    count = counts.sum(axis=(1, 3))
-    return np.divide(total, count, out=np.full_like(total, np.nan), where=count > 0), count
-
-
 def agreement(ours: np.ndarray, theirs: np.ndarray, valid: np.ndarray, k: int = 1) -> dict:
     """Summarize the agreement between two rasters as bias and scatter.
+
+    Block averaging is performed in power, so ``ours`` and ``theirs`` must be
+    linear power rather than decibels.
 
     Parameters
     ----------
@@ -260,13 +151,7 @@ def percentile_offset_db(
     valid: np.ndarray,
     percentile: float = NOISE_FLOOR_PERCENTILE,
 ) -> float:
-    """Difference between the two products' backscatter levels at a percentile.
-
-    Compares the two distributions at the same percentile rather than comparing
-    selected pixels pairwise, so no pixels are chosen on either image and the
-    result cannot be distorted by regression towards the mean. Reported in the
-    same direction as the ``median_dB_bias`` of :func:`agreement`: a negative
-    value means OPERA is the brighter of the two.
+    """Compare backscatter levels at the same percentile.
 
     Parameters
     ----------
@@ -280,7 +165,7 @@ def percentile_offset_db(
     Returns
     -------
     float
-        The level difference in decibels.
+        Difference in decibels; negative means OPERA is brighter.
     """
     keep = valid & np.isfinite(ours) & np.isfinite(theirs) & (ours > 0) & (theirs > 0)
     level_ours = np.percentile(ours[keep], percentile)

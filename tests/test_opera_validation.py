@@ -1,21 +1,11 @@
-"""Scientific cross-validation against OPERA RTC-S1 (ISCE3).
+"""Validate SNAP products against OPERA RTC-S1.
 
 Deselected by default; run with::
 
     uv sync --group validation
     uv run pytest -m validation
 
-These tests are slow and heavy: each scene downloads Sentinel-1 bursts from
-CDSE and OPERA granules from ASF DAAC, then runs SNAP GPT. Run them per
-release, not per commit.
-
-They assert only absolute bounds -- what must be true of any correct build --
-rather than reproduction of previously measured numbers. Because SNAP is
-bit-reproducible, the product goldens already detect any change to the output,
-offline and immediately; repeating that check here would cost two downloads and
-two GPT runs to learn nothing new. The measured values live in
-``fixtures/opera_reference.json`` as evidence, not as a test input; regenerate
-them with ``fixtures/regenerate_opera_reference.py``.
+See ``fixtures/REFERENCE.md`` for reference details and run requirements.
 """
 
 from __future__ import annotations
@@ -38,8 +28,9 @@ from tests.opera_validation import (
     SCENES,
     Scene,
     agreement,
-    read_aligned,
 )
+from tests.raster_comparison import read_aligned
+from tests.validation_toolchain import workdir
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -74,25 +65,19 @@ requires_prerequisites = pytest.mark.skipif(
 
 @pytest.fixture(scope="session")
 def campaign(tmp_path_factory: pytest.TempPathFactory) -> Callable[[Scene], dict]:
-    """Run (and cache) the comparison for a scene.
-
-    Session-scoped because a scene costs several burst downloads and SNAP
-    runs; every test for that scene must share the one result.
-    """
-    earthaccess = pytest.importorskip(
-        "earthaccess",
-        reason="install the `validation` dependency group",
-    )
+    """Run each scene comparison once per test session."""
+    pytest.importorskip("asf_search", reason="install the `validation` dependency group")
     # Imported lazily so that collecting this module does not require the
     # optional `validation` dependency group.
-    from tests.fixtures.regenerate_opera_reference import compare_scene  # noqa: PLC0415
+    from tests.fixtures.regenerate_opera_reference import compare_scene, login  # noqa: PLC0415
 
-    work = tmp_path_factory.mktemp("opera-validation")
+    work = workdir(tmp_path_factory, "opera-validation")
+    session = login()
     cache: dict[str, dict] = {}
 
     def run(scene: Scene) -> dict:
         if scene.name not in cache:
-            cache[scene.name] = compare_scene(scene, work, earthaccess=earthaccess)
+            cache[scene.name] = compare_scene(scene, work, session)
         return cache[scene.name]
 
     return run
@@ -113,11 +98,7 @@ class TestRadiometricContract:
         scene: Scene,
         campaign: Callable[[Scene], dict],
     ) -> None:
-        """Block-averaged gamma0 must agree with ISCE3 to well under calibration accuracy.
-
-        Compared on 150 m blocks: per-pixel scatter is speckle and differing
-        effective resolution, and says nothing about radiometry.
-        """
+        """Check block-averaged gamma-0 bias against OPERA."""
         results = campaign(scene)
         block_key = f"block_{BLOCK}x{BLOCK}_{int(BLOCK * GRID_SPACING)}m"
 
@@ -136,14 +117,7 @@ class TestRadiometricContract:
         scene: Scene,
         campaign: Callable[[Scene], dict],
     ) -> None:
-        """The two products diverge in the dark tail, but only by so much.
-
-        OPERA clips its noise-corrected signal at zero while still single-looked,
-        which biases its multilooked mean upward where the signal approaches the
-        noise level. The offset therefore grows as a scene darkens, and this
-        bounds how far. Levels are compared at a percentile rather than over
-        selected pixels, so nothing is chosen on either image.
-        """
+        """Check the low-backscatter offset against its limit."""
         results = campaign(scene)
         key = f"p{int(NOISE_FLOOR_PERCENTILE):02d}_dB_offset"
 
@@ -189,11 +163,7 @@ class TestGeometryContract:
         scene: Scene,
         campaign: Callable[[Scene], dict],
     ) -> None:
-        """SNAP's ``simulatedImage`` is the same quantity as OPERA's gamma0-to-beta0 ANF.
-
-        This isolates terrain flattening and geocoding: the factor is pure
-        geometry and DEM, with no calibration or speckle in it.
-        """
+        """Compare SNAP's ``simulatedImage`` with OPERA's ANF."""
         stats = campaign(scene)["anf"]["layover_shadow_excluded"]
 
         assert abs(stats["median_ratio"] - 1.0) < MAX_ANF_RATIO_DEVIATION, (
@@ -234,14 +204,7 @@ class TestComparisonHelpers:
             read_aligned(aligned, offset, "whatever")
 
     def test_block_averaging_suppresses_speckle_without_moving_the_bias(self) -> None:
-        """The premise of the gamma0 comparison, on synthetic data.
-
-        Two views of one scene differing by a known 5% offset, each with its own
-        speckle. Averaging in power must recover the offset and the underlying
-        spatial pattern. The scene is built from patches rather than white noise
-        because real terrain is spatially correlated: averaging a white field
-        would remove the signal along with the speckle.
-        """
+        """Check that block averaging preserves a known bias."""
         rng = np.random.default_rng(0)
         patches = rng.uniform(0.05, 0.5, size=(10, 10))
         truth = np.kron(patches, np.ones((20, 20)))
