@@ -1,0 +1,152 @@
+{
+  "_toolchain": {
+    "block_size_px": 5,
+    "dem": "Copernicus 30m Global DEM (SNAP auto-download)",
+    "grid_spacing_m": 30.0,
+    "java": "openjdk version \"21.0.6\" 2025-01-21 LTS",
+    "numpy": "2.5.1",
+    "python": "3.13.13",
+    "s1bursts": "0.2.1.dev25+g6b2d5744d.d20260817",
+    "snap": "13.0.0"
+  },
+  "alps-iw1": {
+    "anf": {
+      "alignment": {
+        "shape": [
+          1305,
+          3252
+        ],
+        "x_offset_px": -60,
+        "y_offset_px": -120
+      },
+      "layover_shadow_excluded": {
+        "corr_log": 0.98659,
+        "median_dB_bias": 0.0196,
+        "median_ratio": 1.00452,
+        "n": 1743947
+      }
+    },
+    "burst_tag": "T015-030346-IW1",
+    "crs": "EPSG:32632",
+    "description": "Aletsch: extreme relief, exercising terrain flattening at its limit",
+    "gamma0": {
+      "VH": {
+        "alignment": {
+          "shape": [
+            1292,
+            3154
+          ],
+          "x_offset_px": -158,
+          "y_offset_px": -107
+        },
+        "block_5x5_150m": {
+          "corr_log": 0.99236,
+          "median_dB_bias": -0.0698,
+          "median_ratio": 0.98406,
+          "n": 54677
+        },
+        "p01_dB_offset": -1.1385
+      },
+      "VV": {
+        "alignment": {
+          "shape": [
+            1292,
+            3154
+          ],
+          "x_offset_px": -158,
+          "y_offset_px": -107
+        },
+        "block_5x5_150m": {
+          "corr_log": 0.9911,
+          "median_dB_bias": -0.0442,
+          "median_ratio": 0.98986,
+          "n": 54677
+        },
+        "p01_dB_offset": -0.7395
+      }
+    },
+    "gamma0_acquisition": "2022-08-25",
+    "opera_granules": [
+      "OPERA_L2_RTC-S1-STATIC_T015-030346-IW1_20140403_S1A_30_v1.0_mask.tif",
+      "OPERA_L2_RTC-S1-STATIC_T015-030346-IW1_20140403_S1A_30_v1.0_rtc_anf_gamma0_to_beta0.tif",
+      "OPERA_L2_RTC-S1_T015-030346-IW1_20220825T171549Z_20250217T014216Z_S1A_30_v1.0_VH.tif",
+      "OPERA_L2_RTC-S1_T015-030346-IW1_20220825T171549Z_20250217T014216Z_S1A_30_v1.0_VV.tif",
+      "OPERA_L2_RTC-S1_T015-030346-IW1_20220825T171549Z_20250217T014216Z_S1A_30_v1.0_mask.tif"
+    ],
+    "opera_static_source_granules": [
+      "S1A_IW_SLC__1SDV_20160504T171448_20160504T171515_011112_010BED_965C"
+    ],
+    "processing_fingerprint": "c24f17cdad91",
+    "static_source_acquisition": "2016-05-04"
+  },
+  "iceland-iw3": {
+    "anf": {
+      "alignment": {
+        "shape": [
+          1206,
+          2808
+        ],
+        "x_offset_px": -146,
+        "y_offset_px": -197
+      },
+      "layover_shadow_excluded": {
+        "corr_log": 0.98995,
+        "median_dB_bias": 0.001,
+        "median_ratio": 1.00024,
+        "n": 1879833
+      }
+    },
+    "burst_tag": "T016-032602-IW3",
+    "crs": "EPSG:32627",
+    "description": "Iceland ice caps: low relief and low backscatter, exercising the noise floor",
+    "gamma0": {
+      "VH": {
+        "alignment": {
+          "shape": [
+            1206,
+            2808
+          ],
+          "x_offset_px": -146,
+          "y_offset_px": -197
+        },
+        "block_5x5_150m": {
+          "corr_log": 0.99785,
+          "median_dB_bias": -0.0091,
+          "median_ratio": 0.99791,
+          "n": 70830
+        },
+        "p01_dB_offset": -2.4407
+      },
+      "VV": {
+        "alignment": {
+          "shape": [
+            1206,
+            2808
+          ],
+          "x_offset_px": -146,
+          "y_offset_px": -197
+        },
+        "block_5x5_150m": {
+          "corr_log": 0.9985,
+          "median_dB_bias": -0.0097,
+          "median_ratio": 0.99777,
+          "n": 70830
+        },
+        "p01_dB_offset": -1.3246
+      }
+    },
+    "gamma0_acquisition": "2016-05-16",
+    "opera_granules": [
+      "OPERA_L2_RTC-S1-STATIC_T016-032602-IW3_20140403_S1A_30_v1.0_mask.tif",
+      "OPERA_L2_RTC-S1-STATIC_T016-032602-IW3_20140403_S1A_30_v1.0_rtc_anf_gamma0_to_beta0.tif",
+      "OPERA_L2_RTC-S1_T016-032602-IW3_20160516T185851Z_20250928T140959Z_S1A_30_v1.0_VH.tif",
+      "OPERA_L2_RTC-S1_T016-032602-IW3_20160516T185851Z_20250928T140959Z_S1A_30_v1.0_VV.tif",
+      "OPERA_L2_RTC-S1_T016-032602-IW3_20160516T185851Z_20250928T140959Z_S1A_30_v1.0_mask.tif"
+    ],
+    "opera_static_source_granules": [
+      "S1A_IW_SLC__1SDV_20160516T185836_20160516T185903_011288_0111A0_2EB2"
+    ],
+    "processing_fingerprint": "4ec08ddeba95",
+    "static_source_acquisition": "2016-05-16"
+  }
+}

@@ -89,9 +89,32 @@ s1bursts call, or export the variables (e.g. `uv run --env-file .env`):
 | `SNAP_MAX_WORKERS` | Parallel GPT processes (default: 1) |
 | `SNAP_MAX_RAM_GB` | Total RAM budget across GPT processes in GB (default: 4) |
 | `SNAP_AUXDATA_PATH` | Shared DEM/orbit cache (default: `~/.snap/auxdata`) |
-| `SNAP_DEM_CACHE` | Where `compensate_dem_for_snap()` caches converted external DEMs (default: `~/.s1bursts/dem`) |
+| `SNAP_DEM_CACHE` | Where `prepare_dem_for_snap()` caches SNAP-ready external DEMs (default: `~/.s1bursts/dem`) |
 
 Searching the burst catalog requires no credentials.
+
+### External DEM preparation
+
+SNAP expects external DEM heights relative to the WGS 84 ellipsoid and interprets
+their geotransform differently from GDAL. Prepare an orthometric DEM once before
+passing it as `externalDEMFile`:
+
+```python
+from pathlib import Path
+
+from s1bursts import prepare_dem_for_snap
+
+dem = prepare_dem_for_snap(
+    Path("Copernicus_GLO30.tif"),
+    source_crs="EPSG:4326+3855",  # WGS 84 horizontal + EGM2008 height
+)
+```
+
+If the required grid is not installed, opt into downloading from PROJ's
+open-license grid catalog with `download_missing_grids=True`. Some grids are not
+available there and must be installed manually. Omit `source_crs` when the
+elevations are already ellipsoidal. Use the returned path only with SNAP and
+leave `external_dem_apply_egm=False`.
 
 ### Burst-ID map (optional)
 

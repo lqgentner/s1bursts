@@ -38,6 +38,7 @@ uv run dmypy run src/s1bursts
 ```bash
 uv run pytest                  # offline unit tests (default)
 uv run pytest -m integration   # network/SNAP integration tests
+uv run pytest -m validation    # scientific cross-validation against OPERA RTC-S1
 ```
 
 Unit tests are fully offline: network, CDSE credentials, the burst-map lookup tables, and SNAP GPT are mocked. Tests marked `integration` require CDSE credentials and/or a local SNAP install (`SNAP_BIN`) exported into the environment; they are deselected by default via `addopts`, and skip themselves when a prerequisite is missing so the suite degrades gracefully on a partially configured machine.
@@ -45,6 +46,19 @@ Unit tests are fully offline: network, CDSE credentials, the burst-map lookup ta
 Set `S1BURSTS_REQUIRE_INTEGRATION=1` to turn those skips into failures. CI sets it, because every prerequisite is provided there and a run that silently skipped everything would look the same as a passing one.
 
 Unexpected warnings fail the suite (`filterwarnings = ["error", ...]` in `pyproject.toml`). Add a narrow `ignore` with its reason and removal condition rather than widening the filter.
+
+### Scientific validation
+
+SNAP is the reference implementation for the processing graphs, so its output cannot be checked against itself. Product goldens answer "did we change?"; `pytest -m validation` answers "are we right?", by comparing RTC output against [OPERA RTC-S1](https://hyp3-docs.asf.alaska.edu/guides/opera_rtc_product_guide/) — ISCE3-produced, burst-level on the same ESA burst IDs, same Copernicus GLO-30 DEM, so only the processing chain differs.
+
+```bash
+uv sync --group validation     # adds earthaccess (Earthdata client)
+uv run --env-file .env pytest -m validation
+```
+
+Needs CDSE credentials, Earthdata credentials (`EOSDIS_USERNAME` / `EOSDIS_PASSWORD`), and SNAP. Each scene downloads bursts and runs GPT, so this takes a few minutes. The committed record is `tests/fixtures/opera_reference.json`; regenerate it with `tests/fixtures/regenerate_opera_reference.py` and review the diff, since every moved number is a change in what users receive.
+
+[`tests/fixtures/REFERENCE.md`](tests/fixtures/REFERENCE.md) describes the reference product and two conditions the comparison depends on: the static layers must be compared against the acquisition they were derived from, and gamma-0 must be averaged in power before comparing.
 
 ### SNAP in CI
 

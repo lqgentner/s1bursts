@@ -71,6 +71,12 @@ dev = [
     "types-geopandas>=1.0",
     "types-requests>=2.31",
 ]
+# Scientific cross-validation against OPERA RTC-S1. Kept out of `dev` because it
+# is only needed to run `pytest -m validation` or regenerate the reference
+# record, and it pulls in a NASA Earthdata client the package itself never uses.
+validation = [
+    "earthaccess>=0.11",
+]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -190,9 +196,10 @@ testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration and not validation'"
 markers = [
     "integration: requires network access, CDSE credentials, and/or a local SNAP install (deselected by default; run with `pytest -m integration`)",
+    "validation: scientific cross-validation against OPERA RTC-S1; needs CDSE and Earthdata credentials, SNAP, and the `validation` dependency group (deselected by default; run with `pytest -m validation`)",
 ]
 filterwarnings = [
     # Any warning this package or its dependencies raise is a finding until
