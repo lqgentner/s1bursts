@@ -211,10 +211,10 @@ export SNAP_BIN="/path/to/snap/bin"
 
 ```python
 config = SNAPConfig(
-    max_workers=3,        # parallel SNAP jobs (default: auto)
-    max_ram_gb=50,        # total RAM budget (default: auto)
+    max_workers=3,  # parallel SNAP jobs (default: auto)
+    max_ram_gb=50,  # total RAM budget (default: auto)
     gpt_threads_per_job=5,  # SNAP -q flag (default: auto)
-    gpt_cache_ratio=0.7,    # fraction of per-job RAM for SNAP cache (default: 0.7)
+    gpt_cache_ratio=0.7,  # fraction of per-job RAM for SNAP cache (default: 0.7)
 )
 ```
 
@@ -294,11 +294,16 @@ processor.create_interferograms(pairs, crs=crs)
 
 ```python
 rtc_products = file_manager.find_rtc_products(burst_id=174374, sub_swath="IW1", polarization="VV")
-coh_products = file_manager.find_coherence_products(burst_id=174374, sub_swath="IW1", baseline_days=6)
+coh_products = file_manager.find_coherence_products(
+    burst_id=174374, sub_swath="IW1", baseline_days=6
+)
 
 # Date filtering via list comprehension
 from pandas import Timestamp
-filtered = [p for p in rtc_products if Timestamp("2024-01-01") <= p.date <= Timestamp("2024-12-31")]
+
+filtered = [
+    p for p in rtc_products if Timestamp("2024-01-01") <= p.date <= Timestamp("2024-12-31")
+]
 
 # Query composites
 lrw = file_manager.find_rtc_lrw_products(mgrs_code="32TMT64", polarization="VV")
