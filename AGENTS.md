@@ -11,7 +11,7 @@ The project uses the uv package manager. The virtual environment is located at `
 To synchronize the environment:
 
 ```bash
-uv sync --all-extras
+uv sync
 ```
 
 To run Python:
@@ -90,7 +90,7 @@ docker run --rm -v "$PWD:/w" -w /w --env-file .env \
     -e UV_PROJECT_ENVIRONMENT=/opt/venv \
     -e S1BURSTS_REQUIRE_INTEGRATION=1 \
     s1bursts-snap:local \
-    sh -c 'uv sync --all-extras && uv run pytest -v -m integration'
+    sh -c 'uv sync && uv run pytest -v -m integration'
 ```
 
 `SNAP_BIN` is overridden because `.env` points at a host install, and `UV_PROJECT_ENVIRONMENT` keeps the container from overwriting the host `.venv` on the bind mount.

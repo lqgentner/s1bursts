@@ -147,7 +147,7 @@ For the domain background (product hierarchy, LRW compositing design), see
 ## Development
 
 ```bash
-uv sync --all-extras   # set up environment
+uv sync                # set up environment
 uv run pytest          # offline unit tests
 uv run pytest -m integration  # network/SNAP tests (needs credentials + SNAP)
 uv run ruff format && uv run ruff check --fix

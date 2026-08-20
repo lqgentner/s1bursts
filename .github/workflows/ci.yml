@@ -27,7 +27,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --all-extras
+      - run: uv sync
       - name: Ruff lint
         run: uv run ruff check .
       - name: Ruff format check
@@ -40,7 +40,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --all-extras
+      - run: uv sync
       - name: mypy
         run: uv run mypy src/s1bursts
 
@@ -69,7 +69,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gdal-bin
       - name: Run offline unit tests with coverage
         run: >
-          uv run --python ${{ matrix.python-version }} --all-extras
+          uv run --python ${{ matrix.python-version }}
           pytest -q --cov=s1bursts --cov-branch
           --cov-report=term-missing --cov-report=xml
       - name: Upload coverage to Codecov
@@ -82,7 +82,7 @@ jobs:
   test-lowest:
     # Verifies the declared dependency lower bounds actually install and pass on
     # the minimum supported Python (3.12). `--resolution lowest-direct` pins
-    # every direct dependency (runtime, extras, and dev tools) to its floor, so
+    # every direct dependency (runtime and dev tools) to its floor, so
     # the dev group carries lower bounds too (see [dependency-groups] in
     # pyproject.toml).
     runs-on: ubuntu-latest
@@ -92,7 +92,7 @@ jobs:
         with:
           enable-cache: true
       - name: Sync dependencies at their lower bounds
-        run: uv sync --all-extras --resolution lowest-direct --python 3.12
+        run: uv sync --resolution lowest-direct --python 3.12
       - name: Run tests
         # --no-sync keeps `uv run` from re-resolving the environment back to the
         # latest versions before running.
