@@ -10,6 +10,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Added
 
+- Python 3.14 support, verified in CI.
 - `prepare_dem_for_snap()` converts an orthometric external DEM to WGS 84
   ellipsoidal heights when given a compound source CRS (for example,
   `EPSG:4326+3855` for Copernicus GLO-30), while applying SNAP's half-pixel
