@@ -62,8 +62,10 @@ class TestQueryToFilters:
         filters = BurstDatabase._convert_query_to_filters(query)
 
         assert filters == [
-            "ContentDate/Start ge 2022-01-01T00:00:00Z and "
-            "ContentDate/Start le 2022-02-01T00:00:00Z",
+            (
+                "ContentDate/Start ge 2022-01-01T00:00:00Z and "
+                "ContentDate/Start le 2022-02-01T00:00:00Z"
+            ),
         ]
 
     def test_intersects_filter(self) -> None:

@@ -23,14 +23,21 @@ import pyproj
 import pytest
 import rasterio
 
-from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery, SNAPConfig
+from s1bursts import (
+    BurstDatabase,
+    BurstProcessor,
+    FileManager,
+    InterferogramConfig,
+    SearchQuery,
+    SNAPConfig,
+)
 from s1bursts.config import get_settings
 from s1bursts.errors import ConfigurationError
 from s1bursts.snap_client import _resolve_gpt_path
 from tests.safe_conformance import check_burst_safe, compare_burst_safes
 
 if TYPE_CHECKING:
-    from s1bursts.burst import Burst, BurstCollection
+    from s1bursts.burst import Burst, BurstCollection, BurstPairCollection
 
 pytestmark = pytest.mark.integration
 
@@ -39,6 +46,11 @@ BURST_ID = 30346
 SUB_SWATH = "IW1"
 POLARIZATION = "VV"
 TIME_RANGE = ("2022-08-20", "2022-08-30")
+# Interferometric processing needs a second acquisition of the same burst: the
+# 12-day repeat that follows the one above, which is also the pair the HyP3
+# coherence validation uses for this burst (see tests/insar_validation.py).
+PAIR_TIME_RANGE = ("2022-08-20", "2022-09-10")
+PAIR_BASELINE_DAYS = 12
 
 _settings = get_settings()
 
@@ -228,6 +240,32 @@ class TestReferenceConformance:
         assert unexpected == [], "\n".join(unexpected)
 
 
+@pytest.fixture(scope="module")
+def downloaded_pair(database: BurstDatabase) -> BurstPairCollection:
+    """Download both bursts of one 12-day pair (skips without credentials).
+
+    Shares the module's file manager with :func:`downloaded_bursts`, so the
+    primary is only downloaded once when both fixtures are used.
+    """
+    if _settings.cdse.username is None or _settings.cdse.password is None:
+        pytest.skip("CDSE_USERNAME / CDSE_PASSWORD not configured")
+    bursts = database.search(
+        SearchQuery(
+            time_range=PAIR_TIME_RANGE,
+            burst_id=BURST_ID,
+            sub_swath=SUB_SWATH,
+            polarization=POLARIZATION,
+        ),
+    )
+    pairs = bursts.find_pairs(PAIR_BASELINE_DAYS)[0:1]
+    assert len(pairs) == 1, (
+        f"no {PAIR_BASELINE_DAYS}-day pair for burst {BURST_ID} in {PAIR_TIME_RANGE}"
+    )
+    summary = database.download(pairs, endpoint="odata")
+    assert summary.n_failed == 0, [str(item.error) for item in summary.failed_items]
+    return pairs
+
+
 class TestSnapProcessing:
     @requires_cdse_credentials
     @requires_snap
@@ -297,3 +335,73 @@ class TestSnapProcessing:
             assert src.count == 2
             # A burst that decoded correctly has real signal, not an empty frame.
             assert np.isfinite(src.read(1)).any()
+
+    @requires_cdse_credentials
+    @requires_snap
+    def test_gpt_creates_interferogram(
+        self,
+        file_manager: FileManager,
+        downloaded_pair: BurstPairCollection,
+    ) -> None:
+        """End-to-end GPT smoke test for the interferometric graph: two SLC zips -> IFG.
+
+        The interferogram has no independent reference to be validated against
+        the way RTC and coherence are, so what is asserted here is that the
+        graph runs to completion and that its product is shaped like a
+        geocoded complex interferogram.
+        """
+        # A larger budget than the RTC tests above, and fewer threads: the peak
+        # is InterferogramOp's topographic-phase step, which triangulates the
+        # DEM per tile, so concurrent tiles multiply it. 6 GB across the default
+        # eight threads runs out of Java heap there; 8 GB across two does not.
+        processor = BurstProcessor(
+            file_manager,
+            SNAPConfig(max_workers=1, max_ram_gb=8, gpt_threads_per_job=2),
+            show_progress=False,
+            continue_on_error=False,
+        )
+        config = InterferogramConfig()
+
+        summary = processor.create_interferograms(
+            downloaded_pair,
+            crs=pyproj.CRS("EPSG:32632"),
+            config=config,
+        )
+
+        assert summary.n_failed == 0, [str(item.error) for item in summary.failed_items]
+        product_path = file_manager.get_product_path(summary.products[0])
+        assert product_path.exists()
+
+        with rasterio.open(product_path) as src:
+            assert src.count == len(config.output_bands)
+            assert src.descriptions == tuple(config.output_bands)
+            assert src.crs.to_epsg() == 32632
+            # SNAP's GeoTIFF writer drops the NODATA tag; _finalize_product re-stamps it
+            assert src.nodata is not None
+            assert np.isnan(src.nodata)
+            # Single-look output on the standard grid: no Multilook step changes
+            # the posting, and pixel corners sit on multiples of the spacing.
+            spacing = config.grid_spacing
+            assert src.res == (spacing, spacing)
+            assert src.transform.c % spacing == pytest.approx(0.0)
+            assert src.transform.f % spacing == pytest.approx(0.0)
+
+            ifg_i, ifg_q, intensity_1, intensity_2 = src.read()
+
+        valid = np.isfinite(ifg_i)
+        # A geocoded burst is a parallelogram in its bounding box, so a large
+        # share of the frame is legitimately NaN — but most of it is not.
+        assert valid.mean() > 0.1
+        # Real and imaginary parts are the two halves of one complex sample and
+        # are therefore valid over exactly the same pixels.
+        assert np.array_equal(valid, np.isfinite(ifg_q))
+        # Interferometric phase, not a magnitude image: both components take
+        # either sign.
+        for band, name in ((ifg_i, "ifg_i"), (ifg_q, "ifg_q")):
+            assert (band[valid] > 0).any(), f"{name} has no positive samples"
+            assert (band[valid] < 0).any(), f"{name} has no negative samples"
+        # Both intensities are powers of the same coregistered samples, so they
+        # are nonnegative and valid over exactly the pixels the interferogram is.
+        for band, name in ((intensity_1, "intensity_1"), (intensity_2, "intensity_2")):
+            assert np.array_equal(np.isfinite(band), valid), f"{name} has a different extent"
+            assert (band[valid] >= 0).all(), f"{name} has negative samples"
