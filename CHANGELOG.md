@@ -56,6 +56,13 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Fixed
 
+- **`prepare_dem_for_snap(download_missing_grids=True)` failed even though the download
+  was successful.** The transformation was reported as unavailable, because the PROJ
+  grid cache wasn't refreshed. The grid cache is now refreshed between the download
+  and rebuild.
+- **`prepare_dem_for_snap(download_missing_grids=True)` reported grids that cannot
+  be installed.** Now only grids with an open license that PROJ can download are
+  listed and attempted to be downloaded.
 - **The compensated-DEM cache could return the wrong raster.** The cache is now
   keyed on the source's SHA-256 content digest and a conversion schema version,
   with a verified JSON provenance sidecar per entry, so sources sharing a

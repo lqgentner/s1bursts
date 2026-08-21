@@ -445,11 +445,30 @@ class TestVerticalConversion:
         assert second == first
 
 
+def _fake_grid(short_name: str, *, fetchable: bool = True) -> SimpleNamespace:
+    """Build a stand-in for a pyproj grid record.
+
+    ``fetchable`` mirrors the two flags that decide whether PROJ can install a
+    grid itself; a grid such as EGM2008's 1'x1' NGA file has both unset and can
+    only ever be obtained from its producer.
+    """
+    return SimpleNamespace(
+        short_name=short_name,
+        available=False,
+        open_license=fetchable,
+        direct_download=fetchable,
+    )
+
+
 class TestTransformationGrids:
     @staticmethod
-    def _group(*, best_available: bool, transformer: object | None = None) -> SimpleNamespace:
-        grid = SimpleNamespace(short_name="test-grid.tif", available=False)
-        operation = SimpleNamespace(grids=[grid])
+    def _group(
+        *,
+        best_available: bool,
+        transformer: object | None = None,
+        fetchable: bool = True,
+    ) -> SimpleNamespace:
+        operation = SimpleNamespace(grids=[_fake_grid("test-grid.tif", fetchable=fetchable)])
         return SimpleNamespace(
             best_available=best_available,
             transformers=[] if transformer is None else [transformer],
@@ -509,6 +528,110 @@ class TestTransformationGrids:
 
         assert "Pass download_missing_grids=True" not in str(error.value)
 
+    def test_download_refreshes_proj_grid_cache_before_rebuilding(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A rebuild that skips the refresh reads a stale PROJ cache.
+
+        PROJ answers grid availability from a cache held by the context, and
+        pyproj keeps one context per thread for the life of the process. Without
+        an explicit refresh the group rebuilt after a download still reports the
+        grid that was just installed as missing.
+        """
+        transformer = _OffsetTransformer()
+        groups = iter(
+            [
+                self._group(best_available=False),
+                self._group(best_available=True, transformer=transformer),
+            ],
+        )
+        events: list[str] = []
+
+        def _build(_source_crs: object) -> SimpleNamespace:
+            events.append("build")
+            return next(groups)
+
+        monkeypatch.setattr(dem_module, "_new_transformer_group", _build)
+        monkeypatch.setattr(
+            dem_module,
+            "_download_grids",
+            lambda _group: events.append("download"),
+        )
+        monkeypatch.setattr(
+            dem_module,
+            "_refresh_grid_availability",
+            lambda: events.append("refresh"),
+        )
+
+        result = dem_module._get_transformer(
+            dem_module.CRS("EPSG:4326+3855"),
+            download_missing_grids=True,
+        )
+
+        assert result is transformer
+        assert events == ["build", "download", "refresh", "build"]
+
+    def test_refresh_keeps_the_proj_data_directory_unchanged(self) -> None:
+        """The refresh must rebuild the context without repointing it."""
+        before = dem_module.datadir.get_data_dir()
+
+        dem_module._refresh_grid_availability()
+
+        assert dem_module.datadir.get_data_dir() == before
+
+    def test_grid_proj_cannot_download_is_not_attempted(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Opting in must not promise a download PROJ is unable to perform."""
+        group = self._group(best_available=False, fetchable=False)
+        downloaded: list[object] = []
+        monkeypatch.setattr(dem_module, "_new_transformer_group", lambda _source_crs: group)
+        monkeypatch.setattr(dem_module, "_download_grids", downloaded.append)
+
+        with pytest.raises(RuntimeError, match=r"cannot download: test-grid\.tif") as error:
+            dem_module._get_transformer(
+                dem_module.CRS("EPSG:4326+3855"),
+                download_missing_grids=True,
+            )
+
+        assert downloaded == []
+        assert "pyproj sync" not in str(error.value)
+        assert "manually" in str(error.value)
+
+    def test_error_reports_downloadable_and_restricted_grids_apart(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A grid PROJ can never fetch must not be presented as the thing to install.
+
+        EGM2008 reaches EPSG:4979 through either of two operations. Only the one
+        needing `us_nga_egm08_25.tif` is usable; the alternative needs an NGA file
+        that is not redistributable and stays unavailable forever, so naming it
+        alongside sends the reader after the wrong grid.
+        """
+        group = SimpleNamespace(
+            best_available=False,
+            transformers=[],
+            unavailable_operations=[
+                SimpleNamespace(grids=[_fake_grid("us_nga_egm08_25.tif")]),
+                SimpleNamespace(grids=[_fake_grid("Und_min1x1_egm2008.gz", fetchable=False)]),
+            ],
+        )
+        monkeypatch.setattr(dem_module, "_new_transformer_group", lambda _source_crs: group)
+
+        with pytest.raises(RuntimeError) as error:
+            dem_module._get_transformer(
+                dem_module.CRS("EPSG:4326+3855"),
+                download_missing_grids=False,
+            )
+
+        message = str(error.value)
+        assert "Missing downloadable grid(s): us_nga_egm08_25.tif." in message
+        assert "cannot download: Und_min1x1_egm2008.gz." in message
+        assert "Pass download_missing_grids=True" in message
+
     def test_downloads_open_grids_and_publishes_atomically(
         self,
         tmp_path: Path,
@@ -516,7 +639,7 @@ class TestTransformationGrids:
     ) -> None:
         user_dir = tmp_path / "proj"
         calls: list[tuple[Path, bool]] = []
-        grid = SimpleNamespace(short_name="test-grid.tif", available=False)
+        grid = _fake_grid("test-grid.tif")
 
         class DownloadGroup:
             def __init__(self) -> None:
@@ -546,16 +669,16 @@ class TestTransformationGrids:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         user_dir = tmp_path / "proj"
-        grid = SimpleNamespace(short_name="restricted-grid.gtx", available=False)
+        grid = _fake_grid("restricted-grid.gtx", fetchable=False)
+        attempts: list[Path] = []
 
         class DownloadGroup:
             def __init__(self) -> None:
                 self.unavailable_operations = [SimpleNamespace(grids=[grid])]
 
             @staticmethod
-            def download_grids(*, directory: Path, open_license: bool) -> None:
-                assert directory.is_dir()
-                assert open_license is True
+            def download_grids(*, directory: Path, open_license: bool) -> None:  # noqa: ARG004
+                attempts.append(directory)
 
         monkeypatch.setattr(
             dem_module.datadir,
@@ -566,6 +689,8 @@ class TestTransformationGrids:
 
         with pytest.raises(RuntimeError, match=r"No directly downloadable open-license.*manually"):
             dem_module._download_grids(DownloadGroup())  # type: ignore[arg-type]
+
+        assert attempts == []
 
 
 class TestCacheIdentity:

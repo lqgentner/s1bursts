@@ -192,21 +192,51 @@ def _new_transformer_group(source_crs: CRS) -> TransformerGroup:
         )
 
 
-def _missing_grid_names(group: TransformerGroup) -> list[str]:
-    """Return the unique names of grids unavailable to a transformer group."""
+def _missing_grid_names(group: TransformerGroup, *, fetchable: bool | None = None) -> list[str]:
+    """Return the unique names of grids unavailable to a transformer group.
+
+    Parameters
+    ----------
+    group : TransformerGroup
+        Group whose unavailable operations are inspected.
+    fetchable : bool, optional
+        Restrict the result to grids PROJ can download itself (``True``) or to
+        those it cannot (``False``). By default every missing grid is returned.
+    """
     return sorted(
         {
             grid.short_name
             for operation in group.unavailable_operations
             for grid in operation.grids
             if not grid.available
+            and (
+                fetchable is None or bool(grid.open_license and grid.direct_download) is fetchable
+            )
         },
     )
 
 
+def _refresh_grid_availability() -> None:
+    """Make the current PROJ context notice grids that arrived after it started.
+
+    PROJ caches grid availability per context and pyproj keeps one context per
+    thread for the lifetime of the process, so a grid downloaded moments ago
+    stays invisible to this thread until the context is rebuilt. Re-pointing it
+    at the data directory it already uses does that without changing which
+    directory that is.
+    """
+    datadir.set_data_dir(datadir.get_data_dir())
+
+
 def _download_grids(group: TransformerGroup) -> None:
     """Download open transformation grids and publish each file atomically."""
-    names = _missing_grid_names(group)
+    names = _missing_grid_names(group, fetchable=True)
+    if not names:
+        msg = (
+            f"No directly downloadable open-license PROJ grid is available for "
+            f"{', '.join(_missing_grid_names(group))}. Install the required grid manually."
+        )
+        raise RuntimeError(msg)
     logger.info("Downloading PROJ transformation grid(s): %s", ", ".join(names))
 
     user_dir: Path | None = None
@@ -227,33 +257,65 @@ def _download_grids(group: TransformerGroup) -> None:
 
     if not published:
         msg = (
-            f"No directly downloadable open-license PROJ grid is available for "
-            f"{', '.join(names)}. Install the required grid manually."
+            f"PROJ reported {', '.join(names)} as downloadable but produced no file. "
+            f"Install the required grid manually."
         )
         raise RuntimeError(msg)
+
+
+def _unavailable_transformation_error(
+    source_crs: CRS,
+    group: TransformerGroup,
+    *,
+    download_missing_grids: bool,
+) -> RuntimeError:
+    """Build the error explaining why no exact transformation could be built.
+
+    Missing grids are reported by what the caller can do about them: PROJ can
+    fetch some itself, while others are only distributed by their producer.
+    """
+    fetchable = _missing_grid_names(group, fetchable=True)
+    blocked = _missing_grid_names(group, fetchable=False)
+
+    parts = [f"No exact PROJ transformation from '{source_crs.to_string()}' to {TARGET_CRS}."]
+    if fetchable:
+        parts.append(f"Missing downloadable grid(s): {', '.join(fetchable)}.")
+    if blocked:
+        parts.append(f"Missing grid(s) PROJ cannot download: {', '.join(blocked)}.")
+
+    if fetchable and download_missing_grids:
+        parts.append(
+            "Downloading was enabled but did not make them available; "
+            "install them with pyproj sync.",
+        )
+    elif fetchable:
+        parts.append("Pass download_missing_grids=True or install them with pyproj sync.")
+    elif blocked:
+        parts.append("Install them manually into the PROJ user data directory.")
+
+    return RuntimeError(" ".join(parts))
 
 
 def _get_transformer(source_crs: CRS, *, download_missing_grids: bool) -> Transformer:
     """Return the best exact vertical transformer, downloading grids if requested."""
     group = _new_transformer_group(source_crs)
-    if not group.best_available and download_missing_grids:
+    if (
+        not group.best_available
+        and download_missing_grids
+        and _missing_grid_names(group, fetchable=True)
+    ):
         _download_grids(group)
+        # Without this the rebuilt group reads a PROJ cache that still predates
+        # the download, and the grid just installed is reported as missing.
+        _refresh_grid_availability()
         group = _new_transformer_group(source_crs)
 
     if not group.best_available or not group.transformers:
-        names = _missing_grid_names(group)
-        detail = f" Missing grid(s): {', '.join(names)}." if names else ""
-        advice = (
-            " Downloading was enabled, but no exact transformation became available; "
-            "install the remaining grid manually."
-            if download_missing_grids
-            else " Pass download_missing_grids=True or install the grids with pyproj sync."
+        raise _unavailable_transformation_error(
+            source_crs,
+            group,
+            download_missing_grids=download_missing_grids,
         )
-        msg = (
-            f"No exact PROJ transformation from '{source_crs.to_string()}' to {TARGET_CRS}."
-            f"{detail}{advice}"
-        )
-        raise RuntimeError(msg)
     return group.transformers[0]
 
 

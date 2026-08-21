@@ -32,6 +32,7 @@ from s1bursts import (
     SNAPConfig,
 )
 from s1bursts.config import get_settings
+from s1bursts.dem import _get_transformer
 from s1bursts.errors import ConfigurationError
 from s1bursts.snap_client import _resolve_gpt_path
 from tests.safe_conformance import check_burst_safe, compare_burst_safes
@@ -405,3 +406,37 @@ class TestSnapProcessing:
         for band, name in ((intensity_1, "intensity_1"), (intensity_2, "intensity_2")):
             assert np.array_equal(np.isfinite(band), valid), f"{name} has a different extent"
             assert (band[valid] >= 0).all(), f"{name} has negative samples"
+
+
+class TestVerticalDatumGrids:
+    """Downloading a PROJ grid must make it usable without restarting Python.
+
+    PROJ answers grid availability from a cache held by its context, and pyproj
+    keeps one context per thread for the life of the process. Only a real PROJ
+    install shows that, so the unit suite cannot: against stand-ins, a group
+    rebuilt after a download simply reports whatever the stand-in was told to.
+    """
+
+    @staticmethod
+    def test_downloaded_grid_is_usable_in_the_same_process(tmp_path: Path) -> None:
+        # EGM96 reaches EPSG:4979 through a single operation needing a single
+        # open-license grid, so nothing else can account for a success here.
+        grid = Path(pyproj.datadir.get_user_data_dir(create=True)) / "us_nga_egm96_15.tif"
+        stashed = tmp_path / grid.name
+        if grid.exists():
+            shutil.move(grid, stashed)
+
+        try:
+            assert not grid.exists()
+            transformer = _get_transformer(
+                pyproj.CRS("EPSG:4326+5773"),
+                download_missing_grids=True,
+            )
+            assert grid.is_file()
+
+            # Bernese Alps: EGM96 sits roughly 50 m above the ellipsoid there.
+            _, _, ellipsoidal = transformer.transform(7.5, 46.5, 2000.0, errcheck=True)
+            assert ellipsoidal == pytest.approx(2050.0, abs=2.0)
+        finally:
+            if stashed.exists():
+                shutil.move(stashed, grid)
