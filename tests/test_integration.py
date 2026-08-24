@@ -24,8 +24,10 @@ import pytest
 import rasterio
 
 from s1bursts import (
+    BackscatterConfig,
     BurstDatabase,
     BurstProcessor,
+    CoherenceConfig,
     FileManager,
     InterferogramConfig,
     SearchQuery,
@@ -359,6 +361,108 @@ class TestSnapProcessing:
             assert src.count == 2
             # A burst that decoded correctly has real signal, not an empty frame.
             assert np.isfinite(src.read(1)).any()
+
+    @requires_cdse_credentials
+    @requires_snap
+    def test_gpt_creates_gtc_backscatter(
+        self,
+        file_manager: FileManager,
+        downloaded_bursts: BurstCollection,
+    ) -> None:
+        """The un-flattened branch of the backscatter graph: SLC zip -> GTC GeoTIFF.
+
+        RTC is covered above; this runs the same graph with Terrain-Flattening
+        removed, which is a different node chain and a different output band.
+        """
+        processor = BurstProcessor(
+            file_manager,
+            SNAPConfig(max_workers=1, max_ram_gb=6),
+            show_progress=False,
+            continue_on_error=False,
+        )
+        config = BackscatterConfig(flatten_terrain=False)
+
+        summary = processor.create_backscatter(
+            downloaded_bursts,
+            crs=pyproj.CRS("EPSG:32632"),
+            config=config,
+        )
+
+        assert summary.n_failed == 0, [str(item.error) for item in summary.failed_items]
+        product_path = file_manager.get_product_path(summary.products[0])
+        assert product_path.exists()
+
+        with rasterio.open(product_path) as src:
+            # Beta0 alone: no Terrain-Flattening, so no simulatedImage.
+            assert src.count == len(config.output_bands) == 1
+            assert src.descriptions == tuple(config.output_bands)
+            assert src.crs.to_epsg() == 32632
+            assert src.nodata is not None
+            assert np.isnan(src.nodata)
+
+            beta0 = src.read(1)
+
+        valid = np.isfinite(beta0)
+        assert valid.mean() > 0.1
+        # Radar brightness is a power ratio: positive wherever it is defined.
+        assert (beta0[valid] > 0).all()
+
+    @requires_cdse_credentials
+    @requires_snap
+    def test_gpt_creates_coherence(
+        self,
+        file_manager: FileManager,
+        downloaded_pair: BurstPairCollection,
+    ) -> None:
+        """End-to-end GPT smoke test for the coherence graph: two SLC zips -> coherence.
+
+        `pytest -m validation` compares these numbers against ASF HyP3; what is
+        asserted here is that the graph runs and that its product satisfies the
+        definition of coherence — one band, bounded to [0, 1], on the standard
+        grid.
+        """
+        # The interferogram test's budget: this graph also subtracts topographic phase.
+        processor = BurstProcessor(
+            file_manager,
+            SNAPConfig(max_workers=1, max_ram_gb=8, gpt_threads_per_job=2),
+            show_progress=False,
+            continue_on_error=False,
+        )
+        config = CoherenceConfig()
+
+        summary = processor.create_coherences(
+            downloaded_pair,
+            crs=pyproj.CRS("EPSG:32632"),
+            config=config,
+        )
+
+        assert summary.n_failed == 0, [str(item.error) for item in summary.failed_items]
+        product_path = file_manager.get_product_path(summary.products[0])
+        assert product_path.exists()
+
+        with rasterio.open(product_path) as src:
+            assert src.count == len(config.output_bands) == 1
+            assert src.descriptions == tuple(config.output_bands)
+            assert src.crs.to_epsg() == 32632
+            assert src.nodata is not None
+            assert np.isnan(src.nodata)
+            spacing = config.grid_spacing
+            assert src.res == (spacing, spacing)
+            assert src.transform.c % spacing == pytest.approx(0.0)
+            assert src.transform.f % spacing == pytest.approx(0.0)
+
+            coh = src.read(1)
+
+        valid = np.isfinite(coh)
+        # A geocoded burst is a parallelogram in its box, so much of it is NaN.
+        assert valid.mean() > 0.1
+        # A normalised correlation magnitude: outside [0, 1] means the wrong band.
+        assert coh[valid].min() >= 0.0
+        assert coh[valid].max() <= 1.0
+        # An exact zero means `replace_zeros_with_nan` silently stopped.
+        assert not (coh[valid] == 0).any()
+        # Some alpine ground stays correlated over 12 days; noise would sit near zero.
+        assert np.median(coh[valid]) > 0.1
 
     @requires_cdse_credentials
     @requires_snap
