@@ -10,7 +10,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Added
 
-- Python 3.14 support, verified in CI.
+- **SNAP 14 support.** Graphs now name the coregistered stack's bands to match
+  the installed SNAP (SNAP 13: `mst`, `slv1`; SNAP 14: `ref`, `sec1`)
+- **Python 3.14 support.**. Verified in CI.
 - `prepare_dem_for_snap()` converts an orthometric external DEM to WGS 84
   ellipsoidal heights when given a compound source CRS (for example,
   `EPSG:4326+3855` for Copernicus GLO-30), while applying SNAP's half-pixel
