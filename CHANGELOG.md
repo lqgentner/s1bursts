@@ -37,7 +37,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - **Breaking:** `compensate_dem_for_snap()` is renamed to
   `prepare_dem_for_snap()` to reflect that it can now apply both the pixel
   shift and vertical datum conversion of an external DEM for SNAP.
-- Requires `freezebase[s3]>=0.4,<0.5`. Burst downloads now close their
+- Requires `freezebase[s3]>=0.5,<0.6`. Burst downloads now close their
   `HTTPDownloader` when done, releasing the connection immediately instead of
   leaving it to the garbage collector.
 - **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
