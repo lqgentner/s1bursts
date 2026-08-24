@@ -38,6 +38,7 @@ uv run dmypy run src/s1bursts
 ```bash
 uv run pytest                  # offline unit tests (default)
 uv run pytest -m integration   # network/SNAP integration tests
+uv run pytest -m "integration and snap"  # only the tests that invoke SNAP gpt
 uv run pytest -m validation    # scientific cross-validation against OPERA RTC-S1
 ```
 

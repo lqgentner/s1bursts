@@ -38,6 +38,8 @@ from s1bursts.snap_client import _resolve_gpt_path
 from tests.safe_conformance import check_burst_safe, compare_burst_safes
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from s1bursts.burst import Burst, BurstCollection, BurstPairCollection
 
 pytestmark = pytest.mark.integration
@@ -74,10 +76,31 @@ def _gpt_available() -> bool:
     return True
 
 
-requires_snap = pytest.mark.skipif(
+_skip_without_gpt = pytest.mark.skipif(
     not _gpt_available(),
     reason="SNAP `gpt` executable not resolvable (set SNAP_BIN or add gpt to PATH)",
 )
+
+
+def requires_snap[F: Callable[..., None]](test: F) -> F:
+    """Mark a test as SNAP-dependent, and skip it where `gpt` cannot be resolved.
+
+    The `snap` marker travels with the skip so that the two cannot drift apart.
+    The SNAP-version matrix in `integration.yml` selects `integration and snap`
+    for every leg after the first, and a SNAP test carrying only the skip would
+    be deselected there rather than run against the second version.
+
+    Parameters
+    ----------
+    test : callable
+        The test function to mark.
+
+    Returns
+    -------
+    callable
+        The same test, marked `snap` and skipped where SNAP is unavailable.
+    """
+    return pytest.mark.snap(_skip_without_gpt(test))
 
 
 @pytest.fixture(scope="module")

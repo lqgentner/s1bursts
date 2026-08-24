@@ -196,6 +196,7 @@ python_functions = ["test_*"]
 addopts = "-m 'not integration and not validation'"
 markers = [
     "integration: requires network access, CDSE credentials, and/or a local SNAP install (deselected by default; run with `pytest -m integration`)",
+    "snap: needs a SNAP install and runs `gpt` (a subset of `integration`; the SNAP-version matrix selects `integration and snap` for every version after the first)",
     "validation: scientific cross-validation against OPERA RTC-S1 and ASF HyP3 burst InSAR; needs CDSE and Earthdata credentials, SNAP, and the `validation` dependency group (deselected by default; run with `pytest -m validation`)",
 ]
 filterwarnings = [
