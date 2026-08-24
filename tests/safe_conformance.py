@@ -601,7 +601,7 @@ def _diff_gcps(ours: BurstSafe, theirs: BurstSafe) -> Iterator[str]:
         return
 
     lines = ours.lines_per_burst
-    if len(offsets) == 1 and (offset := offsets.pop()) % lines == 0:
+    if len(offsets) == 1 and (offset := next(iter(offsets))) % lines == 0:
         yield (
             f"KNOWN DEVIATION: reference GCP rows are offset by {offset:.0f} lines "
             f"({offset / lines:.0f} bursts), the known CDSE double shift"
