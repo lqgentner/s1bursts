@@ -23,6 +23,7 @@ from s1bursts.snap_client import (
     SNAPConfig,
     _extract_gpt_error,
     _resolve_gpt_path,
+    snap_version,
     snap_worker_userdir,
 )
 from s1bursts.snap_graph import BackscatterConfig, CoherenceConfig
@@ -100,6 +101,48 @@ def test_extract_gpt_error_truncates_to_max_chars() -> None:
     detail = _extract_gpt_error(None, f"Error: {long_line}", max_chars=100)
 
     assert len(detail) == 100
+
+
+class TestSnapVersion:
+    """Version detection: VERSION.txt first, `gpt --diag` as the fallback."""
+
+    @staticmethod
+    def _install(tmp_path: Path, version: str | None) -> Path:
+        """Build a SNAP-shaped install, with or without its VERSION.txt."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        if version is not None:
+            (tmp_path / "VERSION.txt").write_text(version)
+        return _make_executable(bin_dir / "gpt")
+
+    def test_reads_version_file(self, tmp_path: Path) -> None:
+        gpt = self._install(tmp_path, "14.0.0\n")
+
+        assert snap_version(gpt) == (14, 0, 0)
+
+    def test_falls_back_to_diag(self, tmp_path: Path) -> None:
+        gpt = self._install(tmp_path, None)
+        completed = MagicMock(stdout="INFO: something\nSNAP Release version 13.0.0\n")
+
+        with patch("s1bursts.snap_client.subprocess.run", return_value=completed) as run:
+            assert snap_version(gpt) == (13, 0, 0)
+
+        assert run.call_args.args[0] == [str(gpt), "--diag"]
+
+    def test_returns_none_when_neither_answers(self, tmp_path: Path) -> None:
+        gpt = self._install(tmp_path, None)
+        completed = MagicMock(stdout="no version here")
+
+        with patch("s1bursts.snap_client.subprocess.run", return_value=completed):
+            assert snap_version(gpt) is None
+
+    def test_ignores_an_unparsable_version_file(self, tmp_path: Path) -> None:
+        """A stray VERSION.txt must not shadow the authoritative answer."""
+        gpt = self._install(tmp_path, "not a version")
+        completed = MagicMock(stdout="SNAP Release version 14.0.0")
+
+        with patch("s1bursts.snap_client.subprocess.run", return_value=completed):
+            assert snap_version(gpt) == (14, 0, 0)
 
 
 class TestResolveGptPath:

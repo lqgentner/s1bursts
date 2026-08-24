@@ -12,6 +12,7 @@ from s1bursts.snap_graph import (
     CoherenceConfig,
     GeocodingConfig,
     InterferogramConfig,
+    stack_band_suffixes,
     xml_to_mermaid,
 )
 
@@ -133,6 +134,54 @@ def test_dynamic_graph_matches_fixture(
 # ---------------------------------------------------------------------------
 # Output bands
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Back-Geocoding band naming, which SNAP 14 changed
+
+
+@pytest.mark.parametrize(
+    ("snap_version", "expected"),
+    [
+        (None, ("mst", "slv1")),
+        ((13, 0, 0), ("mst", "slv1")),
+        ((14, 0, 0), ("ref", "sec1")),
+        ((15, 1), ("ref", "sec1")),
+    ],
+)
+def test_stack_band_suffixes(
+    snap_version: tuple[int, ...] | None,
+    expected: tuple[str, str],
+) -> None:
+    assert stack_band_suffixes(snap_version) == expected
+
+
+@pytest.mark.parametrize(
+    ("snap_version", "present", "absent"),
+    [
+        (None, ("_mst_", "_slv1_"), ("_ref_", "_sec1_")),
+        ((13, 0, 0), ("_mst_", "_slv1_"), ("_ref_", "_sec1_")),
+        ((14, 0, 0), ("_ref_", "_sec1_"), ("_mst_", "_slv1_")),
+    ],
+)
+def test_interferogram_intensity_expressions_follow_the_snap_version(
+    snap_version: tuple[int, ...] | None,
+    present: tuple[str, ...],
+    absent: tuple[str, ...],
+) -> None:
+    """GPT rejects the graph outright when these names are wrong for its version."""
+    xml = InterferogramConfig().to_xml(snap_version=snap_version)
+
+    for fragment in present:
+        assert fragment in xml
+    for fragment in absent:
+        assert fragment not in xml
+
+
+@pytest.mark.parametrize("config", [BackscatterConfig(), CoherenceConfig()])
+def test_graphs_without_stack_bands_ignore_the_snap_version(config: GeocodingConfig) -> None:
+    """The keyword exists for a uniform signature; only the interferogram uses it."""
+    assert config.to_xml(snap_version=(14, 0, 0)) == config.to_xml()
 
 
 def test_backscatter_output_bands_rtc() -> None:

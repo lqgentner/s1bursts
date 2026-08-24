@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from functools import lru_cache
 import logging
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -105,6 +107,62 @@ def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path
         msg = f"SNAP GPT executable is not executable: {gpt_path}"
         raise ConfigurationError(msg)
     return gpt_path
+
+
+# `gpt --diag` prints a labelled line; VERSION.txt carries the bare number.
+_DIAG_VERSION_PATTERN = re.compile(r"SNAP Release version\s+(\d+(?:\.\d+)*)")
+_BARE_VERSION_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)\s*$")
+
+# Seconds to let `gpt --diag` start a JVM.
+_DIAG_TIMEOUT_S = 120
+
+
+def _as_version(text: str) -> tuple[int, ...] | None:
+    """Parse a dotted version string into a comparable tuple."""
+    match = _BARE_VERSION_PATTERN.match(text)
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+@lru_cache(maxsize=8)
+def snap_version(gpt_path: Path) -> tuple[int, ...] | None:
+    """Version of the SNAP installation a ``gpt`` executable belongs to.
+
+    Reads ``VERSION.txt`` from the installation directory, which costs nothing,
+    and falls back to ``gpt --diag``, which is authoritative but starts a JVM.
+    The result is cached per executable.
+
+    Parameters
+    ----------
+    gpt_path : Path
+        The ``gpt`` executable, as resolved by :func:`_resolve_gpt_path`.
+
+    Returns
+    -------
+    tuple of int or None
+        The version as a comparable tuple, e.g. ``(14, 0, 0)``, or ``None``
+        where neither source answers.
+    """
+    version_file = gpt_path.parent.parent / "VERSION.txt"
+    with suppress(OSError):
+        version = _as_version(version_file.read_text())
+        if version is not None:
+            return version
+
+    with suppress(OSError, subprocess.SubprocessError):
+        completed = subprocess.run(  # noqa: S603
+            [str(gpt_path), "--diag"],
+            capture_output=True,
+            text=True,
+            timeout=_DIAG_TIMEOUT_S,
+            check=False,
+        )
+        match = _DIAG_VERSION_PATTERN.search(completed.stdout)
+        if match is not None:
+            return _as_version(match.group(1))
+
+    return None
 
 
 def _extract_gpt_error(
@@ -211,6 +269,21 @@ class SNAPConfig:
         """Resolve GPT and auxdata paths from explicit values and settings."""
         self.resolved_gpt_path = _resolve_gpt_path(self.bin, snap_settings)
         logger.debug("Resolved SNAP GPT executable: %s", self.resolved_gpt_path)
+
+        # Graph band names depend on it; see `stack_band_suffixes`.
+        self.resolved_snap_version = snap_version(self.resolved_gpt_path)
+        if self.resolved_snap_version is None:
+            logger.warning(
+                "Could not determine the SNAP version of '%s'; assuming the band naming "
+                "of SNAP 13 and earlier. Interferogram processing will fail if this "
+                "installation is SNAP 14 or newer.",
+                self.resolved_gpt_path,
+            )
+        else:
+            logger.debug(
+                "Resolved SNAP version: %s",
+                ".".join(str(part) for part in self.resolved_snap_version),
+            )
 
         auxdata_path = self.auxdata_path or snap_settings.auxdata_path
         if auxdata_path is None:
@@ -544,7 +617,11 @@ class SNAPClient:
         with tempfile.TemporaryDirectory(prefix="s1bursts-") as tmp:
             tmp_dir = Path(tmp)
             staging_file = tmp_dir / product_path.name
-            graph_file = _write_graph(tmp_dir, "backscatter", config.to_xml())
+            graph_file = _write_graph(
+                tmp_dir,
+                "backscatter",
+                config.to_xml(snap_version=self.config.resolved_snap_version),
+            )
             with snap_worker_userdir(self.config.resolved_auxdata_path, tmp_dir) as snap_userdir:
                 try:
                     source_file = self._stage_slc(burst, tmp_dir)
@@ -611,7 +688,11 @@ class SNAPClient:
         with tempfile.TemporaryDirectory(prefix="s1bursts-") as tmp:
             tmp_dir = Path(tmp)
             staging_file = tmp_dir / product_path.name
-            graph_file = _write_graph(tmp_dir, "coherence", config.to_xml())
+            graph_file = _write_graph(
+                tmp_dir,
+                "coherence",
+                config.to_xml(snap_version=self.config.resolved_snap_version),
+            )
             with snap_worker_userdir(self.config.resolved_auxdata_path, tmp_dir) as snap_userdir:
                 try:
                     primary_file = self._stage_slc(pair.primary, tmp_dir)
@@ -682,7 +763,11 @@ class SNAPClient:
         with tempfile.TemporaryDirectory(prefix="s1bursts-") as tmp:
             tmp_dir = Path(tmp)
             staging_file = tmp_dir / product_path.name
-            graph_file = _write_graph(tmp_dir, "interferogram", config.to_xml())
+            graph_file = _write_graph(
+                tmp_dir,
+                "interferogram",
+                config.to_xml(snap_version=self.config.resolved_snap_version),
+            )
             with snap_worker_userdir(self.config.resolved_auxdata_path, tmp_dir) as snap_userdir:
                 try:
                     primary_file = self._stage_slc(pair.primary, tmp_dir)

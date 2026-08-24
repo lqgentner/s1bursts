@@ -76,6 +76,12 @@ Without `--submit` the script uses jobs already completed under the account and 
 
 [`tests/fixtures/REFERENCE.md`](tests/fixtures/REFERENCE.md) describes both reference products and the conditions each comparison depends on: for OPERA, that the static layers are compared against the acquisition they were derived from and that gamma-0 is averaged in power; for HyP3, that its coherence is a different estimator (phase-sigma, measured on Goldstein-filtered phase, which saturates near 1 over coherent ground) and that it must be ordered at 5 x 1 looks, the setting whose estimation window matches this package's. Those are why the HyP3 comparison asserts ordering, a bounded signed offset and geolocation rather than equality of values, and why each scene declares whether its reference carries a pattern: the claims are selected from that declaration when tests are collected, so every claim a scene carries is asserted rather than skipped.
 
+### SNAP versions
+
+SNAP 14 renamed the suffixes Back-Geocoding gives a coregistered stack's bands — `mst` became `ref`, `slv1` became `sec1`. The interferogram graph's intensity expressions name those bands, so a graph built for the wrong version is rejected with `Undefined symbol` before any pixel is read. Nothing else moved: Coherence and Interferogram name their outputs as before, and every operator and parameter the graphs use exists in both versions.
+
+`SNAPConfig` therefore resolves the version beside the `gpt` path (`snap_version()`: `VERSION.txt`, falling back to `gpt --diag`) and passes it to `to_xml(snap_version=...)`, where `stack_band_suffixes()` picks the naming. An undetermined version logs a warning and uses the pre-14 naming, so existing SNAP 13 installs are unaffected — which is also why the committed golden graphs did not move. The keyword is on every config for a uniform call, but only `InterferogramConfig` varies with it.
+
 ### SNAP in CI
 
 The scheduled integration workflow runs inside `ghcr.io/lqgentner/s1bursts-snap`, built from [`containers/Dockerfile.snap`](containers/Dockerfile.snap) by `.github/workflows/container.yml`. Installing SNAP per run is slow, and the Actions cache expires after seven days — which the weekly schedule sits right on top of — so the toolchain is baked into a pinned image instead.

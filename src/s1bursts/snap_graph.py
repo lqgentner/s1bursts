@@ -508,14 +508,40 @@ def _replace_zeros_target_bands_coherence() -> list[dict[str, Any]]:
     ]
 
 
-def _intensity_target_bands() -> list[dict[str, Any]]:
+# SNAP 14 renamed Back-Geocoding's stack suffixes: `mst` to `ref`, `slv1` to
+# `sec1`. The expressions below name those bands, so the wrong choice fails
+# graph parsing with "Undefined symbol".
+_SNAP_RENAMED_STACK_BANDS = (14,)
+
+
+def stack_band_suffixes(snap_version: tuple[int, ...] | None) -> tuple[str, str]:
+    """Back-Geocoding's primary and secondary band suffixes for a SNAP version.
+
+    Parameters
+    ----------
+    snap_version : tuple of int or None
+        SNAP version as returned by :func:`s1bursts.snap_client.snap_version`.
+        ``None`` selects the naming of SNAP 13 and earlier.
+
+    Returns
+    -------
+    tuple of str
+        The primary and secondary suffixes, e.g. ``("ref", "sec1")``.
+    """
+    if snap_version is not None and snap_version >= _SNAP_RENAMED_STACK_BANDS:
+        return ("ref", "sec1")
+    return ("mst", "slv1")
+
+
+def _intensity_target_bands(snap_version: tuple[int, ...] | None) -> list[dict[str, Any]]:
+    primary, secondary = stack_band_suffixes(snap_version)
     return [
         {
             "name": "int1",
             "type": "float32",
             "expression": (
-                "sq(i_${swath}_${polarization}_mst_${date1}) + "
-                "sq(q_${swath}_${polarization}_mst_${date1})"
+                f"sq(i_${{swath}}_${{polarization}}_{primary}_${{date1}}) + "
+                f"sq(q_${{swath}}_${{polarization}}_{primary}_${{date1}})"
             ),
             "unit": "intensity",
             "noDataValue": 0,
@@ -524,8 +550,8 @@ def _intensity_target_bands() -> list[dict[str, Any]]:
             "name": "int2",
             "type": "float32",
             "expression": (
-                "sq(i_${swath}_${polarization}_slv1_${date2}) + "
-                "sq(q_${swath}_${polarization}_slv1_${date2})"
+                f"sq(i_${{swath}}_${{polarization}}_{secondary}_${{date2}}) + "
+                f"sq(q_${{swath}}_${{polarization}}_{secondary}_${{date2}})"
             ),
             "unit": "intensity",
             "noDataValue": 0,
@@ -691,6 +717,7 @@ def _build_ifg_branched_graph(
     dem: str | Path,
     nodata: float,
     apply_egm: bool,
+    snap_version: tuple[int, ...] | None,
 ) -> str:
     """Emit the Interferogram + IntensityBands branches and merge them.
 
@@ -712,14 +739,18 @@ def _build_ifg_branched_graph(
         g,
         "IntensityBands",
         "Back-Geocoding",
-        target_bands=_intensity_target_bands(),
+        target_bands=_intensity_target_bands(snap_version),
         include_variables_element=False,
     )
     _band_merge(g, "BandMerge", ["IfgSelect", "IntensityBands"])
     return _topsar_deburst(g, "TOPSAR-Deburst", "BandMerge")
 
 
-def build_interferogram_graph(cfg: InterferogramConfig) -> str:
+def build_interferogram_graph(
+    cfg: InterferogramConfig,
+    *,
+    snap_version: tuple[int, ...] | None = None,
+) -> str:
     """Branched SLC→(Ifg | intensities)→merge→deburst→Terrain-Correction graph."""
     g = _new_graph()
     _build_pair_prefix(g, cfg)
@@ -731,6 +762,7 @@ def build_interferogram_graph(cfg: InterferogramConfig) -> str:
         dem=cfg.dem,
         nodata=cfg.external_dem_nodata,
         apply_egm=cfg.external_dem_apply_egm,
+        snap_version=snap_version,
     )
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
@@ -867,8 +899,17 @@ class GeocodingConfig(BaseModel):
         return (half, half)
 
     @abstractmethod
-    def to_xml(self) -> str:
-        """Build the SNAP GPT graph XML for this config."""
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
+        """Build the SNAP GPT graph XML for this config.
+
+        Parameters
+        ----------
+        snap_version : tuple of int, optional
+            SNAP version the graph will run under, from
+            :func:`s1bursts.snap_client.snap_version`. Only the interferogram
+            graph varies with it; see :func:`stack_band_suffixes`. Defaults to
+            the naming of SNAP 13 and earlier.
+        """
 
     def to_mermaid(self) -> str:
         """Mermaid ``flowchart LR`` diagram source for this config's graph."""
@@ -918,8 +959,12 @@ class BackscatterConfig(GeocodingConfig):
             return ["Gamma0", "simulatedImage"]
         return ["Beta0"]
 
-    def to_xml(self) -> str:
-        """Build the backscatter graph XML for this config."""
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:  # noqa: ARG002
+        """Build the backscatter graph XML for this config.
+
+        Takes ``snap_version`` for a uniform signature; this graph names no
+        Back-Geocoding bands, so the version does not change it.
+        """
         return build_backscatter_graph(self)
 
 
@@ -964,8 +1009,12 @@ class CoherenceConfig(GeocodingConfig):
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
         return ["coh"]
 
-    def to_xml(self) -> str:
-        """Build the coherence graph XML for this config."""
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:  # noqa: ARG002
+        """Build the coherence graph XML for this config.
+
+        Takes ``snap_version`` for a uniform signature; this graph names no
+        Back-Geocoding bands, so the version does not change it.
+        """
         return build_coherence_graph(self)
 
 
@@ -997,9 +1046,9 @@ class InterferogramConfig(GeocodingConfig):
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
         return ["ifg_i", "ifg_q", "intensity_1", "intensity_2"]
 
-    def to_xml(self) -> str:
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
         """Build the interferogram graph XML for this config."""
-        return build_interferogram_graph(self)
+        return build_interferogram_graph(self, snap_version=snap_version)
 
 
 __all__ = [
@@ -1012,5 +1061,6 @@ __all__ = [
     "build_backscatter_graph",
     "build_coherence_graph",
     "build_interferogram_graph",
+    "stack_band_suffixes",
     "xml_to_mermaid",
 ]

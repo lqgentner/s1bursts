@@ -22,6 +22,7 @@ import s1bursts
 from s1bursts.config import get_settings
 from s1bursts.errors import ConfigurationError
 from s1bursts.snap_client import _resolve_gpt_path
+from s1bursts.snap_client import snap_version as _resolved_snap_version
 
 if TYPE_CHECKING:
     import pytest
@@ -55,11 +56,15 @@ def snap_home() -> Path | None:
 
 
 def snap_version() -> str:
-    """SNAP's own version string, or ``"unknown"`` if it cannot be read."""
-    home = snap_home()
-    if home is not None:
-        with suppress(OSError):
-            return (home / "VERSION.txt").read_text().strip()
+    """SNAP's own version string, or ``"unknown"`` if it cannot be read.
+
+    Detection belongs to the package, which needs the version to name graph
+    bands; this only renders it the way a record states it.
+    """
+    with suppress(ConfigurationError, OSError):
+        version = _resolved_snap_version(_resolve_gpt_path(None, get_settings().snap))
+        if version is not None:
+            return ".".join(str(part) for part in version)
     return "unknown"
 
 
