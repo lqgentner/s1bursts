@@ -80,7 +80,13 @@ Without `--submit` the script uses jobs already completed under the account and 
 
 The scheduled integration workflow runs inside `ghcr.io/lqgentner/s1bursts-snap`, built from [`containers/Dockerfile.snap`](containers/Dockerfile.snap) by `.github/workflows/container.yml`. Installing SNAP per run is slow, and the Actions cache expires after seven days — which the weekly schedule sits right on top of — so the toolchain is baked into a pinned image instead.
 
-To bump SNAP: change `ARG SNAP_VERSION` in the Dockerfile, run the container workflow, then update the pinned tag in `integration.yml`.
+More than one SNAP version is supported at a time, so the workflow runs a leg per version: the `legs` job holds the list, one image tag each. The first leg carries the whole suite; the rest run `-m "integration and snap"`, because a second full leg would spend an hour re-downloading the same bursts to prove the CDSE coverage the first leg already proved. `fail-fast` is off, so a break under one version still leaves you the other version's result. Each leg checks the image's `VERSION.txt` against the version its tag claims — the tag is otherwise the only thing asserting which SNAP actually ran.
+
+Tests that invoke `gpt` carry the `snap` marker, applied by `requires_snap` in `tests/test_integration.py` together with the skip, so a new SNAP test cannot end up selected by only one of the two.
+
+To add or bump a SNAP version: run the container workflow with `snap_version` (it defaults to the Dockerfile's `ARG SNAP_VERSION`, the version treated as primary — only that one moves the `latest` tag), then add or bump the image tag in the `legs` job. A dispatch of the integration workflow can name a single `snap_image` to exercise a freshly built image before its tag is pinned there.
+
+That matrix answers whether the package *runs* under each version. It does not answer whether the versions agree numerically — the SNAP assertions check band count, CRS, nodata and finiteness, not values — nor whether the output is still correct, which is what `pytest -m validation` is for. Those bounds are toolchain-agnostic (`tests/test_opera_validation.py` asserts against constants, not against the committed record), so the validation suite can be run under any supported SNAP; the committed records stay the provenance of the SNAP version in their `_toolchain`.
 
 To reproduce a CI run locally:
 

@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       snap_version:
-        description: "ESA SNAP version to bake into the image"
+        description: "ESA SNAP version to bake into the image (blank: the Dockerfile's default)"
         type: string
-        default: "13.0.0"
+        default: ""
   push:
     branches: [main]
     paths:
@@ -54,12 +54,20 @@ jobs:
         # describes it can never disagree.
         run: |
           set -euo pipefail
+          default="$(grep -oP 'ARG SNAP_VERSION=\K[0-9.]+' containers/Dockerfile.snap)"
           version="${{ inputs.snap_version }}"
           if [ -z "${version}" ]; then
-            version="$(grep -oP 'ARG SNAP_VERSION=\K[0-9.]+' containers/Dockerfile.snap)"
+            version="${default}"
           fi
           echo "snap=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=snap${version}" >> "$GITHUB_OUTPUT"
+          # `latest` follows the Dockerfile default, so building any other
+          # version publishes its own tag only.
+          if [ "${version}" = "${default}" ]; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: docker/setup-buildx-action@v4
 
@@ -81,7 +89,7 @@ jobs:
             SNAP_VERSION=${{ steps.version.outputs.snap }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ steps.version.outputs.latest == 'true' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
 
       - name: Verify gpt runs in the published image
         # A SNAP install that cannot start is the one failure this workflow must
@@ -104,5 +112,5 @@ jobs:
           {
             echo "Pushed \`${REGISTRY}/${IMAGE_NAME}:${{ steps.version.outputs.tag }}\`"
             echo ""
-            echo "Pin this tag in \`.github/workflows/integration.yml\` (\`SNAP_IMAGE\`)."
+            echo "Pin this tag in \`.github/workflows/integration.yml\` (the \`legs\` job's matrix)."
           } >> "$GITHUB_STEP_SUMMARY"

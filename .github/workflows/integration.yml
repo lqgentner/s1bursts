@@ -8,16 +8,15 @@ name: Integration
 #   CDSE_USERNAME, CDSE_PASSWORD                       -- OData downloads
 #   CDSE_S3_ACCESS_KEY_ID, CDSE_S3_SECRET_ACCESS_KEY   -- S3 burst extraction
 #
-# SNAP comes from the image built by container.yml. Because every prerequisite
-# is provided here, S1BURSTS_REQUIRE_INTEGRATION turns any skipped integration
-# test into a failure: a run that quietly stopped exercising CDSE or SNAP would
-# otherwise look identical to a passing one.
+# SNAP comes from the images built by container.yml, one per supported version.
+# Every prerequisite is provided here, so S1BURSTS_REQUIRE_INTEGRATION turns a
+# skipped test into a failure: a run that skipped everything would look passing.
 
 on:
   workflow_dispatch:
     inputs:
       snap_image:
-        description: "SNAP container image to run in"
+        description: "Run a single leg against this image instead of the supported set"
         type: string
         default: ""
   schedule:
@@ -29,16 +28,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  legs:
+    name: Resolve SNAP versions
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - id: resolve
+        # The first leg runs the whole suite; the rest only the SNAP subset,
+        # since a second full leg re-downloads the same bursts for nothing.
+        # Tags are pinned per version: publish with container.yml, then bump.
+        # `snap_image` overrides with a single image, passed via the
+        # environment so an arbitrary input cannot reach the shell.
+        env:
+          SNAP_IMAGE: ${{ inputs.snap_image }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SNAP_IMAGE}" ]; then
+            matrix="$(jq -cn --arg image "${SNAP_IMAGE}" \
+              '[{snap: "dispatch", image: $image, select: "integration"}]')"
+          else
+            matrix='[
+              {"snap": "13.0.0", "image": "ghcr.io/lqgentner/s1bursts-snap:snap13.0.0", "select": "integration"},
+              {"snap": "14.0.0", "image": "ghcr.io/lqgentner/s1bursts-snap:snap14.0.0", "select": "integration and snap"}
+            ]'
+            matrix="$(printf '%s' "${matrix}" | jq -c .)"
+          fi
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+          printf 'legs: %s\n' "${matrix}"
+
   integration:
+    name: SNAP ${{ matrix.leg.snap }}
+    needs: legs
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
-    # Pinned by SNAP version rather than floating on :latest, so a rebuild of
-    # the image never silently changes what a scheduled run tested against.
-    # Bump after publishing a new image with container.yml.
+    strategy:
+      # A break in one version must not cancel the other leg's result.
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJSON(needs.legs.outputs.matrix) }}
     container:
-      image: ${{ inputs.snap_image || 'ghcr.io/lqgentner/s1bursts-snap:snap13.0.0' }}
+      image: ${{ matrix.leg.image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -63,8 +95,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /root/.cache/uv
-          key: uv-integration-${{ hashFiles('uv.lock') }}
-          restore-keys: uv-integration-
+          key: uv-integration-${{ matrix.leg.snap }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-integration-${{ matrix.leg.snap }}-
 
       - run: uv sync
 
@@ -81,9 +113,17 @@ jobs:
       - name: Verify SNAP is usable before running the suite
         # Separates "SNAP is broken in this image" from "a test failed", which
         # otherwise look the same in the pytest output.
+        env:
+          EXPECTED_SNAP: ${{ matrix.leg.snap }}
         run: |
           test -x "$SNAP_BIN/gpt" || { echo "SNAP gpt missing from the image"; exit 1; }
           "$SNAP_BIN/gpt" -h > /dev/null || { echo "SNAP gpt failed to start"; exit 1; }
+          # The tag is the only thing asserting which SNAP ran; check it.
+          installed="$(cat "$SNAP_DIR/VERSION.txt" 2>/dev/null || echo unknown)"
+          if [ "${EXPECTED_SNAP}" != "dispatch" ] && [ "${installed}" != "${EXPECTED_SNAP}" ]; then
+            echo "image carries SNAP ${installed}, leg claims ${EXPECTED_SNAP}"
+            exit 1
+          fi
 
       - name: Run live integration tests
         env:
@@ -96,4 +136,4 @@ jobs:
           # Fail on a skipped integration test rather than passing over it;
           # see tests/conftest.py.
           S1BURSTS_REQUIRE_INTEGRATION: "1"
-        run: uv run pytest -v -m integration
+        run: uv run pytest -v -m "${{ matrix.leg.select }}"
