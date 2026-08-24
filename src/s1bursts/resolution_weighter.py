@@ -1,12 +1,14 @@
 """Locally Resolution Weighted (LRW) compositing for Sentinel-1 products.
 
 Implements the LRW backscatter composite and its composite quality map (CQM)
-as defined in:
+of [Small et al. (2022)](https://doi.org/10.1109/TGRS.2021.3055562), which the CEOS-ARD
+Product Family Specification for Synthetic Aperture Radar adopts as its
+Composite Backscatter (CB) product.
 
-    Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
-    (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. IEEE
-    Transactions on Geoscience and Remote Sensing, 60, 5201814.
-    https://doi.org/10.1109/TGRS.2021.3055562
+The weights come from the local contributing area ``A``, the area terrain
+flattening divides beta nought by, so ``A = 1`` is a flat reference facet.
+SNAP names the band ``simulatedImage``, CEOS-ARD names the layer
+``scatteringArea``, and OPERA names it ``rtc_anf_gamma0_to_beta0``.
 """
 
 from __future__ import annotations
@@ -83,10 +85,13 @@ class ResolutionWeighter:
 
     References
     ----------
-    Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E. (2022).
-    Wide-Area Analysis-Ready Radar Backscatter Composites. *IEEE Transactions on
-    Geoscience and Remote Sensing*, 60, 5201814.
-    https://doi.org/10.1109/TGRS.2021.3055562
+    .. [1] Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
+       (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. IEEE
+       Transactions on Geoscience and Remote Sensing, 60, 5201814.
+       https://doi.org/10.1109/TGRS.2021.3055562
+    .. [2] CEOS-ARD Product Family Specification: Synthetic Aperture Radar,
+       version 1.3.1 (2026). Committee on Earth Observation Satellites.
+       https://ceos.org/ard/files/PFS/SAR/v1.3.1/CEOS-ARD_PFS_SAR_v1.3.1.pdf
     """
 
     def __init__(
@@ -161,10 +166,10 @@ class ResolutionWeighter:
         r"""Compute a locally resolution weighted (LRW) RTC intensity composite.
 
         Each RTC file provides two bands: band 1 (intensity / power) and band 2
-        (the dimensionless contributing area ratio $A$).  The local area is
-        inversely proportional to the local resolution, so each observation is
-        weighted by $W_i = (1 / A_i) / \sum_j (1 / A_j)$ and the composite is
-        $\sum_i W_i \gamma^0_i$.
+        (the local contributing area $A$).  The local area is inversely
+        proportional to the local resolution, so each observation is weighted by
+        $W_i = (1 / A_i) / \sum_j (1 / A_j)$ and the composite is
+        $\sum_i W_i \gamma^0_i$ ([1] eq. 3-4, [2] eq. A5.1-A5.3).
 
         Bursts from the same orbit and acquisition date are mosaicked using the
         first non-NaN pixel strategy before temporal aggregation.
@@ -192,13 +197,14 @@ class ResolutionWeighter:
             become NaN.  Aggregation always happens in the linear domain.
         write_qa : bool, default False
             If ``True``, also write two auxiliary QA products alongside the
-            composite: a number-of-observations map (``QA-NUM``) and a composite
-            quality map (``QA-CQM``).
+            composite: a contributing-observations map (``QA-NUM``) and a
+            composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
         cqm_decibel : bool, default False
             If ``True``, write the ``QA-CQM`` map in decibels, that is
             $-10 \log_{10}\left(\sum_i W_i A_i\right)$. Both forms are
-            dimensionless. Independent of ``decibel``: the CQM describes the
-            composite's local resolution, not its values.
+            dimensionless. Defaults to linear, as [2] item 2.22 leaves the
+            conversion to the user. Independent of ``decibel``: the CQM
+            describes the composite's local resolution, not its values.
         overwrite : bool, default False
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
@@ -214,13 +220,6 @@ class ResolutionWeighter:
         ------
         ValueError
             If ``rtc_products`` is empty.
-
-        References
-        ----------
-        Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
-        (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. *IEEE
-        Transactions on Geoscience and Remote Sensing*, 60, 5201814.
-        https://doi.org/10.1109/TGRS.2021.3055562
         """
         rtc_products = list(rtc_products)
         if not rtc_products:
@@ -338,11 +337,11 @@ class ResolutionWeighter:
     ) -> CohLRWComposite | CohLRWResult:
         r"""Compute a locally resolution weighted (LRW) coherence composite.
 
-        Coherence observations are weighted by the inverse contributing area
-        $W = 1 / A$ taken from band 2 of the matched RTC files, normalized to sum
-        to one as in :meth:`compose_rtc_lrw`.  The match is made
+        Coherence observations are weighted by the inverse local contributing
+        area $W = 1 / A$ taken from band 2 of the matched RTC files, normalized
+        to sum to one as in :meth:`compose_rtc_lrw`.  The match is made
         per ``(rel_orbit_number, date_primary)`` group: for each coherence
-        group the sim-area arrays are looked up from the corresponding RTC
+        group the contributing-area arrays are looked up from the corresponding RTC
         products (matched by ``burst_id``, ``sub_swath``, and
         ``date == date_primary``), then stitched in the same first-non-NaN
         fashion.
@@ -353,7 +352,8 @@ class ResolutionWeighter:
             Coherence products to composite.  All must share the same
             polarization and ``baseline_days``.
         rtc_products : Collection[RTCProduct]
-            RTC products providing the simulated area (band 2) used as weights.
+            RTC products providing the local contributing area (band 2) used as
+            weights.
             Must cover the same orbit/date combinations as ``coh_products``.
         geobox : MGRSGeoBox
             Target MGRS grid cell.
@@ -368,13 +368,14 @@ class ResolutionWeighter:
             weight of a flat reference facet.
         write_qa : bool, default False
             If ``True``, also write two auxiliary QA products alongside the
-            composite: a number-of-observations map (``QA-NUM``) and a composite
-            quality map (``QA-CQM``).
+            composite: a contributing-observations map (``QA-NUM``) and a
+            composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
         cqm_decibel : bool, default False
             If ``True``, write the ``QA-CQM`` map in decibels, that is
             $-10 \log_{10}\left(\sum_i W_i A_i\right)$. Both forms are
-            dimensionless. Independent of ``decibel``: the CQM describes the
-            composite's local resolution, not its values.
+            dimensionless. Defaults to linear, as [2] item 2.22 leaves the
+            conversion to the user. Independent of ``decibel``: the CQM
+            describes the composite's local resolution, not its values.
         overwrite : bool, default False
             Skip writing if the output file already exists.
 
@@ -388,13 +389,6 @@ class ResolutionWeighter:
         ------
         ValueError
             If ``coh_products`` is empty.
-
-        References
-        ----------
-        Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
-        (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. *IEEE
-        Transactions on Geoscience and Remote Sensing*, 60, 5201814.
-        https://doi.org/10.1109/TGRS.2021.3055562
         """
         coh_products = list(coh_products)
         if not coh_products:
@@ -525,7 +519,7 @@ class ResolutionWeighter:
             (power) to decibels before writing; non-positive intensities
             become NaN.  Aggregation always happens in the linear domain.
         write_qa : bool, default False
-            If ``True``, also write a number-of-observations QA product
+            If ``True``, also write a contributing-observations QA product
             (``QA-NUM``) per orbit direction.
         overwrite : bool, default False
             Skip writing if the output file already exists.
@@ -661,7 +655,7 @@ class ResolutionWeighter:
             the corresponding statistic, or a float in ``(0, 1)`` for an
             interpolated quantile at that level.
         write_qa : bool, default False
-            If ``True``, also write a number-of-observations QA product
+            If ``True``, also write a contributing-observations QA product
             (``QA-NUM``) per orbit direction.
         overwrite : bool, default False
             Skip writing if the output file already exists.
@@ -812,7 +806,7 @@ class ResolutionWeighter:
     def _write_lrw_qa(
         self,
         values: NDArray[np.floating[Any]],
-        sim_area: NDArray[np.floating[Any]],
+        contributing_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
         qa: Mapping[QaMetric, LRWQAProduct],
         geobox: MGRSGeoBox,
@@ -820,9 +814,9 @@ class ResolutionWeighter:
         cqm_decibel: bool,
         overwrite: bool,
     ) -> None:
-        """Compute and write the number-of-observations and composite quality map QA products."""
+        """Compute and write the contributing-observations and composite quality QA products."""
         self._save(
-            self._count_observations(values),
+            self._count_contributions(values, weights),
             qa[QaMetric.NUM],
             geobox,
             "num_obs",
@@ -830,7 +824,7 @@ class ResolutionWeighter:
             nodata=0,
             overwrite=overwrite,
         )
-        cqm = self._calc_cqm(values, sim_area, weights)
+        cqm = self._calc_cqm(values, contributing_area, weights)
         self._save(
             self._to_decibel(cqm) if cqm_decibel else cqm,
             qa[QaMetric.CQM],
@@ -909,30 +903,28 @@ class ResolutionWeighter:
         missing = [key for key in obs_groups if key not in sim_groups]
         if missing:
             formatted = ", ".join(f"(orbit {orbit}, {date.date()})" for orbit, date in missing)
-            msg = f"No matching RTC simulated area for orbit/date group(s): {formatted}"
+            msg = f"No matching RTC contributing area for orbit/date group(s): {formatted}"
             raise ValueError(msg)
 
     @staticmethod
     def _calc_weights(
-        sim_area: NDArray[np.floating[Any]],
+        contributing_area: NDArray[np.floating[Any]],
         clip_max_resolution: float | None,
     ) -> NDArray[np.floating[Any]]:
-        """Compute resolution weights from the simulated contributing area.
+        """Compute resolution weights from the local contributing area.
 
-        ``sim_area`` is the dimensionless normalization area ratio that
-        terrain flattening divides beta nought by (gamma-nought area over
-        beta-nought reference area), so ``A = 1`` is a flat reference facet.
         The local area is inversely proportional to the local resolution, so
-        the resolution weight is ``w = 1 / A`` (Small et al. 2022, eq. 3-4;
-        full citation in the module docstring).
+        the unnormalized resolution weight is ``w = 1 / A`` (Small et al. 2022,
+        eq. 3-4; CEOS-ARD SAR v1.3.1, eq. A5.1).  Normalization to sum one
+        (eq. A5.2) happens in the aggregation, which needs the clipped weights.
 
-        Invalid pixels (``sim_area <= 0`` or non-finite) receive weight zero.
-        An optional upper clip on ``1/A`` suppresses extreme weights in shadow
-        areas.
+        Invalid pixels (``contributing_area <= 0`` or non-finite) receive weight
+        zero.  An optional upper clip on ``1/A`` suppresses extreme weights in
+        shadow areas.
         """
-        is_valid = (sim_area > 0) & np.isfinite(sim_area)
+        is_valid = (contributing_area > 0) & np.isfinite(contributing_area)
         with np.errstate(divide="ignore", invalid="ignore"):
-            weights = np.where(is_valid, 1.0 / sim_area, 0.0)
+            weights = np.where(is_valid, 1.0 / contributing_area, 0.0)
         if clip_max_resolution is not None:
             weights = weights.clip(max=clip_max_resolution)
         return weights
@@ -951,22 +943,36 @@ class ResolutionWeighter:
         return np.count_nonzero(np.isfinite(values), axis=0).astype(np.uint16)
 
     @staticmethod
+    def _count_contributions(
+        values: NDArray[np.floating[Any]],
+        weights: NDArray[np.floating[Any]],
+    ) -> NDArray[np.uint16]:
+        """Per-pixel count of observations that carry weight into the composite.
+
+        An observation contributes when it is finite and its resolution weight
+        is non-zero, which is the pairing :meth:`_weighted_mean` sums over.  The
+        CEOS-ARD Contributing Observations Image (SAR PFS v1.3.1, item 2.21).
+        """
+        contributes = np.isfinite(values) & (weights > 0)
+        return np.count_nonzero(contributes, axis=0).astype(np.uint16)
+
+    @staticmethod
     def _calc_cqm(
         values: NDArray[np.floating[Any]],
-        sim_area: NDArray[np.floating[Any]],
+        contributing_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
     ) -> NDArray[np.float32]:
         """Composite quality map (CQM) over the first (N) axis.
 
         Computed as ``1 / Σ(Wᵢ · Aᵢ)`` where ``Wᵢ`` are the resolution weights
-        normalized to sum to one and ``Aᵢ`` is the dimensionless contributing
-        area ratio.  Uses the same (clipped) weights as the composite, so it
-        describes the composite that was actually written.
+        normalized to sum to one (CEOS-ARD SAR v1.3.1, eq. A5.2) and ``Aᵢ`` is
+        the local contributing area.  Uses the same (clipped) weights as the
+        composite, so it describes the composite that was actually written.
         """
         weight_sum = weights.sum(axis=0)  # (H, W)
         with np.errstate(divide="ignore", invalid="ignore"):
             norm = np.where(weight_sum[np.newaxis] > 0, weights / weight_sum[np.newaxis], 0.0)
-            weighted_area = 1.0 / np.nansum(sim_area * norm, axis=0)
+            weighted_area = 1.0 / np.nansum(contributing_area * norm, axis=0)
         cqm = weighted_area.astype(np.float32)
         invalid = (weight_sum == 0) | ~np.isfinite(values).any(axis=0)
         cqm[invalid] = np.nan

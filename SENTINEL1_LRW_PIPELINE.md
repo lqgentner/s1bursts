@@ -32,9 +32,23 @@ BaseProduct
 ### Key Concepts
 
 - **GTC**: Beta nought backscatter with geometric terrain correction only
-- **RTC**: Gamma nought backscatter with terrain flattening (radiometric correction applied by SNAP); the `simulatedImage` band (simulated local illuminated area) is stored as a second band in the same GeoTIFF and used for LRW weighting
+- **RTC**: Gamma nought backscatter with terrain flattening (radiometric correction applied by SNAP); the `simulatedImage` band (the local contributing area) is stored as a second band in the same GeoTIFF and used for LRW weighting
 - **Footprint**: Unique spatial location defined by `burst_id` + `sub_swath` (stationary over time)
 - **Grid cell**: MGRS 10 km grid square; defines height/width, affine transform, and CRS (UTM zone)
+- **Local contributing area** (`A`): the area of all terrain facets within a pixel, expressed in the plane perpendicular to slant range. Terrain flattening divides beta nought by it, so `A = 1` is a flat reference facet and `1/A` is the local resolution that LRW weights by. SNAP calls it `simulatedImage`, CEOS-ARD calls the layer `scatteringArea`, OPERA calls it `rtc_anf_gamma0_to_beta0`; all three are the same quantity
+
+### CEOS-ARD alignment
+
+The LRW composites correspond to the **Composite Backscatter (CB)** product of the [CEOS-ARD Product Family Specification for Synthetic Aperture Radar](https://ceos.org/ard/files/PFS/SAR/v1.3.1/CEOS-ARD_PFS_SAR_v1.3.1.pdf) v1.3.1, whose Annex 5 restates Small et al. (2022) as the normative algorithm:
+
+| This package | CEOS-ARD SAR v1.3.1 |
+| --- | --- |
+| `simulatedImage` (RTC band 2) | 2.3 Scattering Area Image |
+| LRW composite | Annex 5, eq. A5.1-A5.3 |
+| `QA-NUM` | 2.21 Contributing Observations Image |
+| `QA-CQM` | 2.22 Composite Quality Map Image |
+
+The `QA-*` filename tokens are this package's own; CEOS-ARD constrains metadata content, not file naming. `cqm_decibel` defaults to `False` because item 2.22 leaves the decibel conversion to the user.
 
 ## Implemented Components
 
@@ -224,7 +238,7 @@ See the benchmarking notes in project memory for recommended settings.
 
 1. **Minimal Metadata in Filenames**: Only basic identifiers in filenames for simple glob patterns. Rich metadata stored in xarray attributes.
 
-2. **simulatedImage co-located with RTC**: The simulated local illuminated area (used for LRW weighting) is stored as the second band (`simulatedImage`) of every RTC GeoTIFF rather than as a separate product. This eliminates the need for a separate simulation pass and keeps the area image date-aligned with its corresponding backscatter acquisition by construction.
+2. **simulatedImage co-located with RTC**: The local contributing area (used for LRW weighting) is stored as the second band (`simulatedImage`) of every RTC GeoTIFF rather than as a separate product. This eliminates the need for a separate simulation pass and keeps the area image date-aligned with its corresponding backscatter acquisition by construction.
 
 3. **RTC-Only for LRW**: Only RTC amplitudes can be LRW-combined; terrain effects must be corrected before weighting.
 
@@ -244,6 +258,11 @@ See the benchmarking notes in project memory for recommended settings.
 - CDSE API client: `deepfreezer/api/cdse.py`
 - Burst collections: `deepfreezer/sentinel1/burst.py`
 - SNAP graph generation: `deepfreezer/sentinel1/snap_graph.py`
+
+Terminology and standards:
+
+- Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E. (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. *IEEE TGRS*, 60, 5201814. <https://doi.org/10.1109/TGRS.2021.3055562>
+- CEOS-ARD PFS: Synthetic Aperture Radar v1.3.1 (2026-07-07). <https://ceos.org/ard/>
 
 ## Example Workflows
 

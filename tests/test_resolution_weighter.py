@@ -84,20 +84,20 @@ class TestCalcWeights:
         np.testing.assert_allclose(result, [[[0.5]]])
 
     def test_zero_area_gives_zero_weight(self) -> None:
-        """sim_area == 0 must produce weight 0 (not inf)."""
+        """contributing_area == 0 must produce weight 0 (not inf)."""
         sim = np.array([[[0.0]]], dtype=np.float32)
         result = ResolutionWeighter._calc_weights(sim, clip_max_resolution=None)
         np.testing.assert_allclose(result, [[[0.0]]])
 
     def test_negative_area_gives_zero_weight(self) -> None:
-        """sim_area < 0 must produce weight 0."""
+        """contributing_area < 0 must produce weight 0."""
         sim = np.array([[[-1.0]]], dtype=np.float32)
         result = ResolutionWeighter._calc_weights(sim, clip_max_resolution=None)
         np.testing.assert_allclose(result, [[[0.0]]])
 
     @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
     def test_nonfinite_area_gives_zero_weight(self, bad: float) -> None:
-        """Non-finite sim_area values must produce weight 0."""
+        """Non-finite contributing_area values must produce weight 0."""
         sim = np.array([[[bad]]], dtype=np.float64)
         result = ResolutionWeighter._calc_weights(sim, clip_max_resolution=None)
         np.testing.assert_allclose(result, [[[0.0]]])
@@ -629,6 +629,52 @@ class TestCountObservations:
 
 
 # ---------------------------------------------------------------------------
+# _count_contributions
+# ---------------------------------------------------------------------------
+
+
+class TestCountContributions:
+    """Tests for ``ResolutionWeighter._count_contributions``."""
+
+    def test_counts_finite_observations_with_weight(self) -> None:
+        """An observation counts when it is both finite and weighted."""
+        # shape (N=3, H=1, W=2)
+        values = np.array([[[1.0, np.nan]], [[2.0, np.nan]], [[np.nan, 5.0]]])
+        weights = np.ones_like(values)
+        result = ResolutionWeighter._count_contributions(values, weights)
+        np.testing.assert_array_equal(result, [[2, 1]])
+
+    def test_zero_weight_observation_is_not_counted(self) -> None:
+        """A finite value whose contributing area was invalid must not count."""
+        values = np.array([[[1.0]], [[2.0]]])
+        weights = np.array([[[0.0]], [[1.0]]])
+        result = ResolutionWeighter._count_contributions(values, weights)
+        np.testing.assert_array_equal(result, [[1]])
+
+    def test_weighted_nan_observation_is_not_counted(self) -> None:
+        """A weight without a value contributes nothing and must not count."""
+        values = np.array([[[np.nan]], [[2.0]]])
+        weights = np.array([[[1.0]], [[1.0]]])
+        result = ResolutionWeighter._count_contributions(values, weights)
+        np.testing.assert_array_equal(result, [[1]])
+
+    def test_matches_the_weights_the_mean_sums_over(self) -> None:
+        """The count equals the observations ``_weighted_mean`` keeps."""
+        values = np.array([[[1.0]], [[np.nan]], [[3.0]]])
+        weights = np.array([[[2.0]], [[2.0]], [[0.0]]])
+        masked = np.where(np.isfinite(values), weights, 0.0)
+        expected = np.count_nonzero(masked > 0, axis=0)
+        result = ResolutionWeighter._count_contributions(values, weights)
+        np.testing.assert_array_equal(result, expected)
+
+    def test_returns_uint16(self) -> None:
+        """The count is returned as uint16 for compact storage."""
+        values = np.array([[[1.0]], [[2.0]]])
+        weights = np.ones_like(values)
+        assert ResolutionWeighter._count_contributions(values, weights).dtype == np.uint16
+
+
+# ---------------------------------------------------------------------------
 # _calc_cqm
 # ---------------------------------------------------------------------------
 
@@ -642,10 +688,10 @@ class TestCalcCqm:
         areas=[2, 4, 10], weights=1/area=[0.5, 0.25, 0.1].  With unclipped
         weights this reduces to ``sum(w) / N`` = (0.5+0.25+0.1)/3.
         """
-        sim_area = np.array([[[2.0]], [[4.0]], [[10.0]]])
-        weights = 1.0 / sim_area
+        contributing_area = np.array([[[2.0]], [[4.0]], [[10.0]]])
+        weights = 1.0 / contributing_area
         values = np.ones((3, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, sim_area, weights)
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights)
         np.testing.assert_allclose(result, [[(0.5 + 0.25 + 0.1) / 3.0]], rtol=1e-6)
 
     def test_clipped_weights_change_cqm(self) -> None:
@@ -655,18 +701,18 @@ class TestCalcCqm:
         [2, 0.1] (sum 2.1).  CQM = 1 / Σ(wgt·A) with normalized weights:
         Σ(w·A) = (2·0.25 + 0.1·10) / 2.1 = 1.5 / 2.1, so CQM = 2.1 / 1.5 = 1.4.
         """
-        sim_area = np.array([[[0.25]], [[10.0]]])
+        contributing_area = np.array([[[0.25]], [[10.0]]])
         weights = np.array([[[2.0]], [[0.1]]])  # 1/area=[4, 0.1] clipped at 2
         values = np.ones((2, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, sim_area, weights)
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights)
         np.testing.assert_allclose(result, [[1.4]], rtol=1e-6)
 
     def test_zero_total_weight_is_nan(self) -> None:
         """A pixel whose weights are all zero yields NaN."""
-        sim_area = np.array([[[2.0]], [[4.0]]])
+        contributing_area = np.array([[[2.0]], [[4.0]]])
         weights = np.zeros((2, 1, 1))
         values = np.ones((2, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, sim_area, weights)
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights)
         assert np.isnan(result[0, 0])
 
     def test_all_nan_observations_is_nan(self) -> None:
@@ -675,18 +721,18 @@ class TestCalcCqm:
         This keeps CQM's invalid footprint aligned with the composite, which is
         also NaN where every observation is non-finite.
         """
-        sim_area = np.array([[[2.0]], [[4.0]]])
-        weights = 1.0 / sim_area  # valid geometry, nonzero weight
+        contributing_area = np.array([[[2.0]], [[4.0]]])
+        weights = 1.0 / contributing_area  # valid geometry, nonzero weight
         values = np.array([[[np.nan]], [[np.nan]]])  # but no finite observation
-        result = ResolutionWeighter._calc_cqm(values, sim_area, weights)
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights)
         assert np.isnan(result[0, 0])
 
     def test_returns_float32(self) -> None:
         """CQM is returned as float32."""
-        sim_area = np.array([[[2.0]]])
+        contributing_area = np.array([[[2.0]]])
         weights = np.array([[[0.5]]])
         values = np.ones((1, 1, 1))
-        assert ResolutionWeighter._calc_cqm(values, sim_area, weights).dtype == np.float32
+        assert ResolutionWeighter._calc_cqm(values, contributing_area, weights).dtype == np.float32
 
 
 # ---------------------------------------------------------------------------
@@ -967,6 +1013,30 @@ class TestComposeRtcLrw:
         assert counts[0, 0] == 1
         assert counts[1, 1] == 2
 
+    def test_unweighted_pixels_do_not_count_in_the_qa_layer(self, scene: _Scene) -> None:
+        """A pixel with a value but no contributing area carries no weight.
+
+        SNAP masks the intensity and the area band independently, so a finite
+        intensity can meet a missing area.  Such a pixel contributes nothing to
+        the composite and must not be counted (CEOS-ARD SAR v1.3.1, item 2.21).
+        """
+        first, second = _rtc("2022-08-13"), _rtc("2022-08-25")
+        no_area = _full(4.0)
+        no_area[0, 0] = np.nan
+        _write_raster(scene.manager.get_product_path(first), [_full(2.0), no_area])
+        _write_raster(scene.manager.get_product_path(second), [_full(2.0), _full(4.0)])
+
+        _, (num_obs, _) = scene.weighter.compose_rtc_lrw(
+            [first, second],
+            scene.geobox,
+            write_qa=True,
+        )
+
+        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+            counts = src.read(1)
+        assert counts[0, 0] == 1
+        assert counts[1, 1] == 2
+
     def test_skips_an_existing_composite_unless_overwritten(self, scene: _Scene) -> None:
         products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
         for product in products:
@@ -1037,7 +1107,7 @@ class TestComposeCohLrw:
         coh = _coh("2022-08-01", "2022-08-13")
         _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
 
-        with pytest.raises(ValueError, match="No matching RTC simulated area"):
+        with pytest.raises(ValueError, match="No matching RTC contributing area"):
             scene.weighter.compose_coherence_lrw([coh], [], scene.geobox)
 
     def test_writes_the_requested_qa_layers(self, scene: _Scene) -> None:

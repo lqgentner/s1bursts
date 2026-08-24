@@ -30,12 +30,20 @@ class QaMetric(StrEnum):
     """Quality-assurance metric carried by an auxiliary composite product."""
 
     NUM = "NUM"
-    """Number of valid observations contributing to each composite pixel."""
+    """Number of input products contributing to each composite pixel.
+
+    On an LRW composite this counts the products carrying a non-zero
+    resolution weight, the CEOS-ARD Contributing Observations Image (SAR PFS
+    v1.3.1, item 2.21). Pass-composites are unweighted, so there it counts the
+    products holding a finite value.
+    """
     CQM = "CQM"
     """Composite local resolution: the reciprocal of the weighted relative area.
 
-    Dimensionless; high values mean high (good) local resolution. Defined in
-    Small et al. (2022), eq. 6; see :mod:`s1bursts.resolution_weighter`.
+    Dimensionless; high values mean high (good) local resolution. The CEOS-ARD
+    Composite Quality Map Image (SAR PFS v1.3.1, item 2.22), which defines it
+    by reference to Small et al. (2022), eq. 6; see
+    :mod:`s1bursts.resolution_weighter`.
     """
 
 
@@ -537,7 +545,7 @@ class CohLRWQA(MGRSTileProduct):
 
 @dataclass(repr=False, frozen=True)
 class RTCPassQA(MGRSTileProduct):
-    """Number-of-observations auxiliary for an RTC pass-composite.
+    """Contributing-observations auxiliary for an RTC pass-composite.
 
     Parameters
     ----------
@@ -563,7 +571,7 @@ class RTCPassQA(MGRSTileProduct):
 
 @dataclass(repr=False, frozen=True)
 class CohPassQA(MGRSTileProduct):
-    """Number-of-observations auxiliary for a coherence pass-composite.
+    """Contributing-observations auxiliary for a coherence pass-composite.
 
     Parameters
     ----------

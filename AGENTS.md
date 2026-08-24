@@ -118,6 +118,20 @@ docker run --rm -v "$PWD:/w" -w /w --env-file .env \
 - Do not add `Examples` or `Notes` sections
 - Keep descriptions concise; do not add implementation details irrelevant to the end user
 
+Docstrings are the source for the [Great Docs](https://posit-dev.github.io/great-docs/)
+API reference, which renders them with `parser: numpy`. That parser passes
+docstring bodies through to Quarto verbatim, so RST inline markup is never
+interpreted.
+
+A `References` section renders as a numbered list when each entry starts
+`.. [N]`, and bare URLs in it are linked automatically. The renderer matches
+those entries with a regex that spans a single HTML-free paragraph, so **any
+markup inside an entry silently breaks the whole block**.
+
+Because methods render onto their class's page, put the `References` section on
+the class only and cite it from the methods as `[1]`, rather than repeating the
+bibliography in each one.
+
 ### Comments
 
 - Be clear and concise, avoid unnecessary jargon

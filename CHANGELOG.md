@@ -32,13 +32,24 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `~/.aws/credentials` as an alternative to `CDSE_S3_ACCESS_KEY_ID` /
   `CDSE_S3_SECRET_ACCESS_KEY`. The profile takes precedence when both are configured
   and removes boto's environment-variable credential provider, so ambient env vars
-  can never sign CDSE requests. Requires freezebase ≥ 0.3.0.
+  can never sign CDSE requests.
 
 ### Changed
 
+- **Breaking:** The `QA-NUM` layer of an LRW composite now counts the
+  observations that carry a non-zero resolution weight, rather than those
+  holding a finite value. This makes the layer identical to the *Contributing Observations Image* of the [CEOS-ARD SAR product family specification](https://ceos.org/ard/files/PFS/SAR/v1.3.1/CEOS-ARD_PFS_SAR_v1.3.1.pdf) (v1.3.1, item 2.21). RTC composites are unaffected, because SNAP masks the
+  intensity and the area band in the same operation and the two definitions
+  coincide there. Coherence composites do change, measured at 6-8% of pixels
+  over the Alps, lowering counts without emptying any pixel; regenerate their
+  QA products to update them.
+  Pass-composites are unweighted and keep counting finite values.
 - **Breaking:** `compensate_dem_for_snap()` is renamed to
   `prepare_dem_for_snap()` to reflect that it can now apply both the pixel
   shift and vertical datum conversion of an external DEM for SNAP.
+- The area SNAP writes as `simulatedImage` is now called the *local
+  contributing area* throughout the documentation, after the term the CEOS-ARD
+  SAR product family specification uses for it.
 - Requires `freezebase[s3]>=0.5,<0.6`. Burst downloads now close their
   `HTTPDownloader` when done, releasing the connection immediately instead of
   leaving it to the garbage collector.

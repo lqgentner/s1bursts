@@ -896,7 +896,7 @@ class FileManager:
         polarization: str | None = None,
         orbit_direction: str | None = None,
     ) -> list[RTCPassQA]:
-        """Find RTC pass-composite QA (number-of-observations) products matching criteria.
+        """Find RTC pass-composite QA (contributing-observations) products matching criteria.
 
         Parameters
         ----------
@@ -928,7 +928,7 @@ class FileManager:
         orbit_direction: str | None = None,
         baseline_days: int | None = None,
     ) -> list[CohPassQA]:
-        """Find coherence pass-composite QA (number-of-observations) products matching criteria.
+        """Find coherence pass-composite QA (contributing-observations) products matching criteria.
 
         Parameters
         ----------
