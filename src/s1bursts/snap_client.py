@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from freezebase.raster import (
     build_rasterio_profile,
@@ -107,6 +107,11 @@ def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path
         msg = f"SNAP GPT executable is not executable: {gpt_path}"
         raise ConfigurationError(msg)
     return gpt_path
+
+
+# Tested versions, as (major, minor). The CI matrix and README badge must agree;
+# tests/test_supported_snap_versions.py enforces that.
+SUPPORTED_SNAP_VERSIONS: Final[tuple[tuple[int, int], ...]] = ((13, 0), (14, 0))
 
 
 # `gpt --diag` prints a labelled line; VERSION.txt carries the bare number.
@@ -284,6 +289,14 @@ class SNAPConfig:
                 "Resolved SNAP version: %s",
                 ".".join(str(part) for part in self.resolved_snap_version),
             )
+            if self.resolved_snap_version[:2] not in SUPPORTED_SNAP_VERSIONS:
+                logger.warning(
+                    "SNAP %s has not been tested with this version of s1bursts, which is "
+                    "tested against %s. Processing may still work; graph band names are "
+                    "chosen for the closest known naming.",
+                    ".".join(str(part) for part in self.resolved_snap_version),
+                    ", ".join(f"{major}.{minor}" for major, minor in SUPPORTED_SNAP_VERSIONS),
+                )
 
         auxdata_path = self.auxdata_path or snap_settings.auxdata_path
         if auxdata_path is None:

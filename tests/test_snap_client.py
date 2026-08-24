@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING
@@ -135,6 +136,32 @@ class TestSnapVersion:
 
         with patch("s1bursts.snap_client.subprocess.run", return_value=completed):
             assert snap_version(gpt) is None
+
+    @pytest.mark.parametrize(
+        ("version", "warns"),
+        [("14.0.0", False), ("13.0.0", False), ("12.0.0", True), ("15.0.0", True)],
+    )
+    def test_config_warns_only_for_an_untested_version(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        version: str,
+        warns: bool,
+    ) -> None:
+        """An install outside SUPPORTED_SNAP_VERSIONS should say so in the log."""
+        monkeypatch.delenv("SNAP_BIN", raising=False)
+        install = tmp_path / version
+        bin_dir = install / "bin"
+        bin_dir.mkdir(parents=True)
+        _make_executable(bin_dir / "gpt")
+        (install / "VERSION.txt").write_text(version)
+
+        with caplog.at_level(logging.WARNING, logger="s1bursts.snap_client"):
+            SNAPConfig(bin=bin_dir, auxdata_path=tmp_path / "auxdata")
+
+        untested = [r for r in caplog.records if "has not been tested" in r.message]
+        assert bool(untested) is warns
 
     def test_ignores_an_unparsable_version_file(self, tmp_path: Path) -> None:
         """A stray VERSION.txt must not shadow the authoritative answer."""

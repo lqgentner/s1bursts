@@ -82,6 +82,8 @@ SNAP 14 renamed the suffixes Back-Geocoding gives a coregistered stack's bands �
 
 `SNAPConfig` therefore resolves the version beside the `gpt` path (`snap_version()`: `VERSION.txt`, falling back to `gpt --diag`) and passes it to `to_xml(snap_version=...)`, where `stack_band_suffixes()` picks the naming. An undetermined version logs a warning and uses the pre-14 naming, so existing SNAP 13 installs are unaffected — which is also why the committed golden graphs did not move. The keyword is on every config for a uniform call, but only `InterferogramConfig` varies with it.
 
+`SUPPORTED_SNAP_VERSIONS` in `snap_client.py` is the source of truth for which versions are tested, and `SNAPConfig` warns when it resolves one outside that set. The CI matrix and README badge state the same list, so `tests/test_supported_snap_versions.py` fails if the three drift apart.
+
 ### SNAP in CI
 
 The scheduled integration workflow runs inside `ghcr.io/lqgentner/s1bursts-snap`, built from [`containers/Dockerfile.snap`](containers/Dockerfile.snap) by `.github/workflows/container.yml`. Installing SNAP per run is slow, and the Actions cache expires after seven days — which the weekly schedule sits right on top of — so the toolchain is baked into a pinned image instead.
@@ -115,6 +117,13 @@ docker run --rm -v "$PWD:/w" -w /w --env-file .env \
 - Use NumPy-style docstrings for all public functions, classes, and methods
 - Do not add `Examples` or `Notes` sections
 - Keep descriptions concise; do not add implementation details irrelevant to the end user
+
+### Comments
+
+- Be clear and concise, avoid unnecessary jargon
+- Keep comments to a single line wherever one suffices, use more lines only where the reasoning genuinely needs it
+- Comment on the "why", not what the code already states
+- Comment on the current, not the previous behavior
 
 ### Type checking
 

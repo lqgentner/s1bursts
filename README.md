@@ -1,5 +1,14 @@
 # s1bursts
 
+[![CI](https://github.com/lqgentner/s1bursts/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lqgentner/s1bursts/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/lqgentner/s1bursts/graph/badge.svg?token=V6PEU2U4DW)](https://codecov.io/gh/lqgentner/s1bursts)
+[![PyPI](https://img.shields.io/pypi/v/s1bursts.svg)](https://pypi.org/project/s1bursts/)
+[![Python versions](https://img.shields.io/pypi/pyversions/s1bursts.svg)](https://pypi.org/project/s1bursts/)
+[![SNAP](https://img.shields.io/badge/SNAP-13%20%7C%2014-blue)](https://step.esa.int/main/download/snap-download/)
+[![License](https://img.shields.io/pypi/l/s1bursts.svg)](https://github.com/lqgentner/s1bursts/blob/main/LICENSE)
+[![mypy](https://img.shields.io/badge/type_checked-mypy-blue.svg)](https://mypy-lang.org/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 Sentinel-1 SLC **burst** download, SAR and InSAR processing, built on the
 [Copernicus Data Space Ecosystem (CDSE)](https://dataspace.copernicus.eu/) and
 [ESA SNAP](https://step.esa.int/main/toolboxes/snap/) GPT.
