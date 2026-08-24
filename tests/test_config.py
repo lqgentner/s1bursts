@@ -103,3 +103,36 @@ class TestSnapSettingsValidation:
         monkeypatch.setenv("SNAP_MAX_RAM_GB", "6.5")
 
         assert get_settings().snap.max_ram_gb == 6.5
+
+    @pytest.mark.parametrize(
+        ("variable", "attribute", "default"),
+        [
+            ("SNAP_MAX_WORKERS", "max_workers", 1),
+            ("SNAP_MAX_RAM_GB", "max_ram_gb", 4.0),
+            ("SNAP_CACHE_RATIO", "cache_ratio", 0.70),
+        ],
+    )
+    def test_empty_values_fall_back_to_the_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        variable: str,
+        attribute: str,
+        default: float,
+    ) -> None:
+        """An unconfigured GitHub Actions secret interpolates as an empty string.
+
+        These fields are typed, so rejecting one would fail every caller of
+        ``get_settings()``, not only the ones that go on to run SNAP.
+        """
+        monkeypatch.setenv(variable, "")
+
+        assert getattr(get_settings().snap, attribute) == default
+
+    def test_an_empty_bin_is_unset_rather_than_the_working_directory(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``Path("")`` is ``Path(".")``, which would send `gpt` resolution local."""
+        monkeypatch.setenv("SNAP_BIN", "")
+
+        assert get_settings().snap.bin is None

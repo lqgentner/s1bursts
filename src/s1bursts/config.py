@@ -68,6 +68,7 @@ class SNAPSettings(BaseSettings):
         env_prefix="SNAP_",
         case_sensitive=False,
         extra="ignore",
+        env_ignore_empty=True,
     )
 
     bin: Path | None = None
