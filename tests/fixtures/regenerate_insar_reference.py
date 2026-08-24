@@ -66,7 +66,7 @@ from tests.insar_validation import (
     valid_mask,
 )
 from tests.raster_comparison import read_aligned
-from tests.validation_toolchain import processing_fingerprint, toolchain
+from tests.validation_toolchain import processing_fingerprint, toolchain, toolchain_conflict
 
 if TYPE_CHECKING:
     from hyp3_sdk import HyP3, Job
@@ -336,9 +336,14 @@ def process(scene: Scene, work: Path) -> Path:
                 sub_swath=scene.sub_swath,
                 polarization=scene.polarization,
             ),
-        )[0:1]
+        )
         if len(found) != 1:
-            msg = f"expected exactly one burst for {scene.name} on {acquisition}"
+            # As in `burst_granule`: more than one match means the window caught
+            # a neighbouring acquisition, and the wrong pair would be processed.
+            msg = (
+                f"expected exactly one burst for {scene.name} on {acquisition}, "
+                f"found {len(found)}; narrow `Scene.search_window` before regenerating"
+            )
             raise RuntimeError(msg)
         return found
 
@@ -409,7 +414,7 @@ def compare_scene(
     _check_projection(coherence, scene)
 
     ours_path = process(scene, work)
-    ours, theirs, alignment = read_aligned(ours_path, coherence, "coh")
+    ours, theirs, _, alignment = read_aligned(ours_path, coherence, "coh")
     valid = valid_mask(ours, theirs)
 
     baseline = date.fromisoformat(scene.secondary_date) - date.fromisoformat(scene.reference_date)
@@ -485,6 +490,21 @@ def main() -> int:
     if RECORD_PATH.exists():
         record = json.loads(RECORD_PATH.read_text())
 
+    # Measured before the campaign rather than after it, so that a run which
+    # cannot honestly write this provenance stops before ordering any HyP3 job.
+    versions = toolchain(
+        dem="Copernicus 30m Global DEM (SNAP auto-download)",
+        grid_spacing_m=GRID_SPACING,
+        block_size_px=BLOCK,
+        hyp3_job_type=JOB_TYPE,
+        hyp3_looks=LOOKS,
+    )
+    if requested is not None and (
+        conflict := toolchain_conflict(record.get("_toolchain"), versions)
+    ):
+        print(conflict)
+        return 1
+
     # Deliberately a persistent, disk-backed directory rather than a temporary
     # one: a regeneration downloads gigabytes, and re-running it after a failure
     # part-way through should reuse what already landed. S108 is about
@@ -524,13 +544,7 @@ def main() -> int:
             f"(peak contrast {entry['geolocation']['peak_contrast']})",
         )
 
-    record["_toolchain"] = toolchain(
-        dem="Copernicus 30m Global DEM (SNAP auto-download)",
-        grid_spacing_m=GRID_SPACING,
-        block_size_px=BLOCK,
-        hyp3_job_type=JOB_TYPE,
-        hyp3_looks=LOOKS,
-    )
+    record["_toolchain"] = versions
     RECORD_PATH.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     print(f"\nWrote {RECORD_PATH}")
     return 0

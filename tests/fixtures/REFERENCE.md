@@ -113,3 +113,7 @@ Measurements at 5 x 1 looks and 20 m spacing:
 HyP3 is about 0.18 higher at the median in both scenes. Its Mojave values are nearly all at 1, leaving too little variation for a useful ranking or alignment check.
 
 Coherence values and thresholds cannot be transferred directly between the two products. Their spatial ordering can be compared only when the HyP3 reference has enough variation.
+
+## Regenerating a record
+
+**Regenerate every scene after a toolchain change.** Each record states one `_toolchain` block covering all the scenes it holds, so regenerating a single scene under a different SNAP, Java or package version would claim the untouched scenes were measured with that toolchain too. Both scripts measure the toolchain before they start and refuse a single-scene run that would move it, naming the entries that changed.

@@ -51,7 +51,7 @@ from tests.opera_validation import (
     percentile_offset_db,
 )
 from tests.raster_comparison import read_aligned
-from tests.validation_toolchain import processing_fingerprint, toolchain
+from tests.validation_toolchain import processing_fingerprint, toolchain, toolchain_conflict
 
 if TYPE_CHECKING:
     from asf_search import ASFSession
@@ -190,9 +190,16 @@ def process(scene: Scene, acquisition: str, polarization: Polarization, work: Pa
             sub_swath=scene.sub_swath,
             polarization=polarization,
         ),
-    )[0:1]
+    )
     if len(bursts) != 1:
-        msg = f"expected exactly one burst for {scene.name} {polarization} {acquisition}"
+        # More than one match means the window caught a neighbouring
+        # acquisition, and SNAP would then be compared against OPERA's product
+        # for a different date.
+        msg = (
+            f"expected exactly one burst for {scene.name} {polarization} on "
+            f"{acquisition}, found {len(bursts)}; narrow `Scene.search_window` "
+            "before regenerating"
+        )
         raise RuntimeError(msg)
 
     summary = database.download(bursts, endpoint="odata")
@@ -246,8 +253,14 @@ def compare_scene(scene: Scene, work: Path, session: ASFSession) -> dict:
         opera_tif = files[f"acq:{polarization}.tif"]
 
         ours_path = process(scene, scene.gamma0_date, polarization, work)
-        ours, theirs, alignment = read_aligned(ours_path, opera_tif, "Gamma0")
-        _, mask, _ = read_aligned(ours_path, acquisition_mask, "Gamma0")
+        # The mask is read as a companion so that it lands on the same window as
+        # the pair it masks, whatever its own bounds are.
+        ours, theirs, (mask,), alignment = read_aligned(
+            ours_path,
+            opera_tif,
+            "Gamma0",
+            companions=(acquisition_mask,),
+        )
         # OPERA's mask: 0 = clear, 1/2/3 = shadow/layover, 255 = nodata.
         clear = (mask == 0) & np.isfinite(ours) & np.isfinite(theirs)
 
@@ -263,12 +276,12 @@ def compare_scene(scene: Scene, work: Path, session: ASFSession) -> dict:
         }
 
     ours_path = process(scene, scene.static_date, "VV", work)
-    ours, theirs, alignment = read_aligned(
+    ours, theirs, (mask,), alignment = read_aligned(
         ours_path,
         files["static:rtc_anf_gamma0_to_beta0.tif"],
         "simulatedImage",
+        companions=(files["static:mask.tif"],),
     )
-    _, mask, _ = read_aligned(ours_path, files["static:mask.tif"], "simulatedImage")
     clear = (mask == 0) & np.isfinite(ours) & np.isfinite(theirs)
 
     entry["anf"] = {
@@ -310,6 +323,19 @@ def main() -> int:
     if RECORD_PATH.exists():
         record = json.loads(RECORD_PATH.read_text())
 
+    # Measured before the campaign rather than after it, so that a run which
+    # cannot honestly write this provenance stops before spending the downloads.
+    versions = toolchain(
+        dem="Copernicus 30m Global DEM (SNAP auto-download)",
+        grid_spacing_m=GRID_SPACING,
+        block_size_px=BLOCK,
+    )
+    if requested is not None and (
+        conflict := toolchain_conflict(record.get("_toolchain"), versions)
+    ):
+        print(conflict)
+        return 1
+
     # Deliberately a persistent, disk-backed directory rather than a temporary
     # one: a regeneration downloads gigabytes, and re-running it after a failure
     # part-way through should reuse what already landed. S108 is about
@@ -330,11 +356,7 @@ def main() -> int:
             f"  ANF ratio: {record[scene.name]['anf']['layover_shadow_excluded']['median_ratio']}",
         )
 
-    record["_toolchain"] = toolchain(
-        dem="Copernicus 30m Global DEM (SNAP auto-download)",
-        grid_spacing_m=GRID_SPACING,
-        block_size_px=BLOCK,
-    )
+    record["_toolchain"] = versions
     RECORD_PATH.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     print(f"\nWrote {RECORD_PATH}")
     return 0

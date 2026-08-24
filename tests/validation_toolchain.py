@@ -107,6 +107,43 @@ def processing_fingerprint(config: GeocodingConfig, crs: str) -> str:
     return hashlib.sha256(material.encode()).hexdigest()[:12]
 
 
+def toolchain_conflict(recorded: dict[str, Any] | None, current: dict[str, Any]) -> str | None:
+    """Explain why a partial regeneration must not rewrite a record's toolchain.
+
+    A record states one toolchain for every scene it holds, so regenerating a
+    single scene under a changed SNAP, Java or package version would claim the
+    scenes left untouched were measured with that one too.
+
+    Parameters
+    ----------
+    recorded : dict or None
+        Toolchain the committed record carries, if it carries one.
+    current : dict
+        Toolchain this run would write in its place.
+
+    Returns
+    -------
+    str or None
+        A message naming the entries that moved, or ``None`` if the record
+        states no toolchain yet or states this one.
+    """
+    if not recorded:
+        return None
+    moved = sorted(
+        key for key in recorded.keys() | current.keys() if recorded.get(key) != current.get(key)
+    )
+    if not moved:
+        return None
+
+    changes = "\n".join(f"  {key}: {recorded.get(key)!r} -> {current.get(key)!r}" for key in moved)
+    return (
+        f"the toolchain has changed since this record was written:\n{changes}\n"
+        "The record states one toolchain for every scene it holds, so regenerating a "
+        "single scene\nwould claim the others were measured with this one too. "
+        "Regenerate every scene instead."
+    )
+
+
 def toolchain(**extra: Any) -> dict[str, Any]:
     """Record the versions a campaign's numbers are only meaningful against.
 
