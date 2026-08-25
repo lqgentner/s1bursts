@@ -19,6 +19,7 @@ from upath import UPath
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.config import SNAPSettings
 from s1bursts.errors import ConfigurationError, SnapProcessingError
+from s1bursts.product_tags import RasterMetadata
 from s1bursts.snap_client import (
     SNAPClient,
     SNAPConfig,
@@ -105,7 +106,7 @@ def test_extract_gpt_error_truncates_to_max_chars() -> None:
 
 
 class TestSnapVersion:
-    """Version detection: VERSION.txt first, `gpt --diag` as the fallback."""
+    """Version detection, read from the installation's VERSION.txt."""
 
     @staticmethod
     def _install(tmp_path: Path, version: str | None) -> Path:
@@ -121,21 +122,8 @@ class TestSnapVersion:
 
         assert snap_version(gpt) == (14, 0, 0)
 
-    def test_falls_back_to_diag(self, tmp_path: Path) -> None:
-        gpt = self._install(tmp_path, None)
-        completed = MagicMock(stdout="INFO: something\nSNAP Release version 13.0.0\n")
-
-        with patch("s1bursts.snap_client.subprocess.run", return_value=completed) as run:
-            assert snap_version(gpt) == (13, 0, 0)
-
-        assert run.call_args.args[0] == [str(gpt), "--diag"]
-
-    def test_returns_none_when_neither_answers(self, tmp_path: Path) -> None:
-        gpt = self._install(tmp_path, None)
-        completed = MagicMock(stdout="no version here")
-
-        with patch("s1bursts.snap_client.subprocess.run", return_value=completed):
-            assert snap_version(gpt) is None
+    def test_returns_none_without_a_version_file(self, tmp_path: Path) -> None:
+        assert snap_version(self._install(tmp_path, None)) is None
 
     @pytest.mark.parametrize(
         ("version", "warns"),
@@ -163,13 +151,8 @@ class TestSnapVersion:
         untested = [r for r in caplog.records if "has not been tested" in r.message]
         assert bool(untested) is warns
 
-    def test_ignores_an_unparsable_version_file(self, tmp_path: Path) -> None:
-        """A stray VERSION.txt must not shadow the authoritative answer."""
-        gpt = self._install(tmp_path, "not a version")
-        completed = MagicMock(stdout="SNAP Release version 14.0.0")
-
-        with patch("s1bursts.snap_client.subprocess.run", return_value=completed):
-            assert snap_version(gpt) == (14, 0, 0)
+    def test_returns_none_for_an_unparsable_version_file(self, tmp_path: Path) -> None:
+        assert snap_version(self._install(tmp_path, "not a version")) is None
 
 
 class TestResolveGptPath:
@@ -365,7 +348,9 @@ class TestCreateBackscatter:
         assert params["swath"] == "IW1"
         assert params["polarization"] == "VV"
         assert params["crs"] == "EPSG:32632"
-        assert mock_finalize.call_args.kwargs["band_names"] == ["Gamma0", "simulatedImage"]
+        metadata = mock_finalize.call_args.kwargs["metadata"]
+        assert metadata.band_names == ["Gamma0", "simulatedImage"]
+        assert metadata.tags["PRODUCT_TYPE"] == "RTC"
 
     def test_gtc_when_terrain_flattening_disabled(self, client: SNAPClient) -> None:
         burst = _make_burst("2022-01-01")
@@ -417,8 +402,8 @@ class TestCreateBackscatter:
 
 
 class TestFinalizeProduct:
-    def test_stamps_nodata_and_band_names(self, client: SNAPClient, tmp_path: Path) -> None:
-        """SNAP-style staging GeoTIFF (no NODATA tag) gains nodata + descriptions."""
+    def test_stamps_nodata_band_names_and_tags(self, client: SNAPClient, tmp_path: Path) -> None:
+        """SNAP-style staging GeoTIFF (no NODATA tag) gains nodata, descriptions and tags."""
         staging = tmp_path / "staging.tif"
         product = tmp_path / "final.tif"
         data = np.array([[1.0, 2.0], [np.nan, 4.0]], dtype=np.float32)
@@ -435,12 +420,25 @@ class TestFinalizeProduct:
         ) as ds:
             ds.write(data, 1)
 
-        client._finalize_product(staging, product, band_names=["Gamma0"])
+        client._finalize_product(
+            staging,
+            product,
+            metadata=RasterMetadata(
+                tags={"PRODUCT_TYPE": "RTC", "BACKSCATTER_CONVENTION": "Power"},
+                band_names=["Gamma0"],
+                units=["linear power"],
+                band_tags=[{"LAYER_NAME": "gamma0"}],
+            ),
+        )
 
         with rasterio.open(product) as ds:
             assert ds.nodata is not None
             assert np.isnan(ds.nodata)
             assert ds.descriptions == ("Gamma0",)
+            assert ds.tags()["PRODUCT_TYPE"] == "RTC"
+            assert ds.tags()["BACKSCATTER_CONVENTION"] == "Power"
+            assert ds.tags(1) == {"LAYER_NAME": "gamma0"}
+            assert ds.units == ("linear power",)
             assert np.array_equal(ds.read(1), data, equal_nan=True)
 
 
@@ -468,7 +466,9 @@ class TestCreateCoherence:
         params = mock_gpt.call_args.kwargs["process_params"]
         assert params["date1"] == "01Jan2022"
         assert params["date2"] == "13Jan2022"
-        assert mock_finalize.call_args.kwargs["band_names"] == ["coh"]
+        metadata = mock_finalize.call_args.kwargs["metadata"]
+        assert metadata.band_names == ["coh"]
+        assert metadata.tags["COHERENCE_WINDOW_RANGE"] == "25"
 
     def test_gpt_failure_returns_error_result(self, client: SNAPClient) -> None:
         pair = self._make_pair()

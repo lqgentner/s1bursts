@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, NamedTuple
 import warnings as _warnings
@@ -14,6 +15,7 @@ from pyproj import CRS
 import pytest
 import rasterio
 
+from s1bursts import product_tags
 from s1bursts.filemanager import FileManager
 from s1bursts.product import (
     CoherenceProduct,
@@ -783,6 +785,8 @@ class TestComposeReturns:
             return [(p, src[id(p)]) for p in products]
 
         weighter._load_band = fake_load  # type: ignore[method-assign]
+        # The stubs have no file to inherit provenance tags from.
+        weighter._input_tags = lambda _product: {}  # type: ignore[method-assign]
 
     def test_rtc_lrw_without_qa_returns_bare_composite(self, tmp_path: Path) -> None:
         """``write_qa=False`` returns just the composite (unchanged)."""
@@ -876,7 +880,7 @@ def _geobox() -> MGRSGeoBox:
     )
 
 
-def _write_raster(path: Path, bands: list[NDArray]) -> None:
+def _write_raster(path: Path, bands: list[NDArray], tags: dict[str, str] | None = None) -> None:
     """Write a small georeferenced GeoTIFF aligned to the test geobox."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(
@@ -893,6 +897,8 @@ def _write_raster(path: Path, bands: list[NDArray]) -> None:
     ) as dst:
         for index, band in enumerate(bands, 1):
             dst.write(band.astype("float32"), index)
+        if tags:
+            dst.update_tags(**tags)
 
 
 def _rtc(date: str, orbit: int = 15, burst_id: int = 30346) -> RTCProduct:
@@ -1182,3 +1188,273 @@ class TestComposeByPass:
         scene.weighter.compose_rtc_by_pass([product], scene.geobox)
 
         assert path.read_bytes() == b"kept"
+
+
+class TestCompositeTags:
+    """The tags written into the composites, exercised through the real write path.
+
+    The builders are unit-tested in ``test_product_tags``; what these cover is
+    that ``_save`` actually carries them into the file, and that the arguments
+    reaching them are the ones the call was made with.
+    """
+
+    def test_rtc_composite_declares_how_to_read_its_pixels(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(4.0)])
+
+        composite = scene.weighter.compose_rtc_lrw(
+            products,
+            scene.geobox,
+            aggregation="mean",
+            clip_max_resolution=2.0,
+        )
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            tags = src.tags()
+            assert tags["PRODUCT_TYPE"] == "RTC_LRW"
+            assert tags["BACKSCATTER_CONVENTION"] == "Power"
+            assert tags["CONTRIBUTING_OBSERVATIONS"] == "2"
+            # The parameters must be the ones this call actually used.
+            assert tags["COMPOSITING_PARAMETERS"] == "aggregation=mean;clip_max_resolution=2"
+            assert "Not a conformance claim." in tags["CEOS_ARD_ALIGNMENT"]
+            assert src.units == ("linear power",)
+            assert src.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+
+    def test_decibel_composite_says_so_in_the_file(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13")]
+        _write_raster(scene.manager.get_product_path(products[0]), [_full(2.0), _full(4.0)])
+
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox, decibel=True)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            assert "BACKSCATTER_CONVENTION" not in src.tags()
+            assert src.tags()["BACKSCATTER_SCALING"] == "decibel"
+            assert src.units == ("dB",)
+
+    def test_qa_layers_carry_their_own_vocabulary(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(4.0)])
+
+        _, (num_obs, cqm) = scene.weighter.compose_rtc_lrw(
+            products,
+            scene.geobox,
+            write_qa=True,
+        )
+
+        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+            assert src.tags()["QA_LAYER"] == "Contributing Observations Image"
+            assert src.descriptions == ("num_obs",)
+        with rasterio.open(scene.manager.get_product_path(cqm)) as src:
+            assert src.tags()["QA_LAYER"] == "Composite Quality Map Image"
+            assert src.tags()["CQM_CONVERSION_EQ"] == "dB = 10*log10(DN)"
+
+    def test_cqm_in_decibels_is_tagged_as_converted(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13")]
+        _write_raster(scene.manager.get_product_path(products[0]), [_full(2.0), _full(4.0)])
+
+        _, (num_obs, cqm) = scene.weighter.compose_rtc_lrw(
+            products,
+            scene.geobox,
+            write_qa=True,
+            cqm_decibel=True,
+        )
+
+        with rasterio.open(scene.manager.get_product_path(cqm)) as src:
+            assert src.tags()["CQM_SCALING"] == "decibel"
+            assert "CQM_CONVERSION_EQ" not in src.tags()
+        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+            assert "CQM_SCALING" not in src.tags()
+
+    def test_coherence_composite_inherits_the_estimation_window(self, scene: _Scene) -> None:
+        """The window exists only in ``CoherenceConfig``; the input files are its only route."""
+        coh = _coh("2022-08-01", "2022-08-13")
+        rtc = _rtc("2022-08-01")
+        _write_raster(
+            scene.manager.get_product_path(coh),
+            [_full(0.5)],
+            tags={
+                "COHERENCE_WINDOW_RANGE": "5",
+                "COHERENCE_WINDOW_AZIMUTH": "1",
+                "COHERENCE_WEIGHTING_SHAPE": "Rectangular",
+                "PROCESSING_SOFTWARE": "ESA SNAP",
+            },
+        )
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(4.0)])
+
+        composite = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            tags = src.tags()
+            assert tags["COHERENCE_WINDOW_RANGE"] == "5"
+            assert tags["COHERENCE_WINDOW_AZIMUTH"] == "1"
+            assert tags["PROCESSING_SOFTWARE"] == "ESA SNAP"
+            assert tags["MEASUREMENT_TYPE"] == "Coherence"
+            assert tags["TEMPORAL_BASELINE_DAYS"] == "12"
+            # Coherence is not a power quantity, so it gets no conversion.
+            assert not [k for k in tags if k.startswith("BACKSCATTER_")]
+            assert float(tags["COHERENCE_AVERAGE"]) == pytest.approx(0.5)
+            assert src.descriptions == ("VV",)
+
+    def test_provenance_is_only_inherited_where_the_inputs_agree(
+        self,
+        scene: _Scene,
+    ) -> None:
+        """A composite spanning two SNAP versions must not claim either of them."""
+        agree, differ = _rtc("2022-08-13"), _rtc("2022-08-25")
+        _write_raster(
+            scene.manager.get_product_path(agree),
+            [_full(2.0), _full(4.0)],
+            tags={"PROCESSING_SOFTWARE": "ESA SNAP", "PROCESSING_SOFTWARE_VERSION": "13.0.0"},
+        )
+        _write_raster(
+            scene.manager.get_product_path(differ),
+            [_full(2.0), _full(4.0)],
+            tags={"PROCESSING_SOFTWARE": "ESA SNAP", "PROCESSING_SOFTWARE_VERSION": "14.0.0"},
+        )
+
+        composite = scene.weighter.compose_rtc_lrw([agree, differ], scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            tags = src.tags()
+            # Unanimous, so it carries forward.
+            assert tags["PROCESSING_SOFTWARE"] == "ESA SNAP"
+            # Contested, so the composite states neither rather than picking one.
+            assert tags["PROCESSING_SOFTWARE_VERSION"] == product_tags.UNKNOWN
+
+    def test_unanimous_provenance_is_inherited(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(2.0), _full(4.0)],
+                tags={"PROCESSING_SOFTWARE_VERSION": "14.0.0"},
+            )
+
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            assert src.tags()["PROCESSING_SOFTWARE_VERSION"] == "14.0.0"
+
+    def test_pass_composite_records_its_direction_and_claims_no_weighting(
+        self,
+        scene: _Scene,
+    ) -> None:
+        ascending = _rtc("2022-08-13", orbit=15, burst_id=_ASCENDING_BURST)
+        _write_raster(scene.manager.get_product_path(ascending), [_full(1.0), _full(1.0)])
+
+        result = scene.weighter.compose_rtc_by_pass([ascending], scene.geobox, write_qa=True)
+        composite, num_obs = result["ASCENDING"]
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            tags = src.tags()
+            assert tags["ORBIT_DIRECTION"] == "ASCENDING"
+            assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
+            assert "COMPOSITING_METHOD_REFERENCE" not in tags
+        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+            assert src.tags()["QA_LAYER"] == "Contributing Observations Image"
+
+
+class TestInputConsistency:
+    """Guards on inputs a composite must not silently average together."""
+
+    def test_a_product_in_another_crs_is_refused(self, scene: _Scene) -> None:
+        """Another CRS reads pixels from elsewhere on Earth.
+
+        The window is computed in the geobox's coordinates against the source's
+        own transform, so nothing downstream notices.
+        """
+        ours, foreign = _rtc("2022-08-13"), _rtc("2022-08-25")
+        _write_raster(scene.manager.get_product_path(ours), [_full(1.0), _full(1.0)])
+        path = scene.manager.get_product_path(foreign)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=_TILE,
+            height=_TILE,
+            count=2,
+            dtype="float32",
+            crs=CRS.from_epsg(32633),
+            transform=Affine(10.0, 0.0, 400000.0, 0.0, -10.0, 5200000.0),
+            nodata=np.nan,
+        ) as dst:
+            dst.write(_full(1.0), 1)
+            dst.write(_full(1.0), 2)
+
+        with pytest.raises(ValueError, match="target grid is"):
+            scene.weighter.compose_rtc_lrw([ours, foreign], scene.geobox)
+
+    def test_a_product_at_another_pixel_size_is_refused(self, scene: _Scene) -> None:
+        ours, coarse = _rtc("2022-08-13"), _rtc("2022-08-25")
+        _write_raster(scene.manager.get_product_path(ours), [_full(1.0), _full(1.0)])
+        path = scene.manager.get_product_path(coarse)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=_TILE,
+            height=_TILE,
+            count=2,
+            dtype="float32",
+            crs=_UTM32,
+            transform=Affine(20.0, 0.0, 400000.0, 0.0, -20.0, 5200000.0),
+            nodata=np.nan,
+        ) as dst:
+            dst.write(_full(1.0), 1)
+            dst.write(_full(1.0), 2)
+
+        with pytest.raises(ValueError, match="must share the output grid"):
+            scene.weighter.compose_rtc_lrw([ours, coarse], scene.geobox)
+
+    def test_mixed_temporal_baselines_are_refused(self, scene: _Scene) -> None:
+        """Coherence falls off with the baseline, and the composite carries one."""
+        twelve = _coh("2022-08-01", "2022-08-13")
+        twenty_four = _coh("2022-08-13", "2022-09-06")
+        assert (twelve.baseline_days, twenty_four.baseline_days) == (12, 24)
+        for product in (twelve, twenty_four):
+            _write_raster(scene.manager.get_product_path(product), [_full(0.5)])
+
+        with pytest.raises(ValueError, match="share a temporal baseline"):
+            scene.weighter.compose_coherence_lrw([twelve, twenty_four], [], scene.geobox)
+
+    def test_mixed_snap_versions_are_allowed_but_warned_about(
+        self,
+        scene: _Scene,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An archive built over several campaigns will legitimately mix these."""
+        first, second = _rtc("2022-08-13"), _rtc("2022-08-25")
+        for product, version in ((first, "13.0.0"), (second, "14.0.0")):
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(2.0), _full(4.0)],
+                tags={"PROCESSING_SOFTWARE_VERSION": version},
+            )
+
+        with caplog.at_level(logging.WARNING, logger="s1bursts.resolution_weighter"):
+            composite = scene.weighter.compose_rtc_lrw([first, second], scene.geobox)
+
+        assert any(
+            "disagree on PROCESSING_SOFTWARE_VERSION" in r.getMessage() for r in caplog.records
+        )
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            assert src.tags()["PROCESSING_SOFTWARE_VERSION"] == product_tags.UNKNOWN
+
+    def test_inputs_without_provenance_tags_warn_about_nothing(
+        self,
+        scene: _Scene,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Absent from every input is agreement, not disagreement."""
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(4.0)])
+
+        with caplog.at_level(logging.WARNING, logger="s1bursts.resolution_weighter"):
+            scene.weighter.compose_rtc_lrw(products, scene.geobox)
+
+        assert not [r for r in caplog.records if "disagree" in r.message]

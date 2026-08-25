@@ -22,7 +22,8 @@ from freezebase.raster import (
 )
 import rasterio
 
-from s1bursts.config import get_settings
+from s1bursts import product_tags
+from s1bursts.config import get_settings, warn_if_tmpdir_unusable
 from s1bursts.errors import (
     BurstError,
     ConfigurationError,
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
     from s1bursts.burst import Burst, BurstPair
     from s1bursts.config import SNAPSettings
     from s1bursts.filemanager import FileManager
+    from s1bursts.product_tags import RasterMetadata
     from s1bursts.snap_graph import (
         BackscatterConfig,
         CoherenceConfig,
@@ -114,12 +116,7 @@ def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path
 SUPPORTED_SNAP_VERSIONS: Final[tuple[tuple[int, int], ...]] = ((13, 0), (14, 0))
 
 
-# `gpt --diag` prints a labelled line; VERSION.txt carries the bare number.
-_DIAG_VERSION_PATTERN = re.compile(r"SNAP Release version\s+(\d+(?:\.\d+)*)")
 _BARE_VERSION_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)\s*$")
-
-# Seconds to let `gpt --diag` start a JVM.
-_DIAG_TIMEOUT_S = 120
 
 
 def _as_version(text: str) -> tuple[int, ...] | None:
@@ -134,9 +131,8 @@ def _as_version(text: str) -> tuple[int, ...] | None:
 def snap_version(gpt_path: Path) -> tuple[int, ...] | None:
     """Version of the SNAP installation a ``gpt`` executable belongs to.
 
-    Reads ``VERSION.txt`` from the installation directory, which costs nothing,
-    and falls back to ``gpt --diag``, which is authoritative but starts a JVM.
-    The result is cached per executable.
+    Reads ``VERSION.txt`` from the installation directory. The result is cached
+    per executable.
 
     Parameters
     ----------
@@ -147,26 +143,11 @@ def snap_version(gpt_path: Path) -> tuple[int, ...] | None:
     -------
     tuple of int or None
         The version as a comparable tuple, e.g. ``(14, 0, 0)``, or ``None``
-        where neither source answers.
+        where the file is missing or unparsable.
     """
     version_file = gpt_path.parent.parent / "VERSION.txt"
     with suppress(OSError):
-        version = _as_version(version_file.read_text())
-        if version is not None:
-            return version
-
-    with suppress(OSError, subprocess.SubprocessError):
-        completed = subprocess.run(  # noqa: S603
-            [str(gpt_path), "--diag"],
-            capture_output=True,
-            text=True,
-            timeout=_DIAG_TIMEOUT_S,
-            check=False,
-        )
-        match = _DIAG_VERSION_PATTERN.search(completed.stdout)
-        if match is not None:
-            return _as_version(match.group(1))
-
+        return _as_version(version_file.read_text())
     return None
 
 
@@ -266,6 +247,8 @@ class SNAPConfig:
         # Update profile with default values if not specified by user
         base_profile = {"dtype": "float32", "nodata": "nan"}
         self.rasterio_profile = build_rasterio_profile(base_profile, self.rasterio_profile)
+        # Each GPT run stages an uncompressed GeoTIFF through tempfile.
+        warn_if_tmpdir_unusable()
         snap_settings = get_settings().snap
         self._resolve_paths(snap_settings)
         self._resolve_resources(snap_settings)
@@ -541,7 +524,7 @@ class SNAPClient:
         staging_file: Path,
         product_path: Path | UPath,
         *,
-        band_names: list[str],
+        metadata: RasterMetadata,
     ) -> None:
         """Rewrite the staging GeoTIFF compressed to its final location.
 
@@ -555,8 +538,8 @@ class SNAPClient:
             Uncompressed GeoTIFF written by GPT.
         product_path : Path | UPath
             Final product location (local or S3).
-        band_names : list[str]
-            Band descriptions, one per band.
+        metadata : RasterMetadata
+            Tags, band descriptions and units to write into the product.
         """
         profile = self.config.rasterio_profile or {}
         nodata = profile.get("nodata")
@@ -576,7 +559,10 @@ class SNAPClient:
                 src_file=staging_file,
                 dst_file=product_path,
                 profile=profile,
-                band_names=band_names,
+                band_names=metadata.band_names,
+                tags=metadata.tags,
+                band_tags=metadata.band_tags or None,
+                units=metadata.units,
                 move=True,
             )
         finally:
@@ -652,7 +638,11 @@ class SNAPClient:
                     self._finalize_product(
                         staging_file,
                         product_path,
-                        band_names=config.output_bands,
+                        metadata=product_tags.burst_metadata(
+                            product,
+                            config,
+                            snap_version=self.config.resolved_snap_version,
+                        ),
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst '%s'", burst)
@@ -729,7 +719,11 @@ class SNAPClient:
                     self._finalize_product(
                         staging_file,
                         product_path,
-                        band_names=config.output_bands,
+                        metadata=product_tags.burst_metadata(
+                            product,
+                            config,
+                            snap_version=self.config.resolved_snap_version,
+                        ),
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)
@@ -804,7 +798,11 @@ class SNAPClient:
                     self._finalize_product(
                         staging_file,
                         product_path,
-                        band_names=config.output_bands,
+                        metadata=product_tags.burst_metadata(
+                            product,
+                            config,
+                            snap_version=self.config.resolved_snap_version,
+                        ),
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from pydantic import ValidationError
 import pytest
 
-from s1bursts.config import get_settings
+from s1bursts.config import get_settings, warn_if_tmpdir_unusable
 
 
 class TestGetSettings:
@@ -136,3 +137,66 @@ class TestSnapSettingsValidation:
         monkeypatch.setenv("SNAP_BIN", "")
 
         assert get_settings().snap.bin is None
+
+
+class TestTmpdirWarning:
+    """A TMPDIR that cannot be written to is a silent fallback, not an error.
+
+    ``tempfile`` skips it and lands on ``/tmp``, which is often a tmpfs — the
+    thing an explicit TMPDIR is usually set to avoid.
+    """
+
+    def _warnings(self, caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [r.getMessage() for r in caplog.records if "TMPDIR" in r.getMessage()]
+
+    def test_warns_when_tmpdir_does_not_exist(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("TMPDIR", str(tmp_path / "absent"))
+
+        with caplog.at_level(logging.WARNING, logger="s1bursts.config"):
+            warn_if_tmpdir_unusable()
+
+        assert self._warnings(caplog)
+
+    def test_silent_when_tmpdir_is_usable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+
+        with caplog.at_level(logging.WARNING, logger="s1bursts.config"):
+            warn_if_tmpdir_unusable()
+
+        assert not self._warnings(caplog)
+
+    def test_silent_when_tmpdir_is_unset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An unset TMPDIR is the normal case, not a misconfiguration."""
+        monkeypatch.delenv("TMPDIR", raising=False)
+
+        with caplog.at_level(logging.WARNING, logger="s1bursts.config"):
+            warn_if_tmpdir_unusable()
+
+        assert not self._warnings(caplog)
+
+    def test_does_not_create_the_directory(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TMPDIR belongs to the environment; this package only reports on it."""
+        absent = tmp_path / "absent"
+        monkeypatch.setenv("TMPDIR", str(absent))
+
+        warn_if_tmpdir_unusable()
+
+        assert not absent.exists()

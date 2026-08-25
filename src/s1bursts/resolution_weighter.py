@@ -24,6 +24,7 @@ from numpy.typing import NDArray
 from pandas import Timestamp
 from rasterio.windows import from_bounds
 
+from s1bursts import product_tags
 from s1bursts.product import (
     RTCLRWQA,
     CoherenceProduct,
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
     from freezebase.mgrs import MGRSGeoBox
 
     from s1bursts.filemanager import FileManager
+    from s1bursts.product_tags import RasterMetadata
     from s1bursts.query import OrbitDirection, Polarization
 
 logger = logging.getLogger(__name__)
@@ -265,11 +267,20 @@ class ResolutionWeighter:
         composite = self._aggregate_weighted(rtc_obs, weights, aggregation)
         if decibel:
             composite = self._to_decibel(composite)
+        source_tags = self._input_tags(rtc_products)
+        n_observations = len(rtc_obs)
         self._save(
             composite,
             product,
             geobox,
-            polarization,
+            product_tags.rtc_lrw_metadata(
+                product,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+                n_observations=n_observations,
+                decibel=decibel,
+                source_tags=source_tags,
+            ),
             overwrite=overwrite,
         )
         if qa:
@@ -279,7 +290,10 @@ class ResolutionWeighter:
                 weights,
                 qa,
                 geobox,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
                 cqm_decibel=cqm_decibel,
+                source_tags=source_tags,
                 overwrite=overwrite,
             )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
@@ -396,7 +410,7 @@ class ResolutionWeighter:
             raise ValueError(msg)
 
         polarization = self._check_polarization(coh_products)
-        baseline_days = coh_products[0].baseline_days
+        baseline_days = self._check_baseline_days(coh_products)
         start_date = min(self._acquisition_date(p) for p in coh_products)
         end_date = max(self._acquisition_date(p) for p in coh_products)
 
@@ -434,11 +448,21 @@ class ResolutionWeighter:
         sim_obs = np.stack([sim_groups[key] for key in coh_groups])  # (N, H, W)
 
         weights = self._calc_weights(sim_obs, clip_max_resolution)
+        composite = self._aggregate_weighted(coh_obs, weights, aggregation)
+        source_tags = self._input_tags(coh_products)
+        n_observations = len(coh_obs)
         self._save(
-            self._aggregate_weighted(coh_obs, weights, aggregation),
+            composite,
             product,
             geobox,
-            polarization,
+            product_tags.coh_lrw_metadata(
+                product,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+                n_observations=n_observations,
+                statistics=product_tags.coherence_statistics(composite),
+                source_tags=source_tags,
+            ),
             overwrite=overwrite,
         )
         if qa:
@@ -448,7 +472,10 @@ class ResolutionWeighter:
                 weights,
                 qa,
                 geobox,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
                 cqm_decibel=cqm_decibel,
+                source_tags=source_tags,
                 overwrite=overwrite,
             )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
@@ -576,11 +603,18 @@ class ResolutionWeighter:
             composite = self._aggregate_unweighted(rtc_obs, aggregation)
             if decibel:
                 composite = self._to_decibel(composite)
+            source_tags = self._input_tags([prod for prod, _ in subset])
             self._save(
                 composite,
                 product,
                 geobox,
-                polarization,
+                product_tags.rtc_pass_metadata(
+                    product,
+                    aggregation=aggregation,
+                    n_observations=len(rtc_obs),
+                    decibel=decibel,
+                    source_tags=source_tags,
+                ),
                 overwrite=overwrite,
             )
             for qa_product in qa_num:
@@ -588,7 +622,12 @@ class ResolutionWeighter:
                     self._count_observations(rtc_obs),
                     qa_product,
                     geobox,
-                    "num_obs",
+                    product_tags.qa_metadata(
+                        qa_product,
+                        aggregation=aggregation,
+                        n_observations=len(rtc_obs),
+                        source_tags=source_tags,
+                    ),
                     dtype=np.uint16,
                     nodata=0,
                     overwrite=overwrite,
@@ -671,7 +710,7 @@ class ResolutionWeighter:
             return {}
 
         polarization = self._check_polarization(coh_products)
-        baseline_days = coh_products[0].baseline_days
+        baseline_days = self._check_baseline_days(coh_products)
         start_date = min(self._acquisition_date(p) for p in coh_products)
         end_date = max(self._acquisition_date(p) for p in coh_products)
 
@@ -712,11 +751,19 @@ class ResolutionWeighter:
 
             groups = self._stitch_by_orbit_date(subset)
             coh_obs = np.stack(list(groups.values()))  # (N, H, W)
+            composite = self._aggregate_unweighted(coh_obs, aggregation)
+            source_tags = self._input_tags([prod for prod, _ in subset])
             self._save(
-                self._aggregate_unweighted(coh_obs, aggregation),
+                composite,
                 product,
                 geobox,
-                polarization,
+                product_tags.coh_pass_metadata(
+                    product,
+                    aggregation=aggregation,
+                    n_observations=len(coh_obs),
+                    statistics=product_tags.coherence_statistics(composite),
+                    source_tags=source_tags,
+                ),
                 overwrite=overwrite,
             )
             for qa_product in qa_num:
@@ -724,7 +771,12 @@ class ResolutionWeighter:
                     self._count_observations(coh_obs),
                     qa_product,
                     geobox,
-                    "num_obs",
+                    product_tags.qa_metadata(
+                        qa_product,
+                        aggregation=aggregation,
+                        n_observations=len(coh_obs),
+                        source_tags=source_tags,
+                    ),
                     dtype=np.uint16,
                     nodata=0,
                     overwrite=overwrite,
@@ -736,6 +788,21 @@ class ResolutionWeighter:
     # ------------------------------------------------------------------
     # Private helpers — I/O
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_baseline_days(products: Sequence[CoherenceProduct]) -> int:
+        """Return the common temporal baseline, or raise ValueError if products differ.
+
+        Coherence falls off with the baseline, so mixing 12-day and 24-day
+        pairs averages two different quantities — and the composite carries a
+        single ``baseline_days`` in its name and its tags.
+        """
+        baselines = {p.baseline_days for p in products}
+        if len(baselines) != 1:
+            listed = ", ".join(str(b) for b in sorted(baselines))
+            msg = f"All coherence products must share a temporal baseline; got {listed} days."
+            raise ValueError(msg)
+        return baselines.pop()
 
     @staticmethod
     def _check_polarization(products: Sequence[ComposableProduct]) -> Polarization:
@@ -766,6 +833,18 @@ class ResolutionWeighter:
                 msg = f"product file not found: {path}"
                 raise FileNotFoundError(msg)
             with rasterio_open(path) as src:
+                if src.crs != geobox.crs:
+                    msg = (
+                        f"'{path.name}' is in {src.crs}, but the target grid is "
+                        f"{geobox.crs}; reproject it or compose onto its own grid."
+                    )
+                    raise ValueError(msg)
+                if src.res != (geobox.resolution.x, abs(geobox.resolution.y)):
+                    msg = (
+                        f"'{path.name}' has {src.res[0]} m pixels, but the target grid has "
+                        f"{geobox.resolution.x} m; all inputs must share the output grid."
+                    )
+                    raise ValueError(msg)
                 win = from_bounds(*bounds, src.transform).round_lengths().round_offsets()
                 data = src.read(band, window=win, boundless=True, fill_value=np.nan)
             return prod, data.astype(np.float32)
@@ -778,7 +857,7 @@ class ResolutionWeighter:
         data: NDArray,
         product: CompositeProduct | QAProduct,
         geobox: MGRSGeoBox,
-        band_name: str,
+        metadata: RasterMetadata,
         *,
         dtype: type[np.generic] = np.float32,
         nodata: float = np.nan,
@@ -800,8 +879,54 @@ class ResolutionWeighter:
             height=geobox.height,
             width=geobox.width,
         )
-        write_cog(data, path, profile, band_names=[band_name])
+        write_cog(
+            data,
+            path,
+            profile,
+            band_names=metadata.band_names,
+            tags=metadata.tags,
+            band_tags=metadata.band_tags or None,
+            units=metadata.units,
+        )
         logger.debug("saved %s", path.name)
+
+    def _input_tags(self, products: Collection[ComposableProduct]) -> dict[str, str]:
+        """Tags that every per-burst input agrees on.
+
+        The SNAP version and the coherence estimation window exist nowhere at
+        compositing time except in the input files. A key is carried forward
+        only where every input states the same value, so a composite spanning
+        two SNAP versions stays silent instead of claiming whichever its first
+        input happened to use.
+
+        Called only after ``_load_band`` has read the same products, so the
+        files are there.
+        """
+
+        def read(product: ComposableProduct) -> dict[str, str]:
+            with rasterio_open(self._fm.get_product_path(product)) as src:
+                return dict(src.tags())
+
+        with ThreadPoolExecutor(max_workers=self._n_workers) as executor:
+            per_input = list(executor.map(read, products))
+        if not per_input:
+            return {}
+        first, *rest = per_input
+        agreed = {k: v for k, v in first.items() if all(other.get(k) == v for other in rest)}
+
+        # Mixing SNAP versions is legitimate, but it is worth saying out loud
+        for key in ("PROCESSING_SOFTWARE_VERSION",):
+            values = {tags[key] for tags in per_input if key in tags}
+            # Absent from every input is agreement, not disagreement: an archive
+            # written before these tags existed simply has nothing to say.
+            if key in agreed or len(values) < 2:  # noqa: PLR2004
+                continue
+            logger.warning(
+                "inputs disagree on %s (%s); the composite will record it as unknown",
+                key,
+                ", ".join(sorted(values)),
+            )
+        return agreed
 
     def _write_lrw_qa(
         self,
@@ -811,15 +936,25 @@ class ResolutionWeighter:
         qa: Mapping[QaMetric, LRWQAProduct],
         geobox: MGRSGeoBox,
         *,
+        aggregation: Literal["mean", "median"] | float,
+        clip_max_resolution: float | None,
         cqm_decibel: bool,
+        source_tags: Mapping[str, str],
         overwrite: bool,
     ) -> None:
         """Compute and write the contributing-observations and composite quality QA products."""
+        n_observations = len(values)
         self._save(
             self._count_contributions(values, weights),
             qa[QaMetric.NUM],
             geobox,
-            "num_obs",
+            product_tags.qa_metadata(
+                qa[QaMetric.NUM],
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+                n_observations=n_observations,
+                source_tags=source_tags,
+            ),
             dtype=np.uint16,
             nodata=0,
             overwrite=overwrite,
@@ -829,7 +964,14 @@ class ResolutionWeighter:
             self._to_decibel(cqm) if cqm_decibel else cqm,
             qa[QaMetric.CQM],
             geobox,
-            "cqm",
+            product_tags.qa_metadata(
+                qa[QaMetric.CQM],
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+                n_observations=n_observations,
+                cqm_decibel=cqm_decibel,
+                source_tags=source_tags,
+            ),
             dtype=np.float32,
             nodata=np.nan,
             overwrite=overwrite,

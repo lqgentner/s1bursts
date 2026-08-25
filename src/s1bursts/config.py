@@ -5,10 +5,15 @@ left to the application: Call ``dotenv.load_dotenv()`` before :func:`get_setting
 or export the variables (e.g. ``uv run --env-file .env``).
 """
 
+import logging
+import os
 from pathlib import Path
+import tempfile
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class CDSES3Settings(BaseSettings):
@@ -89,6 +94,24 @@ class Settings(BaseSettings):
 
     cdse: CDSESettings = Field(default_factory=CDSESettings)
     snap: SNAPSettings = Field(default_factory=SNAPSettings)
+
+
+def warn_if_tmpdir_unusable() -> None:
+    """Warn when ``TMPDIR`` is set but cannot be written to.
+
+    ``tempfile`` silently skips an unusable ``TMPDIR`` and lands on ``/tmp``,
+    which on many hosts is a RAM-backed tmpfs — usually the very thing an
+    explicit ``TMPDIR`` was set to avoid.
+    """
+    configured = os.environ.get("TMPDIR")
+    if not configured or os.access(configured, os.W_OK | os.X_OK):
+        return
+    logger.warning(
+        "TMPDIR is set to '%s', which is not a writable directory; staging will "
+        "fall back to '%s'. Create it, or unset TMPDIR to silence this.",
+        configured,
+        tempfile.gettempdir(),
+    )
 
 
 def get_settings() -> Settings:

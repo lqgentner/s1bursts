@@ -50,6 +50,86 @@ The LRW composites correspond to the **Composite Backscatter (CB)** product of t
 
 The `QA-*` filename tokens are this package's own; CEOS-ARD constrains metadata content, not file naming. `cqm_decibel` defaults to `False` because item 2.22 leaves the decibel conversion to the user.
 
+#### GeoTIFF tags
+
+Every product carries dataset tags describing how to read its pixels, built by `product_tags.py` and written on the branch that produced the file. This is deliberate redundancy with any downstream catalogue: a float32 backscatter raster arriving on its own is otherwise silently ambiguous between linear power and decibels, and misreading it produces wrong numbers rather than an error.
+
+**No product-type claim is made and no conformance is asserted.** `CEOS_ARD_` is reserved for the two tags that state the relationship to the specification — `CEOS_ARD_ALIGNMENT`, a free-text sentence that disclaims conformance explicitly, and `CEOS_ARD_SPECIFICATION_URL`. There is deliberately no `CEOS_ARD_PRODUCT_TYPE`. Every other tag is a plain descriptive name, following OPERA's convention, so nothing masquerades as CEOS vocabulary.
+
+Where a tag maps onto a parameter of the [CEOS-ARD SAR Metadata Specification](https://ceos.org/ard/) v1.3, it is that parameter name upper-snake-cased, so a reader can look it up:
+
+| Tag | Metadata-spec parameter | PFS item |
+| --- | --- | --- |
+| `BACKSCATTER_MEASUREMENT` | `<BackscatterMeasurement>` | 3.1 |
+| `BACKSCATTER_CONVENTION` | `<BackscatterConvention>` | 3.1 |
+| `BACKSCATTER_CONVERSION_EQ` | `<BackscatterConversionEq>` | 3.1 (discharges 3.2) |
+| `CQM_CONVERSION_EQ` | `<CQMdBScaling>` | 2.22 |
+| `CONTRIBUTING_OBSERVATIONS` | `<NbrObservations>` | 2.21 |
+| `COMPOSITING_METHOD` | `<CBMethod>` | 1.7.24 |
+| `COMPOSITING_METHOD_REFERENCE` | `<CBReference>` | 1.7.24 |
+| `PIXEL_COORDINATE_CONVENTION` | `<PixelCoordinateConvention>` | 1.7.10 |
+| `MEASUREMENT_TYPE` | `<Measurements type=…>` | [InSAR] 3.8 |
+| `COHERENCE_AVERAGE` / `COHERENCE_STD` | `<CoherenceAverage>` / `<CoherenceStd>` | [InSAR] 3.8 |
+| `PHASE_QUALITY_METHOD` | `<InSARPhaseQualityMethod>` | [InSAR] 1.7.18 |
+| `PHASE_QUALITY_REFERENCE` | `<InSARPhaseQualityReference>` | [InSAR] 1.7.18 |
+| `COHERENCE_WINDOW_RANGE` / `COHERENCE_WINDOW_AZIMUTH` | `<CoherenceWindowColumn>` / `<CoherenceWindowLine>` | [InSAR] 1.7.18 |
+| `COHERENCE_WEIGHTING_SHAPE` | `<CoherenceWeightingShape>` | [InSAR] 1.7.18 |
+| `TEMPORAL_BASELINE_DAYS` | `<TemporalBaseline>` | [InSAR] 1.7.16 |
+
+The rest have **no spec counterpart** and are simply descriptive: `PRODUCT_TYPE` (the `s1bursts` identifier, matching `product.product_type`), `PRODUCT_FAMILY`, `MGRS_TILE`, `COMPOSITE_START_DATE` / `COMPOSITE_END_DATE`, `POLARIZATION`, `ORBIT_DIRECTION`, `LAYER_NAME`, `LAYER_DESCRIPTION`, `QA_LAYER`, `COMPOSITING_PARAMETERS`, `TERRAIN_CORRECTION`, `MULTILOOK_RANGE` / `MULTILOOK_AZIMUTH`, `BURST_ID`, `SUB_SWATH`, `ACQUISITION_DATE`, `DATE_PRIMARY` / `DATE_SECONDARY`, `GRID_SPACING`, `FLAT_EARTH_PHASE_REMOVED` / `TOPOGRAPHIC_PHASE_REMOVED`, the provenance tags below, and the decibel tags after them. The metadata spec defines no element for the "specific input parameters used" that item 1.7.24 asks for in prose, so `COMPOSITING_PARAMETERS` is this package's own — hence a descriptive name rather than a CEOS-looking one. It is built from the arguments actually passed to the `compose_*` call, never from a configuration object, so it cannot describe a run that did not happen.
+
+##### Provenance
+
+Following OPERA, which names each component and its version rather than asserting a single "processor":
+
+| Tag | Value | Written by |
+| --- | --- | --- |
+| `PROCESSING_SOFTWARE` | `ESA SNAP` | the per-burst product; inherited by composites |
+| `PROCESSING_SOFTWARE_VERSION` | e.g. `14.0.0`, or `N/A` | ditto |
+| `PIPELINE_SOFTWARE` | `s1bursts` | every product, stamped fresh, never inherited |
+| `PIPELINE_SOFTWARE_VERSION` | `s1bursts.__version__` | ditto |
+| `PIPELINE_SOFTWARE_URL` | the repository | ditto |
+| `PRODUCT_LEVEL` | `L2` per burst, `L3` composite | every product |
+| `SOURCE_DATA_PRODUCT_LEVEL` | `L1` per burst, `L2` composite | every product |
+
+Three rules make these load-bearing rather than decorative:
+
+- **The DEM is not tagged at all.** It is not needed to interpret a pixel, and for an external DEM the only value available is a file path, which is machine-specific and says little; a catalogue that wants to record it should take it from the run configuration rather than infer it. The same reasoning keeps it out of the inherited set.
+- **Every provenance field is always present, as `N/A` where it could not be determined** (`product_tags.UNKNOWN`). The SNAP version is `N/A` when the installation carries no `VERSION.txt`; a composite's inherited fields are `N/A` when its inputs do not supply one answer. Absence would be ambiguous with a file written before the tag existed, which is exactly what a provenance field must not be. Conditional fields are different and *are* omitted when they do not apply: `COHERENCE_WINDOW_RANGE = N/A` on a backscatter composite would be nonsense, not information.
+- **The pipeline version is stamped by whichever `s1bursts` writes the file and is never inherited from an input.** It is what identifies the vocabulary in this table — and the definition of `QA-NUM` has already changed once between releases, so a file without it is ambiguous between the two.
+- **A composite built from older burst products still works.** Products written before these tags existed carry none, so the composite records `N/A` for `PROCESSING_SOFTWARE` and `PROCESSING_SOFTWARE_VERSION`, and a coherence composite simply omits the estimation-window fields it cannot inherit. Everything the composite generates itself is unaffected.
+
+  Burst products are plain tiled GeoTIFFs, so `product_tags.burst_metadata()` can be backfilled onto them without reprocessing or touching a pixel — on S3 as well as locally. Two routes, both verified against a real bucket:
+
+  | | mechanism | needs |
+  | --- | --- | --- |
+  | `rasterio_open(path, "r+")` | GDAL stages the object in a local temp file, patches it, re-uploads | a writable `TMPDIR`; **fails hard without one** |
+  | `rewrite_tiff(path, path, tags=..., units=...)` | staged in memory, one `PutObject` | RAM for the uncompressed raster |
+
+  Prefer `r+` where the rasters are large and `TMPDIR` points at disk, since the memory route holds the whole uncompressed image. **Composites are COGs** (`LAYOUT: COG`), and writing metadata into a finished COG costs it that layout, so they must be regenerated rather than patched.
+- **Inherited fields must be unanimous.** `ResolutionWeighter._input_tags` reads every input, not just the first, and carries a value forward only where they all agree. A composite spanning two SNAP versions therefore reports `N/A` and logs a warning, instead of silently adopting whichever burst happened to sort first.
+
+Which input differences are tolerated is a deliberate split. **Refused**, because the composite would otherwise be wrong rather than merely inconsistent: a CRS or pixel size other than the target grid's (the read window is computed in the geobox's coordinates against each source's own transform, so it would silently read pixels from somewhere else), a mixed temporal baseline on coherence (a composite carries one `baseline_days`, in its name and its tags), and a mixed polarization. **Tolerated with a warning**: a mixed SNAP version, which degrades consistency without invalidating the arithmetic and which an archive built over several campaigns will legitimately contain. A mixed DEM is not detectable at all, since the DEM is not tagged.
+
+Levels are `L1 → L2 → L3` in the EOSDIS sense; `L2` for a geocoded burst matches OPERA's own RTC-S1, and `L3` for a space-and-time-gridded composite matches ESA's Sentinel-1 monthly mosaic.
+
+##### Band units
+
+`dB` where the values are decibels, `linear power` where they are not, and empty for a genuinely dimensionless band (`simulatedImage`, coherence, `cqm`, `num_obs`). `linear power` is the PFS's own wording — items 2.21, 2.22 and 3.1 each enumerate the expression convention as *[linear amplitude or linear power]* — so the band says what it holds in the specification's words rather than in an invented one.
+
+The `BACKSCATTER_CONVENTION` **tag** stays `Power`, not `linear power`: this is one of the places the two CEOS documents disagree, and the metadata spec's parameter list, which enumerates `<BackscatterConvention>` as `[Amplitude, Power]`, governs the parameter.
+
+Some things are deliberately **not** emitted:
+
+- **No `BACKSCATTER_CONVENTION` on decibel-stored data.** It is enumerated `[Amplitude, Power]` and describes the stored values, so neither fits; the dB branch emits `BACKSCATTER_SCALING = decibel` and `BACKSCATTER_CONVERSION_APPLIED` instead, and drops `BACKSCATTER_CONVERSION_EQ` so nothing invites a second conversion. `CQM_SCALING` / `CQM_CONVERSION_APPLIED` mirror this for `cqm_decibel=True`.
+- **No conversion equation on coherence or on `QA-NUM`.** Coherence is a dimensionless magnitude on [0, 1], not a power quantity. The PFS prose for 2.21 lists a dB-scaling expression, but the metadata spec's parameter list for it does not — the bullets are copied from item 3.1, and a per-pixel integer count has no dB scaling.
+- **`QA-NUM` is never described as a data mask.** PFS item 2.2 asks for three distinguishable states (valid / invalid / no data) and a zero count collapses two of them into one; item 2.2 is a known-unmet Threshold requirement.
+- **No `[CB]` wording on a per-burst product,** which is not a composite, and no NRB or InSAR product-type claim on one either.
+
+The composite coherence product sits in a specification gap — coherence appears only as [InSAR] 3.8 (per-pair) and compositing only as [CB] (backscatter) — so its `CEOS_ARD_ALIGNMENT` names both items it borrows from and states that no composite coherence product is defined.
+
+The coherence estimation window exists only in `CoherenceConfig` at graph-build time. It reaches a composite by exactly one route: the per-burst coherence products carry it in their tags, and `ResolutionWeighter` reads them back from its inputs. `PROCESSING_SOFTWARE` and `PROCESSING_SOFTWARE_VERSION` are inherited the same way.
+
 ## Implemented Components
 
 ### ✅ Core Classes
