@@ -514,17 +514,31 @@ class TestBurstProducts:
         assert tags["GRID_SPACING"] == "10 m"
         assert tags["PROCESSING_SOFTWARE"] == "ESA SNAP"
 
-    def test_the_dem_is_not_tagged(self) -> None:
-        # Not needed to interpret a pixel, and for an external DEM the only
-        # value available is a machine-specific file path. A catalogue that
-        # wants it should take it from the run configuration.
-        for product, config in (
-            (_rtc_burst(), BackscatterConfig(dem="Copernicus 30m Global DEM")),
-            (_coh_burst(), CoherenceConfig(dem=Path("/data/dem/glo30_ellipsoid.tif"))),
-        ):
-            tags = product_tags.burst_metadata(product, config)  # type: ignore[arg-type]
-            assert "DEM" not in tags.tags
-        assert "DEM" not in _lrw(source_tags={"DEM": "Copernicus 30m Global DEM"})
+    def test_a_builtin_dem_is_identified_by_its_snap_name(self) -> None:
+        config = BackscatterConfig(
+            dem="Copernicus 30m Global DEM",
+            dem_name="ignored for built-in DEMs",
+        )
+        tags = product_tags.backscatter_metadata(_rtc_burst(), config).tags
+        assert tags["DEM"] == "Copernicus 30m Global DEM"
+
+    def test_an_external_dem_uses_its_configured_name_without_leaking_its_path(self) -> None:
+        config = CoherenceConfig(
+            dem=Path("/data/dem/glo30_ellipsoid.tif"),
+            dem_name="Copernicus GLO-30, EGM2008",
+        )
+        tags = product_tags.coherence_metadata(_coh_burst(), config).tags
+        assert tags["DEM"] == "Copernicus GLO-30, EGM2008"
+        assert str(config.dem) not in tags.values()
+
+    def test_an_unnamed_external_dem_is_unknown(self) -> None:
+        config = InterferogramConfig(dem="/data/dem/glo30_ellipsoid.tif")
+        tags = product_tags.interferogram_metadata(_ifg_burst(), config).tags
+        assert tags["DEM"] == product_tags.UNKNOWN
+
+    def test_a_composite_inherits_the_dem(self) -> None:
+        tags = _lrw(source_tags={"DEM": "Copernicus 30m Global DEM"})
+        assert tags["DEM"] == "Copernicus 30m Global DEM"
 
     def test_coherence_burst_records_the_window_and_the_baseline(self) -> None:
         tags = product_tags.coherence_metadata(_coh_burst(), CoherenceConfig(window=(25, 5))).tags
@@ -634,6 +648,7 @@ class TestProvenance:
 
     def test_provenance_a_composite_cannot_establish_is_stated_as_unknown(self) -> None:
         tags = _lrw(source_tags={})
+        assert tags["DEM"] == product_tags.UNKNOWN
         assert tags["PROCESSING_SOFTWARE"] == product_tags.UNKNOWN
         assert tags["PROCESSING_SOFTWARE_VERSION"] == product_tags.UNKNOWN
 

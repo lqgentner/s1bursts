@@ -449,7 +449,7 @@ class ResolutionWeighter:
 
         weights = self._calc_weights(sim_obs, clip_max_resolution)
         composite = self._aggregate_weighted(coh_obs, weights, aggregation)
-        source_tags = self._input_tags(coh_products)
+        source_tags = self._input_tags(coh_products, additional_dem_products=rtc_products)
         n_observations = len(coh_obs)
         self._save(
             composite,
@@ -890,7 +890,12 @@ class ResolutionWeighter:
         )
         logger.debug("saved %s", path.name)
 
-    def _input_tags(self, products: Collection[ComposableProduct]) -> dict[str, str]:
+    def _input_tags(
+        self,
+        products: Collection[ComposableProduct],
+        *,
+        additional_dem_products: Collection[ComposableProduct] = (),
+    ) -> dict[str, str]:
         """Tags that every per-burst input agrees on.
 
         The SNAP version and the coherence estimation window exist nowhere at
@@ -898,6 +903,10 @@ class ResolutionWeighter:
         only where every input states the same value, so a composite spanning
         two SNAP versions stays silent instead of claiming whichever its first
         input happened to use.
+
+        All inputs must identify the same DEM. ``additional_dem_products``
+        supports coherence LRW composites, whose RTC contributing-area rasters
+        also depend on a DEM but do not supply the other coherence provenance.
 
         Called only after ``_load_band`` has read the same products, so the
         files are there.
@@ -907,12 +916,23 @@ class ResolutionWeighter:
             with rasterio_open(self._fm.get_product_path(product)) as src:
                 return dict(src.tags())
 
+        primary_count = len(products)
+        all_products = [*products, *additional_dem_products]
         with ThreadPoolExecutor(max_workers=self._n_workers) as executor:
-            per_input = list(executor.map(read, products))
+            all_input_tags = list(executor.map(read, all_products))
+        per_input = all_input_tags[:primary_count]
         if not per_input:
             return {}
+
+        dem_values = {tags.get("DEM", product_tags.UNKNOWN) for tags in all_input_tags}
+        if len(dem_values) > 1:
+            listed = ", ".join(sorted(dem_values))
+            msg = f"All inputs must use the same DEM; got {listed}."
+            raise ValueError(msg)
+
         first, *rest = per_input
         agreed = {k: v for k, v in first.items() if all(other.get(k) == v for other in rest)}
+        agreed["DEM"] = dem_values.pop()
 
         # Mixing SNAP versions is legitimate, but it is worth saying out loud
         for key in ("PROCESSING_SOFTWARE_VERSION",):

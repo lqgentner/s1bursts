@@ -843,6 +843,9 @@ class GeocodingConfig(BaseModel):
         DEM used for geocoding. A string selects one of SNAP's auto-download
         DEMs; a path (or a string with a file suffix) is passed as an external
         DEM.
+    dem_name : str or None, optional
+        Identification written to product metadata for an external DEM. Ignored
+        for SNAP's built-in DEMs, whose ``dem`` value is already their name.
     img_resampling : ResamplingMethod, default "BILINEAR_INTERPOLATION"
         Resampling of the image during terrain correction.
     dem_resampling : DEMResamplingMethod, default "BILINEAR_INTERPOLATION"
@@ -885,6 +888,7 @@ class GeocodingConfig(BaseModel):
 
     grid_spacing: _PositiveFloat = 10.0
     dem: str | Path = "Copernicus 30m Global DEM"
+    dem_name: str | None = None
     img_resampling: ResamplingMethod = "BILINEAR_INTERPOLATION"
     dem_resampling: DEMResamplingMethod = "BILINEAR_INTERPOLATION"
     align_to_standard_grid: bool = True

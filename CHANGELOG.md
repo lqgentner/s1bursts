@@ -13,7 +13,10 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - **GeoTIFF metadata on every product.** Composites, QA layers and per-burst
   products now carry dataset tags, band units and per-band tags describing how
   to read their pixels, built by the new `s1bursts.product_tags` module. The
-  vocabulary follows CEOS-ARD PFS SAR v1.3.1
+  vocabulary follows CEOS-ARD PFS SAR v1.3.1. Products identify the DEM used;
+  the new `GeocodingConfig.dem_name` supplies that identification for an
+  external DEM, and composite products inherit the identification from their
+  inputs.
 - **SNAP 14 support.** Graphs now name the coregistered stack's bands to match
   the installed SNAP (SNAP 13: `mst`, `slv1`; SNAP 14: `ref`, `sec1`). The
   version is read from the installation's `VERSION.txt`; if that is missing,

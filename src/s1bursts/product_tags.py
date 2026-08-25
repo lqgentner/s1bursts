@@ -120,12 +120,7 @@ considered and came back empty from one this package never wrote.
 # Provenance a composite inherits from the per-burst products it was built
 # from, describing how those inputs were made. Always present on a composite,
 # as ``UNKNOWN`` where the inputs do not supply a single answer.
-#
-# The DEM is deliberately not among them, and not tagged at all: it is not
-# needed to interpret a pixel, and for an external DEM the only value available
-# is a file path, which is machine-specific and says little. A catalogue that
-# wants to record it should take it from the run configuration.
-_INPUT_KEYS = ("PROCESSING_SOFTWARE", "PROCESSING_SOFTWARE_VERSION")
+_INPUT_KEYS = ("DEM", "PROCESSING_SOFTWARE", "PROCESSING_SOFTWARE_VERSION")
 _COHERENCE_INPUT_KEYS = (
     "PHASE_QUALITY_METHOD",
     "PHASE_QUALITY_REFERENCE",
@@ -658,6 +653,7 @@ def _burst(
         "PIXEL_COORDINATE_CONVENTION": _PIXEL_CONVENTION,
         "PROCESSING_SOFTWARE": "ESA SNAP",
         "GRID_SPACING": f"{config.grid_spacing:g} m",
+        "DEM": config.dem if isinstance(config.dem, str) else config.dem_name or UNKNOWN,
     }
     tags["PROCESSING_SOFTWARE_VERSION"] = (
         ".".join(str(part) for part in snap_version) if snap_version is not None else UNKNOWN

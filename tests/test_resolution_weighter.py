@@ -1337,6 +1337,20 @@ class TestCompositeTags:
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             assert src.tags()["PROCESSING_SOFTWARE_VERSION"] == "14.0.0"
 
+    def test_composite_inherits_the_dem(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(2.0), _full(4.0)],
+                tags={"DEM": "Copernicus 30m Global DEM"},
+            )
+
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            assert src.tags()["DEM"] == "Copernicus 30m Global DEM"
+
     def test_pass_composite_records_its_direction_and_claims_no_weighting(
         self,
         scene: _Scene,
@@ -1420,6 +1434,23 @@ class TestInputConsistency:
 
         with pytest.raises(ValueError, match="share a temporal baseline"):
             scene.weighter.compose_coherence_lrw([twelve, twenty_four], [], scene.geobox)
+
+    def test_mixed_dems_are_refused(self, scene: _Scene) -> None:
+        coh = _coh("2022-08-01", "2022-08-13")
+        rtc = _rtc("2022-08-01")
+        _write_raster(
+            scene.manager.get_product_path(coh),
+            [_full(0.5)],
+            tags={"DEM": "Copernicus 30m Global DEM"},
+        )
+        _write_raster(
+            scene.manager.get_product_path(rtc),
+            [_full(1.0), _full(4.0)],
+            tags={"DEM": "GETASSE30"},
+        )
+
+        with pytest.raises(ValueError, match="same DEM"):
+            scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox)
 
     def test_mixed_snap_versions_are_allowed_but_warned_about(
         self,
