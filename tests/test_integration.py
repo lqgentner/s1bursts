@@ -37,12 +37,14 @@ from s1bursts.config import get_settings
 from s1bursts.dem import _get_transformer
 from s1bursts.errors import ConfigurationError
 from s1bursts.snap_client import _resolve_gpt_path
+from tests.dem_probe import PROBE_CENTRE, measure_dem_sampling
 from tests.safe_conformance import check_burst_safe, compare_burst_safes
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from s1bursts.burst import Burst, BurstCollection, BurstPairCollection
+    from tests.dem_probe import DEMProbe
 
 pytestmark = pytest.mark.integration
 
@@ -567,3 +569,72 @@ class TestVerticalDatumGrids:
         finally:
             if stashed.exists():
                 shutil.move(stashed, grid)
+
+
+@pytest.fixture(scope="module")
+def dem_sampling(tmp_path_factory: pytest.TempPathFactory) -> DEMProbe:
+    """Measure the installed SNAP's external-DEM handling once for the class below."""
+    return measure_dem_sampling(
+        _resolve_gpt_path(None, _settings.snap),
+        tmp_path_factory.mktemp("s1bursts-dem-probe"),
+    )
+
+
+class TestExternalDEMSampling:
+    """The two SNAP behaviours `prepare_dem_for_snap` exists to compensate for.
+
+    Both are reported bugs, so both should be fixed one day — and from that
+    release on the compensation is itself the error. Nothing else here would
+    notice: the unit tests assert that the shift and the vertical conversion are
+    applied, not that SNAP still needs them, and every graph the integration
+    tests run reads the built-in Copernicus DEM rather than a file. These tests
+    fail when SNAP changes, which is what they are for.
+
+    See `tests/dem_probe.py` for how the two are measured.
+    """
+
+    @requires_snap
+    def test_snap_samples_an_external_dem_half_a_pixel_south_east(
+        self,
+        dem_sampling: DEMProbe,
+    ) -> None:
+        offset = dem_sampling.raw
+        # A rigid shift, not a resampling artefact that a tolerance could absorb.
+        assert offset.scatter < 0.01
+        message = (
+            "SNAP no longer samples an external DEM half a pixel off "
+            f"(offset {offset.column:+.3f}, {offset.row:+.3f} px): "
+            "prepare_dem_for_snap must stop shifting the geotransform"
+        )
+        assert offset.column == pytest.approx(0.5, abs=0.01), message
+        assert offset.row == pytest.approx(0.5, abs=0.01), message
+
+    @requires_snap
+    def test_prepared_dem_is_sampled_where_its_georeferencing_says(
+        self,
+        dem_sampling: DEMProbe,
+    ) -> None:
+        """The compensation is exact: the same probe, on a prepared DEM, finds no offset."""
+        offset = dem_sampling.prepared
+        assert offset.scatter < 0.01
+        assert offset.column == pytest.approx(0.0, abs=0.01)
+        assert offset.row == pytest.approx(0.0, abs=0.01)
+
+    @requires_snap
+    def test_snap_converts_dem_heights_with_egm96(self, dem_sampling: DEMProbe) -> None:
+        """The geoid SNAP applies is EGM96, whichever geoid the data is referenced to.
+
+        That is why `prepare_dem_for_snap` converts heights itself and why
+        `external_dem_apply_egm` defaults to False: SNAP's own conversion is
+        right only for an EGM96 DEM, and the Copernicus DEM is EGM2008.
+        """
+        transformer = _get_transformer(
+            pyproj.CRS("EPSG:4326+5773"),
+            download_missing_grids=True,
+        )
+        _, _, egm96 = transformer.transform(*PROBE_CENTRE, 0.0, errcheck=True)
+
+        # EGM2008 sits about 1.2 m higher over the probe, so this tolerance —
+        # wide enough for the difference between SNAP's bicubic EGM96 and PROJ's
+        # own — still tells the two models apart.
+        assert dem_sampling.undulation == pytest.approx(egm96, abs=0.3)

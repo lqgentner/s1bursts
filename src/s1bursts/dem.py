@@ -419,9 +419,12 @@ def prepare_dem_for_snap(
     """Return an external DEM prepared for SNAP's sampling and height conventions.
 
     The output geotransform is shifted by half a pixel because SNAP interprets an
-    external DEM's origin as the centre of its first pixel. When ``source_crs`` is
-    supplied, elevations are also transformed from that compound horizontal and
-    vertical CRS to WGS 84 ellipsoidal heights (EPSG:4979).
+    external DEM's origin as the centre of its first pixel, and so samples the file
+    half a pixel south-east of where its georeferencing places it [1]. When
+    ``source_crs`` is supplied, elevations are also transformed from that compound
+    horizontal and vertical CRS to WGS 84 ellipsoidal heights (EPSG:4979). SNAP
+    cannot do that conversion itself: the only geoid it knows is EGM96, which it
+    applies even to the Copernicus DEM, whose heights are referenced to EGM2008 [2].
 
     The result is correct **only** when read by SNAP and must only be passed as an
     ``externalDEMFile``. Set SNAP's ``externalDEMApplyEGM`` parameter to ``False``.
@@ -456,6 +459,14 @@ def prepare_dem_for_snap(
         If no exact vertical transformation is available.
     pyproj.exceptions.ProjError
         If any DEM pixel falls outside the selected transformation's valid area.
+
+    References
+    ----------
+    .. [1] External DEM is sampled half a pixel off. ESA STEP forum.
+       https://forum.step.esa.int/t/external-dem-is-sampled-half-a-pixel-off/46042
+    .. [2] Copernicus DEM built-in path applies EGM96 while the data is EGM2008.
+       ESA STEP forum.
+       https://forum.step.esa.int/t/copernicus-dem-built-in-path-applies-egm96-while-the-data-is-egm2008/46041
     """
     if not dem.exists():
         msg = f"DEM not found: '{dem}'"
