@@ -10,8 +10,14 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Added
 
+- **GeoTIFF metadata on every product.** Composites, QA layers and per-burst
+  products now carry dataset tags, band units and per-band tags describing how
+  to read their pixels, built by the new `s1bursts.product_tags` module. The
+  vocabulary follows CEOS-ARD PFS SAR v1.3.1
 - **SNAP 14 support.** Graphs now name the coregistered stack's bands to match
-  the installed SNAP (SNAP 13: `mst`, `slv1`; SNAP 14: `ref`, `sec1`)
+  the installed SNAP (SNAP 13: `mst`, `slv1`; SNAP 14: `ref`, `sec1`). The
+  version is read from the installation's `VERSION.txt`; if that is missing,
+  the pre-14 naming is used and a warning says so.
 - **Python 3.14 support.**. Verified in CI.
 - `prepare_dem_for_snap()` converts an orthometric external DEM to WGS 84
   ellipsoidal heights when given a compound source CRS (for example,
@@ -34,6 +40,17 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   and removes boto's environment-variable credential provider, so ambient env vars
   can never sign CDSE requests.
 
+### Fixed
+
+- A `TMPDIR` that is set but not writable now produces a warning when a
+  `SNAPConfig` is built, because `tempfile`, used during processing,
+  silently skips missing directories.
+- `compose_*` now refuses inputs that do not sit on the output grid.
+- `compose_coherence_lrw()` and `compose_coherence_by_pass()` now reject inputs
+  with differing temporal baselines.
+- A composite whose inputs disagree on the SNAP version now logs a warning
+  naming the values.
+
 ### Changed
 
 - **Breaking:** The `QA-NUM` layer of an LRW composite now counts the
@@ -50,9 +67,10 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - The area SNAP writes as `simulatedImage` is now called the *local
   contributing area* throughout the documentation, after the term the CEOS-ARD
   SAR product family specification uses for it.
-- Requires `freezebase[s3]>=0.5,<0.6`. Burst downloads now close their
-  `HTTPDownloader` when done, releasing the connection immediately instead of
-  leaving it to the garbage collector.
+- Requires `freezebase[s3]>=0.6,<0.7`, which adds the `tags`, `band_tags` and
+  `units` parameters the product metadata above is written through. Burst
+  downloads also close their `HTTPDownloader` when done, releasing the
+  connection immediately instead of leaving it to the garbage collector.
 - **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
   still carries the Terrain-Correction parameters every per-product config
   inherits, but `to_xml()` is now an abstract method implemented by
