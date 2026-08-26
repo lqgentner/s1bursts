@@ -7,12 +7,14 @@ from lxml.etree import fromstring, tostring
 from pydantic import ValidationError
 import pytest
 
+from s1bursts.errors import ConfigurationError
 from s1bursts.snap_graph import (
     BackscatterConfig,
     CoherenceConfig,
     GeocodingConfig,
     InterferogramConfig,
     stack_band_suffixes,
+    supports_coherence_options,
     xml_to_mermaid,
 )
 
@@ -178,10 +180,91 @@ def test_interferogram_intensity_expressions_follow_the_snap_version(
         assert fragment not in xml
 
 
-@pytest.mark.parametrize("config", [BackscatterConfig(), CoherenceConfig()])
-def test_graphs_without_stack_bands_ignore_the_snap_version(config: GeocodingConfig) -> None:
-    """The keyword exists for a uniform signature; only the interferogram uses it."""
-    assert config.to_xml(snap_version=(14, 0, 0)) == config.to_xml()
+def test_backscatter_graph_ignores_the_snap_version() -> None:
+    """It names no stack bands and has no version-dependent options."""
+    assert BackscatterConfig().to_xml(snap_version=(14, 0, 0)) == BackscatterConfig().to_xml()
+
+
+# ---------------------------------------------------------------------------
+# Coherence options SNAP 14 added
+
+
+@pytest.mark.parametrize(
+    ("snap_version", "expected"),
+    [
+        (None, False),
+        ((13, 0, 0), False),
+        ((14, 0, 0), True),
+        ((15, 1), True),
+    ],
+)
+def test_supports_coherence_options(
+    snap_version: tuple[int, ...] | None,
+    expected: bool,
+) -> None:
+    assert supports_coherence_options(snap_version) is expected
+
+
+def test_coherence_graph_for_snap_14_matches_fixture() -> None:
+    expected_xml = (FIXTURES / "S1_SLCtoCoh-snap14.xml").read_text()
+    _assert_xml_equal(expected_xml, CoherenceConfig().to_xml(snap_version=(14, 0, 0)))
+
+
+@pytest.mark.parametrize("snap_version", [None, (13, 0, 0)])
+def test_coherence_options_are_left_out_before_snap_14(
+    snap_version: tuple[int, ...] | None,
+) -> None:
+    """GPT rejects a parameter the operator does not know."""
+    xml = CoherenceConfig().to_xml(snap_version=snap_version)
+
+    assert "correctCoherenceBias" not in xml
+    assert "removeLocalPhaseRamp" not in xml
+
+
+def test_coherence_options_are_written_off_for_snap_14() -> None:
+    """SNAP 14 defaults the bias correction on, so leaving them out is not off."""
+    root = fromstring(CoherenceConfig().to_xml(snap_version=(14, 0, 0)))
+    params = root.find('./node[@id="Coherence"]/parameters')
+
+    assert params.find("correctCoherenceBias").text == "false"
+    assert params.find("removeLocalPhaseRamp").text == "false"
+
+
+def test_coherence_options_reach_the_graph_when_enabled() -> None:
+    cfg = CoherenceConfig(correct_coherence_bias=True, remove_local_phase_ramp=True)
+    root = fromstring(cfg.to_xml(snap_version=(14, 0, 0)))
+    params = root.find('./node[@id="Coherence"]/parameters')
+
+    assert params.find("correctCoherenceBias").text == "true"
+    assert params.find("removeLocalPhaseRamp").text == "true"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"correct_coherence_bias": True}, "correct_coherence_bias=True"),
+        ({"remove_local_phase_ramp": True}, "remove_local_phase_ramp=True"),
+        (
+            {"correct_coherence_bias": True, "remove_local_phase_ramp": True},
+            "correct_coherence_bias=True, remove_local_phase_ramp=True",
+        ),
+    ],
+)
+@pytest.mark.parametrize("snap_version", [None, (13, 0, 0)])
+def test_enabled_coherence_options_reject_a_snap_older_than_14(
+    kwargs: dict[str, bool],
+    match: str,
+    snap_version: tuple[int, ...] | None,
+) -> None:
+    cfg = CoherenceConfig(**kwargs)
+    with pytest.raises(ConfigurationError, match=match):
+        cfg.to_xml(snap_version=snap_version)
+
+
+def test_coherence_mermaid_takes_the_snap_version() -> None:
+    """The diagram does not vary, but the graph behind it has to build."""
+    cfg = CoherenceConfig(correct_coherence_bias=True)
+    assert cfg.to_mermaid(snap_version=(14, 0, 0)) == CoherenceConfig().to_mermaid()
 
 
 def test_backscatter_output_bands_rtc() -> None:

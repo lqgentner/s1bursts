@@ -84,9 +84,11 @@ Without `--submit` the script uses jobs already completed under the account and 
 
 ### SNAP versions
 
-SNAP 14 renamed the suffixes Back-Geocoding gives a coregistered stack's bands — `mst` became `ref`, `slv1` became `sec1`. The interferogram graph's intensity expressions name those bands, so a graph built for the wrong version is rejected with `Undefined symbol` before any pixel is read. Nothing else moved: Coherence and Interferogram name their outputs as before, and every operator and parameter the graphs use exists in both versions.
+SNAP 14 renamed the suffixes Back-Geocoding gives a coregistered stack's bands — `mst` became `ref`, `slv1` became `sec1`. The interferogram graph's intensity expressions name those bands, so a graph built for the wrong version is rejected with `Undefined symbol` before any pixel is read. Nothing else moved: Coherence and Interferogram name their outputs as before, and every operator the graphs use exists in both versions.
 
-`SNAPConfig` therefore resolves the version beside the `gpt` path (`snap_version()` reads the installation's `VERSION.txt`) and passes it to `to_xml(snap_version=...)`, where `stack_band_suffixes()` picks the naming. An undetermined version logs a warning and uses the pre-14 naming, so existing SNAP 13 installs are unaffected — which is also why the committed golden graphs did not move. The keyword is on every config for a uniform call, but only `InterferogramConfig` varies with it.
+`SNAPConfig` therefore resolves the version beside the `gpt` path (`snap_version()` reads the installation's `VERSION.txt`) and passes it to `to_xml(snap_version=...)`, where `stack_band_suffixes()` picks the naming. An undetermined version logs a warning and uses the pre-14 naming, so existing SNAP 13 installs are unaffected — which is also why the committed golden graphs did not move. The keyword is on every config for a uniform call; `BackscatterConfig` does not vary with it.
+
+SNAP 14 also added two `Coherence` parameters, exposed as `CoherenceConfig.correct_coherence_bias` and `remove_local_phase_ramp`. GPT rejects a parameter its operator does not know, so the graph carries them only for SNAP 14 and newer (`supports_coherence_options()`), and enabling either under an older or undetermined version raises `ConfigurationError`. Both default off but are still written, because SNAP's own default for `correctCoherenceBias` is on — hence the separate golden `S1_SLCtoCoh-snap14.xml`.
 
 `SUPPORTED_SNAP_VERSIONS` in `snap_client.py` is the source of truth for which versions are tested, and `SNAPConfig` warns when it resolves one outside that set. The CI matrix and README badge state the same list, so `tests/test_supported_snap_versions.py` fails if the three drift apart.
 

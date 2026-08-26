@@ -21,6 +21,10 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   the installed SNAP (SNAP 13: `mst`, `slv1`; SNAP 14: `ref`, `sec1`). The
   version is read from the installation's `VERSION.txt`; if that is missing,
   the pre-14 naming is used and a warning says so.
+- `CoherenceConfig` added the parameters `correct_coherence_bias` and
+  `remove_local_phase_ramp`, two options that were added to SNAP's `Coherence`
+  operator with SNAP 14. Both default to `False`, so coherence stays
+  comparable across SNAP versions. Enabling either requires SNAP 14 or newer.
 - **Python 3.14 support.**. Verified in CI.
 - `prepare_dem_for_snap()` converts an orthometric external DEM to WGS 84
   ellipsoidal heights when given a compound source CRS (for example,

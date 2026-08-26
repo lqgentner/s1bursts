@@ -29,6 +29,8 @@ from pydantic import (
     field_validator,
 )
 
+from s1bursts.errors import ConfigurationError
+
 # Hardened parser: no entity resolution, no network access (XXE-safe).
 _XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
 
@@ -250,6 +252,8 @@ def _coherence(
     subtract_flat_earth_phase: bool,
     subtract_topographic_phase: bool,
     square_pixel: bool,
+    correct_coherence_bias: bool | None,
+    remove_local_phase_ramp: bool | None,
     dem: str | Path,
     nodata: float,
     apply_egm: bool,
@@ -265,6 +269,12 @@ def _coherence(
     _add_param(p, "orbitDegree", 3)
     _add_param(p, "squarePixel", square_pixel)
     _add_param(p, "subtractTopographicPhase", subtract_topographic_phase)
+    # ``None`` for a SNAP that does not know the option; see
+    # `supports_coherence_options`.
+    if correct_coherence_bias is not None:
+        _add_param(p, "correctCoherenceBias", correct_coherence_bias)
+    if remove_local_phase_ramp is not None:
+        _add_param(p, "removeLocalPhaseRamp", remove_local_phase_ramp)
     _add_param(p, "demName", dem_name)
     _add_param(p, "externalDEMFile", dem_file)
     _add_param(p, "externalDEMNoDataValue", nodata)
@@ -533,6 +543,68 @@ def stack_band_suffixes(snap_version: tuple[int, ...] | None) -> tuple[str, str]
     return ("mst", "slv1")
 
 
+# SNAP 14 added the `correctCoherenceBias` and `removeLocalPhaseRamp` options
+# to the Coherence operator. GPT rejects a parameter its operator does not
+# know, so the graph carries them only for the versions that have them.
+_SNAP_ADDED_COHERENCE_OPTIONS = (14,)
+
+
+def supports_coherence_options(snap_version: tuple[int, ...] | None) -> bool:
+    """Whether a SNAP version knows the Coherence operator's SNAP 14 options.
+
+    Parameters
+    ----------
+    snap_version : tuple of int or None
+        SNAP version as returned by :func:`s1bursts.snap_client.snap_version`.
+        ``None`` (an installation whose version could not be read) counts as
+        not supporting them.
+
+    Returns
+    -------
+    bool
+        ``True`` for SNAP 14 and newer.
+    """
+    return snap_version is not None and snap_version >= _SNAP_ADDED_COHERENCE_OPTIONS
+
+
+def _coherence_option_values(
+    cfg: CoherenceConfig,
+    snap_version: tuple[int, ...] | None,
+) -> tuple[bool | None, bool | None]:
+    """Resolve the SNAP 14 Coherence options to write, ``None`` each to leave out.
+
+    Raises
+    ------
+    ConfigurationError
+        If an option is enabled but the SNAP version cannot run it.
+    """
+    if supports_coherence_options(snap_version):
+        return (cfg.correct_coherence_bias, cfg.remove_local_phase_ramp)
+
+    enabled = [
+        name
+        for name, value in (
+            ("correct_coherence_bias", cfg.correct_coherence_bias),
+            ("remove_local_phase_ramp", cfg.remove_local_phase_ramp),
+        )
+        if value
+    ]
+    if enabled:
+        installed = (
+            "the installed SNAP version could not be determined"
+            if snap_version is None
+            else f"the installed version is {'.'.join(str(part) for part in snap_version)}"
+        )
+        msg = (
+            f"CoherenceConfig({', '.join(f'{name}=True' for name in enabled)}) requires "
+            f"SNAP 14 or newer, but {installed}. Upgrade SNAP, or leave the option off."
+        )
+        raise ConfigurationError(msg)
+    # Not writing them is not the same as turning them off: SNAP 14 defaults
+    # `correctCoherenceBias` to true. Older SNAP has neither behaviour anyway.
+    return (None, None)
+
+
 def _intensity_target_bands(snap_version: tuple[int, ...] | None) -> list[dict[str, Any]]:
     primary, secondary = stack_band_suffixes(snap_version)
     return [
@@ -666,8 +738,13 @@ def _build_pair_prefix(g: Element, cfg: GeocodingConfig) -> str:
     )
 
 
-def build_coherence_graph(cfg: CoherenceConfig) -> str:
+def build_coherence_graph(
+    cfg: CoherenceConfig,
+    *,
+    snap_version: tuple[int, ...] | None = None,
+) -> str:
     """Single-shot SLC→Coherence→Terrain-Correction graph."""
+    correct_coherence_bias, remove_local_phase_ramp = _coherence_option_values(cfg, snap_version)
     g = _new_graph()
     src = _build_pair_prefix(g, cfg)
     win_rg, win_az = cfg.window
@@ -680,6 +757,8 @@ def build_coherence_graph(cfg: CoherenceConfig) -> str:
         subtract_flat_earth_phase=cfg.subtract_flat_earth_phase,
         subtract_topographic_phase=cfg.subtract_topographic_phase,
         square_pixel=cfg.square_pixel,
+        correct_coherence_bias=correct_coherence_bias,
+        remove_local_phase_ramp=remove_local_phase_ramp,
         dem=cfg.dem,
         nodata=cfg.external_dem_nodata,
         apply_egm=cfg.external_dem_apply_egm,
@@ -910,14 +989,25 @@ class GeocodingConfig(BaseModel):
         ----------
         snap_version : tuple of int, optional
             SNAP version the graph will run under, from
-            :func:`s1bursts.snap_client.snap_version`. Only the interferogram
-            graph varies with it; see :func:`stack_band_suffixes`. Defaults to
-            the naming of SNAP 13 and earlier.
+            :func:`s1bursts.snap_client.snap_version`. The backscatter graph
+            does not vary with it; the interferogram graph names the stack
+            bands accordingly (see :func:`stack_band_suffixes`) and the
+            coherence graph writes only the options that version has (see
+            :func:`supports_coherence_options`). Defaults to SNAP 13 and
+            earlier.
         """
 
-    def to_mermaid(self) -> str:
-        """Mermaid ``flowchart LR`` diagram source for this config's graph."""
-        return xml_to_mermaid(self.to_xml())
+    def to_mermaid(self, *, snap_version: tuple[int, ...] | None = None) -> str:
+        """Mermaid ``flowchart LR`` diagram source for this config's graph.
+
+        Parameters
+        ----------
+        snap_version : tuple of int, optional
+            SNAP version the graph will run under, as for :meth:`to_xml`. No
+            diagram varies with it, but a config whose options need SNAP 14
+            cannot build its graph without it.
+        """
+        return xml_to_mermaid(self.to_xml(snap_version=snap_version))
 
 
 class BackscatterConfig(GeocodingConfig):
@@ -998,6 +1088,16 @@ class CoherenceConfig(GeocodingConfig):
         square ground pixels. Leave off: as with SNAP's ``grSquarePixel`` on
         the ``Multilook`` operator, enabling it means the applied window is not
         the requested one.
+    correct_coherence_bias : bool, default False
+        Remove the positive bias a finite estimation window leaves in the
+        coherence magnitude. Requires SNAP 14; building the graph for an older
+        or undetermined version raises ``ConfigurationError``. Off by default,
+        unlike SNAP's own default, so that the estimator stays the one the
+        window describes and stays comparable across SNAP versions.
+    remove_local_phase_ramp : bool, default False
+        Let SNAP estimate and remove a local phase ramp within each estimation
+        window before averaging, which recovers coherence lost to residual
+        fringes. Requires SNAP 14, as above.
     replace_zeros_with_nan : bool, default True
         Convert SNAP's zero fill value to NaN.
     """
@@ -1006,6 +1106,8 @@ class CoherenceConfig(GeocodingConfig):
     subtract_flat_earth_phase: bool = True
     subtract_topographic_phase: bool = True
     square_pixel: bool = False
+    correct_coherence_bias: bool = False
+    remove_local_phase_ramp: bool = False
     replace_zeros_with_nan: bool = True
 
     @property
@@ -1013,13 +1115,16 @@ class CoherenceConfig(GeocodingConfig):
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
         return ["coh"]
 
-    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:  # noqa: ARG002
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
         """Build the coherence graph XML for this config.
 
-        Takes ``snap_version`` for a uniform signature; this graph names no
-        Back-Geocoding bands, so the version does not change it.
+        Raises
+        ------
+        ConfigurationError
+            If ``correct_coherence_bias`` or ``remove_local_phase_ramp`` is
+            enabled but ``snap_version`` is older than 14 or unknown.
         """
-        return build_coherence_graph(self)
+        return build_coherence_graph(self, snap_version=snap_version)
 
 
 class InterferogramConfig(GeocodingConfig):
@@ -1066,5 +1171,6 @@ __all__ = [
     "build_coherence_graph",
     "build_interferogram_graph",
     "stack_band_suffixes",
+    "supports_coherence_options",
     "xml_to_mermaid",
 ]
