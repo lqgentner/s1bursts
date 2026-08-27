@@ -82,6 +82,12 @@ Without `--submit` the script uses jobs already completed under the account and 
 
 `TestExternalDEMSampling` therefore measures both against the installed `gpt`. Its probe ([`tests/dem_probe.py`](tests/dem_probe.py), which explains the method) is synthetic and takes seconds: three small DEMs and one target grid, sampled by `AddElevation` in a single graph, no burst and no download. It says nothing about the *built-in* Copernicus path, which would need the tiles themselves; the external-DEM geoid stands in for it, since both call the same `EarthGravitationalModel96`.
 
+### Zeros where the DEM has no coverage
+
+Terrain-Correction skips a tile whose DEM is entirely no-data and fills it with the band's no-data value, but writes that fill into a copy of the tile buffer it never hands back (`Tile.getRawSamples` without the matching `setRawSamples`). The copy is only taken for tiles the image edge clips, so an edge tile over a DEM void reaches the product as exact zeros while interior tiles are correctly no-data. It is not specific to external DEMs — a coastal burst whose edge tile is all ocean does the same under the built-in Copernicus path — and SNAP 13 and 14 behave identically. [`cache/dem-void-zeros-report.md`](cache/dem-void-zeros-report.md) has the evidence and the source references.
+
+`_mask_zero_fill()` in `snap_client.py` therefore converts a pixel that is zero in *every* band into no-data as the staging GeoTIFF is finalized. Requiring all bands is what keeps the interferogram's signed real and imaginary parts from being masked where one of them legitimately crosses zero; it is safe because `ReplaceZerosWithNaNs` has already removed the radar-geometry zeros, so no valid pixel reaches the writer as zero. That is also why the conversion is gated on `replace_zeros_with_nan` — with the node off, zeros are data. Drop the workaround once SNAP writes its fill back.
+
 ### SNAP versions
 
 SNAP 14 renamed the suffixes Back-Geocoding gives a coregistered stack's bands — `mst` became `ref`, `slv1` became `sec1`. The interferogram graph's intensity expressions name those bands, so a graph built for the wrong version is rejected with `Undefined symbol` before any pixel is read. Nothing else moved: Coherence and Interferogram name their outputs as before, and every operator the graphs use exists in both versions.

@@ -191,6 +191,43 @@ def _extract_gpt_error(
     return detail[:max_chars]
 
 
+def _mask_zero_fill(dataset: rasterio.io.DatasetWriter, nodata: float) -> int:
+    """Replace every pixel that is zero in all bands with ``nodata``, in place.
+
+    Terrain-Correction skips a tile whose DEM is entirely no-data and fills it
+    with the band's no-data value, but writes that fill into a copy of the tile
+    buffer it never hands back (``Tile.getRawSamples`` without the matching
+    ``setRawSamples``). The copy is only taken for tiles the image edge clips, so
+    such a tile reaches the product holding the zeros Java allocated it with,
+    while interior tiles are correctly no-data. Verified in SNAP 13.0.0 and
+    14.0.0; drop this once SNAP writes the fill back.
+
+    A valid pixel cannot be zero in every band, because the graph's band maths
+    has already mapped the zeros of the radar-geometry image to no-data before
+    geocoding. Requiring *all* bands keeps a signed band that legitimately
+    crosses zero — the interferogram's real and imaginary parts — from being
+    masked on its own.
+
+    Returns
+    -------
+    int
+        Number of pixels replaced.
+    """
+    masked = 0
+    for _, window in dataset.block_windows(1):
+        data = dataset.read(window=window)
+        zero_fill = (data == 0).all(axis=0)
+        count = int(zero_fill.sum())
+        if not count:
+            continue
+        data[:, zero_fill] = nodata
+        dataset.write(data, window=window)
+        masked += count
+    if masked:
+        logger.debug("Masked %d zero-filled pixels left by Terrain-Correction", masked)
+    return masked
+
+
 @dataclass
 class SNAPConfig:
     """Runtime configuration for SNAP GPT processing.
@@ -525,6 +562,7 @@ class SNAPClient:
         product_path: Path | UPath,
         *,
         metadata: RasterMetadata,
+        mask_zero_fill: bool = False,
     ) -> None:
         """Rewrite the staging GeoTIFF compressed to its final location.
 
@@ -540,6 +578,11 @@ class SNAPClient:
             Final product location (local or S3).
         metadata : RasterMetadata
             Tags, band descriptions and units to write into the product.
+        mask_zero_fill : bool, default False
+            Convert pixels that are zero in every band into no-data. Only pass
+            ``True`` for a graph whose zeros were already replaced upstream, so
+            that a remaining all-zero pixel can only be Terrain-Correction's
+            zero fill.
         """
         profile = self.config.rasterio_profile or {}
         nodata = profile.get("nodata")
@@ -553,6 +596,8 @@ class SNAPClient:
             if nodata is not None:
                 with rasterio.open(staging_file, "r+") as ds:
                     ds.nodata = float(nodata)
+                    if mask_zero_fill:
+                        _mask_zero_fill(ds, float(nodata))
             # The staging file is a disposable copy in a TemporaryDirectory, so move
             # it into place rather than leaving a redundant copy behind.
             rewrite_tiff(
@@ -643,6 +688,7 @@ class SNAPClient:
                             config,
                             snap_version=self.config.resolved_snap_version,
                         ),
+                        mask_zero_fill=config.replace_zeros_with_nan,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst '%s'", burst)
@@ -724,6 +770,7 @@ class SNAPClient:
                             config,
                             snap_version=self.config.resolved_snap_version,
                         ),
+                        mask_zero_fill=config.replace_zeros_with_nan,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)
@@ -803,6 +850,7 @@ class SNAPClient:
                             config,
                             snap_version=self.config.resolved_snap_version,
                         ),
+                        mask_zero_fill=config.replace_zeros_with_nan,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)

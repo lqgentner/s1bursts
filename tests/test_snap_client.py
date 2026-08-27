@@ -402,23 +402,28 @@ class TestCreateBackscatter:
 
 
 class TestFinalizeProduct:
+    @staticmethod
+    def _write_staging(path: Path, data: np.ndarray) -> None:
+        """Write a SNAP-style staging GeoTIFF: no NODATA tag, one band per plane."""
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=data.shape[2],
+            height=data.shape[1],
+            count=data.shape[0],
+            dtype="float32",
+            crs="EPSG:32632",
+            transform=rasterio.transform.from_origin(400000, 5200000, 10, 10),
+        ) as ds:
+            ds.write(data)
+
     def test_stamps_nodata_band_names_and_tags(self, client: SNAPClient, tmp_path: Path) -> None:
         """SNAP-style staging GeoTIFF (no NODATA tag) gains nodata, descriptions and tags."""
         staging = tmp_path / "staging.tif"
         product = tmp_path / "final.tif"
         data = np.array([[1.0, 2.0], [np.nan, 4.0]], dtype=np.float32)
-        with rasterio.open(
-            staging,
-            "w",
-            driver="GTiff",
-            width=2,
-            height=2,
-            count=1,
-            dtype="float32",
-            crs="EPSG:32632",
-            transform=rasterio.transform.from_origin(400000, 5200000, 10, 10),
-        ) as ds:
-            ds.write(data, 1)
+        self._write_staging(staging, data[np.newaxis])
 
         client._finalize_product(
             staging,
@@ -440,6 +445,50 @@ class TestFinalizeProduct:
             assert ds.tags(1) == {"LAYER_NAME": "gamma0"}
             assert ds.units == ("linear power",)
             assert np.array_equal(ds.read(1), data, equal_nan=True)
+
+    def test_masks_pixels_that_are_zero_in_every_band(
+        self,
+        client: SNAPClient,
+        tmp_path: Path,
+    ) -> None:
+        """Terrain-Correction's zero fill becomes no-data; a single zero band does not."""
+        staging = tmp_path / "staging.tif"
+        product = tmp_path / "final.tif"
+        # Column 0 is the zero fill; column 1 is zero in one band only.
+        data = np.array(
+            [[[0.0, 0.0], [0.0, 3.0]], [[0.0, 4.0], [0.0, 5.0]]],
+            dtype=np.float32,
+        )
+        self._write_staging(staging, data)
+
+        client._finalize_product(
+            staging,
+            product,
+            metadata=RasterMetadata(tags={}, band_names=["i_ifg", "q_ifg"], units=["", ""]),
+            mask_zero_fill=True,
+        )
+
+        with rasterio.open(product) as ds:
+            assert np.isnan(ds.read(1)[:, 0]).all()
+            assert np.isnan(ds.read(2)[:, 0]).all()
+            assert ds.read(1)[0, 1] == 0.0
+            assert ds.read(2)[0, 1] == 4.0
+
+    def test_keeps_zeros_when_masking_is_off(self, client: SNAPClient, tmp_path: Path) -> None:
+        """Without the band maths that removes them, zeros are data and are preserved."""
+        staging = tmp_path / "staging.tif"
+        product = tmp_path / "final.tif"
+        data = np.zeros((1, 2, 2), dtype=np.float32)
+        self._write_staging(staging, data)
+
+        client._finalize_product(
+            staging,
+            product,
+            metadata=RasterMetadata(tags={}, band_names=["Gamma0"], units=["linear power"]),
+        )
+
+        with rasterio.open(product) as ds:
+            assert np.array_equal(ds.read(1), data[0])
 
 
 class TestCreateCoherence:

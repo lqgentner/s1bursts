@@ -49,6 +49,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Fixed
 
+- **Areas without DEM coverage no longer read as zero.** SNAP can leave zeros in the
+  product in areas that are not covered by the DEM. Per-burst products now convert
+  a pixel that is zero in every band into no-data while being written. The conversion
+  is skipped when `replace_zeros_with_nan` is off, since zeros are meaningful data
+  in that case.
 - A `TMPDIR` that is set but not writable now produces a warning when a
   `SNAPConfig` is built, because `tempfile`, used during processing,
   silently skips missing directories.
