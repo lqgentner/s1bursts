@@ -3,10 +3,14 @@
 Pure builders: each returns the dataset tags, band descriptions, per-band tags
 and band units for one raster, and performs no I/O.
 
-The vocabulary follows the CEOS-ARD Product Family Specification for Synthetic
-Aperture Radar, version 1.3.1, so that a reader can look a tag up in the
-accompanying metadata specification. No product-type claim is made and no
-conformance is asserted.
+Where the CEOS-ARD Product Family Specification for Synthetic Aperture Radar,
+version 1.3.1, has a name for something, these tags use that name, so that a
+reader can look a tag up in the accompanying metadata specification rather than
+learn a private dialect. Every product records the specification it borrows
+from in :data:`METADATA_VOCABULARY`.
+
+Borrowing the vocabulary is not conformance, which is neither assessed nor
+claimed here.
 """
 
 from __future__ import annotations
@@ -51,6 +55,14 @@ if TYPE_CHECKING:
 SPECIFICATION_URL = "https://ceos.org/ard/files/PFS/SAR/v1.3.1/CEOS-ARD_PFS_SAR_v1.3.1.pdf"
 """CEOS-ARD Product Family Specification for SAR, version 1.3.1."""
 
+METADATA_VOCABULARY = f"CEOS-ARD PFS SAR v1.3.1; {SPECIFICATION_URL}"
+"""Where the tag names and values come from, written on every product.
+
+A pointer, not a claim: it tells a reader holding one raster on its own where
+to look a term up. Conformance is neither assessed nor asserted, so the same
+value is written on every product rather than being scoped per product type.
+"""
+
 LRW_REFERENCE = "https://doi.org/10.1109/TGRS.2021.3055562"
 """Small et al. (2022), the local-resolution-weighting method of item 1.7.24."""
 
@@ -58,24 +70,6 @@ LRW_REFERENCE = "https://doi.org/10.1109/TGRS.2021.3055562"
 # 3.1, 2.21 and 2.22 each note that "transformation to the logarithmic decibel
 # scale is not required or desired as this step can be completed by the user".
 CONVERSION_EQ = "dB = 10*log10(DN)"
-
-_ALIGNMENT_COMPOSITE = (
-    "Metadata aligned with CEOS-ARD PFS SAR v1.3.1 Composite Backscatter [CB]. "
-    "Not a conformance claim."
-)
-# The specification defines no composite coherence product, so that one names
-# the two items it borrows from instead of claiming either.
-_ALIGNMENT_COHERENCE = (
-    "Metadata aligned with CEOS-ARD PFS SAR v1.3.1: Composite Backscatter [CB] for the "
-    "compositing vocabulary, InSAR for the coherence quantity. The specification defines "
-    "no composite coherence product. Not a conformance claim."
-)
-# A single burst is not a composite, so it must not carry the [CB] wording.
-_ALIGNMENT_BURST = "Metadata aligned with CEOS-ARD PFS SAR v1.3.1. Not a conformance claim."
-_ALIGNMENT_DECIBEL = (
-    " Stored in decibels, which departs from the specification's stated preference "
-    "for leaving the conversion to the user."
-)
 
 _PIXEL_CONVENTION = "pixel centre"
 
@@ -184,14 +178,6 @@ def _pipeline() -> dict[str, str]:
     }
 
 
-def _alignment(statement: str, *, decibel: bool = False) -> dict[str, str]:
-    """Build the two tags that state the relationship to the specification."""
-    return {
-        "CEOS_ARD_ALIGNMENT": statement + (_ALIGNMENT_DECIBEL if decibel else ""),
-        "CEOS_ARD_SPECIFICATION_URL": SPECIFICATION_URL,
-    }
-
-
 def _backscatter(*, gamma0: bool, decibel: bool) -> dict[str, str]:
     """Build the measurement and scaling tags for a backscatter raster (spec 3.1, 3.2).
 
@@ -231,19 +217,10 @@ def _compositing_parameters(
     return ";".join(parts)
 
 
-def _tile(
-    product: MGRSTileProduct,
-    *,
-    family: str,
-    coherence: bool = False,
-    decibel: bool = False,
-) -> dict[str, str]:
+def _tile(product: MGRSTileProduct, *, family: str) -> dict[str, str]:
     """Identity, date window and polarization, shared by every composite."""
     return {
-        **_alignment(
-            _ALIGNMENT_COHERENCE if coherence else _ALIGNMENT_COMPOSITE,
-            decibel=decibel,
-        ),
+        "METADATA_VOCABULARY": METADATA_VOCABULARY,
         **_pipeline(),
         "PRODUCT_TYPE": product.product_type,
         "PRODUCT_FAMILY": family,
@@ -357,7 +334,7 @@ def rtc_lrw_metadata(
         Tags, band description and unit for the composite.
     """
     tags = {
-        **_tile(product, family="Composite Backscatter", decibel=decibel),
+        **_tile(product, family="Composite Backscatter"),
         **_backscatter(gamma0=True, decibel=decibel),
         **_lrw(aggregation, clip_max_resolution),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
@@ -414,7 +391,7 @@ def coh_lrw_metadata(
         Tags, band description and unit for the composite.
     """
     tags = {
-        **_tile(product, family="Composite Coherence", coherence=True),
+        **_tile(product, family="Composite Coherence"),
         "MEASUREMENT_TYPE": "Coherence",
         "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
         # Small et al. define LRW for backscatter power; weighting coherence by
@@ -474,7 +451,7 @@ def rtc_pass_metadata(
         Tags, band description and unit for the composite.
     """
     tags = {
-        **_tile(product, family="Composite Backscatter", decibel=decibel),
+        **_tile(product, family="Composite Backscatter"),
         **_backscatter(gamma0=True, decibel=decibel),
         **_unweighted(aggregation),
         "ORBIT_DIRECTION": product.orbit_direction,
@@ -521,7 +498,7 @@ def coh_pass_metadata(
         Tags, band description and unit for the composite.
     """
     tags = {
-        **_tile(product, family="Composite Coherence", coherence=True),
+        **_tile(product, family="Composite Coherence"),
         "MEASUREMENT_TYPE": "Coherence",
         "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
         **_unweighted(aggregation),
@@ -587,8 +564,6 @@ def qa_metadata(
         **_tile(
             product,
             family="Composite Coherence" if coherence else "Composite Backscatter",
-            coherence=coherence,
-            decibel=cqm_decibel and metric is QaMetric.CQM,
         ),
         **(_lrw(aggregation, clip_max_resolution) if weighted else _unweighted(aggregation)),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
@@ -643,7 +618,7 @@ def _burst(
 ) -> dict[str, str]:
     """Identity and geocoding tags shared by every per-burst product."""
     tags = {
-        **_alignment(_ALIGNMENT_BURST),
+        "METADATA_VOCABULARY": METADATA_VOCABULARY,
         **_pipeline(),
         "PRODUCT_TYPE": product.product_type,
         "PRODUCT_LEVEL": _LEVEL_BURST,
@@ -871,6 +846,7 @@ def burst_metadata(
 __all__ = [
     "CONVERSION_EQ",
     "LRW_REFERENCE",
+    "METADATA_VOCABULARY",
     "SPECIFICATION_URL",
     "UNKNOWN",
     "RasterMetadata",

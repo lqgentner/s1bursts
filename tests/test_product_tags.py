@@ -155,39 +155,50 @@ def _lrw(**kwargs: object) -> dict[str, str]:
     return product_tags.rtc_lrw_metadata(_rtc_lrw(), **(defaults | kwargs)).tags  # type: ignore[arg-type]
 
 
-class TestAlignmentClaim:
-    """The two ``CEOS_ARD_`` tags, and nothing else, mention the specification."""
+def _every_builder() -> dict[str, dict[str, str]]:
+    """Tags from one product of every kind this module builds metadata for."""
+    composite = {"aggregation": "median", "clip_max_resolution": None, "n_observations": 3}
+    unweighted = {"aggregation": "median", "n_observations": 3}
+    return {
+        "rtc_lrw": _lrw(),
+        "coh_lrw": product_tags.coh_lrw_metadata(_coh_lrw(), **composite).tags,  # type: ignore[arg-type]
+        "rtc_pass": product_tags.rtc_pass_metadata(_rtc_pass(), decibel=False, **unweighted).tags,  # type: ignore[arg-type]
+        "coh_pass": product_tags.coh_pass_metadata(_coh_pass(), **unweighted).tags,  # type: ignore[arg-type]
+        "qa_num": product_tags.qa_metadata(_qa(QaMetric.NUM), **composite).tags,  # type: ignore[arg-type]
+        "qa_cqm": product_tags.qa_metadata(_qa(QaMetric.CQM), **composite).tags,  # type: ignore[arg-type]
+        "coh_qa": product_tags.qa_metadata(_coh_qa(QaMetric.NUM), **composite).tags,  # type: ignore[arg-type]
+        "rtc_burst": product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags,
+        "gtc_burst": product_tags.backscatter_metadata(
+            _gtc_burst(), BackscatterConfig(flatten_terrain=False)
+        ).tags,
+        "coh_burst": product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()).tags,
+        "ifg_burst": product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig()).tags,
+    }
 
-    def test_no_product_type_is_claimed(self) -> None:
-        tags = _lrw()
-        assert "CEOS_ARD_PRODUCT_TYPE" not in tags
-        ceos_keys = {k for k in tags if k.startswith("CEOS_ARD_")}
-        assert ceos_keys == {"CEOS_ARD_ALIGNMENT", "CEOS_ARD_SPECIFICATION_URL"}
 
-    def test_alignment_disclaims_conformance(self) -> None:
-        assert "Not a conformance claim." in _lrw()["CEOS_ARD_ALIGNMENT"]
+class TestMetadataVocabulary:
+    """One pointer at the specification, identical everywhere, claiming nothing."""
 
-    def test_composite_names_the_cb_product(self) -> None:
-        assert "Composite Backscatter [CB]" in _lrw()["CEOS_ARD_ALIGNMENT"]
+    def test_every_product_carries_it(self) -> None:
+        for name, tags in _every_builder().items():
+            assert tags["METADATA_VOCABULARY"] == product_tags.METADATA_VOCABULARY, name
 
-    def test_burst_does_not_name_cb(self) -> None:
-        # A single burst is not a composite.
-        tags = product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags
-        assert "[CB]" not in tags["CEOS_ARD_ALIGNMENT"]
-        assert "Not a conformance claim." in tags["CEOS_ARD_ALIGNMENT"]
+    def test_it_names_the_specification_and_its_url(self) -> None:
+        assert "CEOS-ARD PFS SAR v1.3.1" in product_tags.METADATA_VOCABULARY
+        assert product_tags.SPECIFICATION_URL in product_tags.METADATA_VOCABULARY
 
-    def test_composite_coherence_names_the_gap(self) -> None:
-        # The specification defines no composite coherence product, so the
-        # statement must say which items it borrows from rather than claim one.
-        tags = product_tags.coh_lrw_metadata(
-            _coh_lrw(),
-            aggregation="median",
-            clip_max_resolution=None,
-            n_observations=3,
-        ).tags
-        statement = tags["CEOS_ARD_ALIGNMENT"]
-        assert "no composite coherence product" in statement
-        assert "InSAR" in statement
+    def test_no_tag_key_claims_the_namespace(self) -> None:
+        # The vocabulary is borrowed, not authored by CEOS, so no key may look
+        # like a CEOS-defined field. The value is the only place it is named.
+        for name, tags in _every_builder().items():
+            assert [key for key in tags if "CEOS" in key] == [], name
+
+    def test_the_pointer_does_not_vary_by_scaling(self) -> None:
+        # Scaling is stated by BACKSCATTER_SCALING, not by qualifying the
+        # reference; a pointer has nothing to scope.
+        assert (
+            _lrw(decibel=True)["METADATA_VOCABULARY"] == _lrw(decibel=False)["METADATA_VOCABULARY"]
+        )
 
 
 class TestBackscatterScaling:
@@ -208,9 +219,6 @@ class TestBackscatterScaling:
         assert "BACKSCATTER_CONVERSION_EQ" not in tags
         assert tags["BACKSCATTER_SCALING"] == "decibel"
         assert tags["BACKSCATTER_CONVERSION_APPLIED"] == "10*log10(power)"
-
-    def test_decibel_alignment_notes_the_departure(self) -> None:
-        assert "decibels" in _lrw(decibel=True)["CEOS_ARD_ALIGNMENT"]
 
     def test_unit_follows_the_scaling(self) -> None:
         common: dict = {
@@ -421,13 +429,12 @@ class TestQaLayers:
         assert "CQM_CONVERSION_EQ" not in tags
         assert tags["CQM_SCALING"] == "decibel"
         assert tags["CQM_CONVERSION_APPLIED"] == "10*log10(cqm)"
-        assert "decibels" in tags["CEOS_ARD_ALIGNMENT"]
 
     def test_cqm_decibel_does_not_leak_onto_the_num_layer(self) -> None:
         # Only the CQM is written in dB; the count is unaffected by the flag.
         tags = self._num(cqm_decibel=True)
         assert "CQM_SCALING" not in tags
-        assert "decibels" not in tags["CEOS_ARD_ALIGNMENT"]
+        assert "CQM_CONVERSION_APPLIED" not in tags
 
     def test_pass_qa_is_unweighted_and_counts_finite_values(self) -> None:
         tags = product_tags.qa_metadata(
@@ -456,7 +463,6 @@ class TestQaLayers:
             n_observations=4,
         ).tags
         assert tags["PRODUCT_FAMILY"] == "Composite Coherence"
-        assert "no composite coherence product" in tags["CEOS_ARD_ALIGNMENT"]
 
     def test_coherence_pass_qa_carries_the_direction(self) -> None:
         tags = product_tags.qa_metadata(

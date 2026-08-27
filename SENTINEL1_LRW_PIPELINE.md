@@ -37,9 +37,11 @@ BaseProduct
 - **Grid cell**: MGRS 10 km grid square; defines height/width, affine transform, and CRS (UTM zone)
 - **Local contributing area** (`A`): the area of all terrain facets within a pixel, expressed in the plane perpendicular to slant range. Terrain flattening divides beta nought by it, so `A = 1` is a flat reference facet and `1/A` is the local resolution that LRW weights by. SNAP calls it `simulatedImage`, CEOS-ARD calls the layer `scatteringArea`, OPERA calls it `rtc_anf_gamma0_to_beta0`; all three are the same quantity
 
-### CEOS-ARD alignment
+### Borrowed vocabulary
 
-The LRW composites correspond to the **Composite Backscatter (CB)** product of the [CEOS-ARD Product Family Specification for Synthetic Aperture Radar](https://ceos.org/ard/files/PFS/SAR/v1.3.1/CEOS-ARD_PFS_SAR_v1.3.1.pdf) v1.3.1, whose Annex 5 restates Small et al. (2022) as the normative algorithm:
+The tags and layer names deliberately follow the [CEOS-ARD Product Family Specification for Synthetic Aperture Radar](https://ceos.org/ard/files/PFS/SAR/v1.3.1/CEOS-ARD_PFS_SAR_v1.3.1.pdf) v1.3.1, so that a reader can look a term up in the accompanying metadata specification rather than learn a private dialect. **Borrowing the vocabulary is not conformance, and none is claimed** — see "What is not claimed" below.
+
+The LRW composites correspond to the specification's **Composite Backscatter (CB)** product, whose Annex 5 restates Small et al. (2022) as the normative algorithm:
 
 | This package | CEOS-ARD SAR v1.3.1 |
 | --- | --- |
@@ -54,7 +56,9 @@ The `QA-*` filename tokens are this package's own; CEOS-ARD constrains metadata 
 
 Every product carries dataset tags describing how to read its pixels, built by `product_tags.py` and written on the branch that produced the file. This is deliberate redundancy with any downstream catalogue: a float32 backscatter raster arriving on its own is otherwise silently ambiguous between linear power and decibels, and misreading it produces wrong numbers rather than an error.
 
-**No product-type claim is made and no conformance is asserted.** `CEOS_ARD_` is reserved for the two tags that state the relationship to the specification — `CEOS_ARD_ALIGNMENT`, a free-text sentence that disclaims conformance explicitly, and `CEOS_ARD_SPECIFICATION_URL`. There is deliberately no `CEOS_ARD_PRODUCT_TYPE`. Every other tag is a plain descriptive name, following OPERA's convention, so nothing masquerades as CEOS vocabulary.
+Exactly one tag names the specification: **`METADATA_VOCABULARY`**, written identically on every product as `CEOS-ARD PFS SAR v1.3.1; <url>`. It is a pointer, not a claim — it tells a reader holding one raster on its own where to look a term up. It is deliberately *not* in a `CEOS_ARD_` namespace, and there is no `CEOS_ARD_PRODUCT_TYPE`: no tag key may look like a CEOS-defined field, because the vocabulary is borrowed rather than authored by CEOS. Every other tag is a plain descriptive name, following OPERA's convention.
+
+Because the pointer makes no claim, it has nothing to scope: it does not vary by product type, and it is not qualified when a raster is stored in decibels. `BACKSCATTER_SCALING` and `BACKSCATTER_CONVERSION_APPLIED` state that machine-readably instead.
 
 Where a tag maps onto a parameter of the [CEOS-ARD SAR Metadata Specification](https://ceos.org/ard/) v1.3, it is that parameter name upper-snake-cased, so a reader can look it up:
 
@@ -76,7 +80,7 @@ Where a tag maps onto a parameter of the [CEOS-ARD SAR Metadata Specification](h
 | `COHERENCE_WEIGHTING_SHAPE` | `<CoherenceWeightingShape>` | [InSAR] 1.7.18 |
 | `TEMPORAL_BASELINE_DAYS` | `<TemporalBaseline>` | [InSAR] 1.7.16 |
 
-The rest have **no spec counterpart** and are simply descriptive: `PRODUCT_TYPE` (the `s1bursts` identifier, matching `product.product_type`), `PRODUCT_FAMILY`, `MGRS_TILE`, `COMPOSITE_START_DATE` / `COMPOSITE_END_DATE`, `POLARIZATION`, `ORBIT_DIRECTION`, `LAYER_NAME`, `LAYER_DESCRIPTION`, `QA_LAYER`, `COMPOSITING_PARAMETERS`, `TERRAIN_CORRECTION`, `MULTILOOK_RANGE` / `MULTILOOK_AZIMUTH`, `BURST_ID`, `SUB_SWATH`, `ACQUISITION_DATE`, `DATE_PRIMARY` / `DATE_SECONDARY`, `GRID_SPACING`, `FLAT_EARTH_PHASE_REMOVED` / `TOPOGRAPHIC_PHASE_REMOVED`, the provenance tags below, and the decibel tags after them. The metadata spec defines no element for the "specific input parameters used" that item 1.7.24 asks for in prose, so `COMPOSITING_PARAMETERS` is this package's own — hence a descriptive name rather than a CEOS-looking one. It is built from the arguments actually passed to the `compose_*` call, never from a configuration object, so it cannot describe a run that did not happen.
+The rest have **no spec counterpart** and are simply descriptive: `METADATA_VOCABULARY`, `PRODUCT_TYPE` (the `s1bursts` identifier, matching `product.product_type`), `PRODUCT_FAMILY` (which reuses the specification's own product names, `Composite Backscatter` / `Composite Coherence`, so a user recognises what they have — a category, not a certification), `MGRS_TILE`, `COMPOSITE_START_DATE` / `COMPOSITE_END_DATE`, `POLARIZATION`, `ORBIT_DIRECTION`, `LAYER_NAME`, `LAYER_DESCRIPTION`, `QA_LAYER`, `COMPOSITING_PARAMETERS`, `TERRAIN_CORRECTION`, `MULTILOOK_RANGE` / `MULTILOOK_AZIMUTH`, `BURST_ID`, `SUB_SWATH`, `ACQUISITION_DATE`, `DATE_PRIMARY` / `DATE_SECONDARY`, `GRID_SPACING`, `FLAT_EARTH_PHASE_REMOVED` / `TOPOGRAPHIC_PHASE_REMOVED`, the provenance tags below, and the decibel tags after them. The metadata spec defines no element for the "specific input parameters used" that item 1.7.24 asks for in prose, so `COMPOSITING_PARAMETERS` is this package's own — hence a descriptive name rather than a CEOS-looking one. It is built from the arguments actually passed to the `compose_*` call, never from a configuration object, so it cannot describe a run that did not happen.
 
 ##### Provenance
 
@@ -84,6 +88,7 @@ Following OPERA, which names each component and its version rather than assertin
 
 | Tag | Value | Written by |
 | --- | --- | --- |
+| `DEM` | the DEM's name, or `N/A` | the per-burst product; inherited by composites |
 | `PROCESSING_SOFTWARE` | `ESA SNAP` | the per-burst product; inherited by composites |
 | `PROCESSING_SOFTWARE_VERSION` | e.g. `14.0.0`, or `N/A` | ditto |
 | `PIPELINE_SOFTWARE` | `s1bursts` | every product, stamped fresh, never inherited |
@@ -94,7 +99,7 @@ Following OPERA, which names each component and its version rather than assertin
 
 Three rules make these load-bearing rather than decorative:
 
-- **The DEM is not tagged at all.** It is not needed to interpret a pixel, and for an external DEM the only value available is a file path, which is machine-specific and says little; a catalogue that wants to record it should take it from the run configuration rather than infer it. The same reasoning keeps it out of the inherited set.
+- **The DEM is tagged by identity, never by path.** A built-in DEM records its SNAP name; an external one records `GeocodingConfig.dem_name`, falling back to `N/A`. A file path is deliberately never written: it is machine-specific, and `CompositeConfig.to_snap_configs()` resolves an external DEM to its *staged local path*, so two machines processing one campaign would have disagreed and the composite would have recorded `N/A`.
 - **Every provenance field is always present, as `N/A` where it could not be determined** (`product_tags.UNKNOWN`). The SNAP version is `N/A` when the installation carries no `VERSION.txt`; a composite's inherited fields are `N/A` when its inputs do not supply one answer. Absence would be ambiguous with a file written before the tag existed, which is exactly what a provenance field must not be. Conditional fields are different and *are* omitted when they do not apply: `COHERENCE_WINDOW_RANGE = N/A` on a backscatter composite would be nonsense, not information.
 - **The pipeline version is stamped by whichever `s1bursts` writes the file and is never inherited from an input.** It is what identifies the vocabulary in this table — and the definition of `QA-NUM` has already changed once between releases, so a file without it is ambiguous between the two.
 - **A composite built from older burst products still works.** Products written before these tags existed carry none, so the composite records `N/A` for `PROCESSING_SOFTWARE` and `PROCESSING_SOFTWARE_VERSION`, and a coherence composite simply omits the estimation-window fields it cannot inherit. Everything the composite generates itself is unaffected.
@@ -109,7 +114,7 @@ Three rules make these load-bearing rather than decorative:
   Prefer `r+` where the rasters are large and `TMPDIR` points at disk, since the memory route holds the whole uncompressed image. **Composites are COGs** (`LAYOUT: COG`), and writing metadata into a finished COG costs it that layout, so they must be regenerated rather than patched.
 - **Inherited fields must be unanimous.** `ResolutionWeighter._input_tags` reads every input, not just the first, and carries a value forward only where they all agree. A composite spanning two SNAP versions therefore reports `N/A` and logs a warning, instead of silently adopting whichever burst happened to sort first.
 
-Which input differences are tolerated is a deliberate split. **Refused**, because the composite would otherwise be wrong rather than merely inconsistent: a CRS or pixel size other than the target grid's (the read window is computed in the geobox's coordinates against each source's own transform, so it would silently read pixels from somewhere else), a mixed temporal baseline on coherence (a composite carries one `baseline_days`, in its name and its tags), and a mixed polarization. **Tolerated with a warning**: a mixed SNAP version, which degrades consistency without invalidating the arithmetic and which an archive built over several campaigns will legitimately contain. A mixed DEM is not detectable at all, since the DEM is not tagged.
+Which input differences are tolerated is a deliberate split. **Refused**, because the composite would otherwise be wrong rather than merely inconsistent: a CRS or pixel size other than the target grid's (the read window is computed in the geobox's coordinates against each source's own transform, so it would silently read pixels from somewhere else), a mixed temporal baseline on coherence (a composite carries one `baseline_days`, in its name and its tags), and a mixed polarization. **Tolerated with a warning**: a mixed SNAP version, which degrades consistency without invalidating the arithmetic and which an archive built over several campaigns will legitimately contain. A **mixed DEM is refused**, naming the values found — geocoding against two different elevation models within one composite is a defect, not an inconsistency.
 
 Levels are `L1 → L2 → L3` in the EOSDIS sense; `L2` for a geocoded burst matches OPERA's own RTC-S1, and `L3` for a space-and-time-gridded composite matches ESA's Sentinel-1 monthly mosaic.
 
@@ -126,7 +131,11 @@ Some things are deliberately **not** emitted:
 - **`QA-NUM` is never described as a data mask.** PFS item 2.2 asks for three distinguishable states (valid / invalid / no data) and a zero count collapses two of them into one; item 2.2 is a known-unmet Threshold requirement.
 - **No `[CB]` wording on a per-burst product,** which is not a composite, and no NRB or InSAR product-type claim on one either.
 
-The composite coherence product sits in a specification gap — coherence appears only as [InSAR] 3.8 (per-pair) and compositing only as [CB] (backscatter) — so its `CEOS_ARD_ALIGNMENT` names both items it borrows from and states that no composite coherence product is defined.
+#### What is not claimed
+
+The composite coherence product sits in a specification gap: coherence appears only as [InSAR] 3.8 (per-pair) and compositing only as [CB] (backscatter), so it takes its quantity vocabulary from the former and its compositing vocabulary from the latter while belonging to neither. `PRODUCT_FAMILY = Composite Coherence` is this package's own term, which the specification does not define and which therefore cannot be mistaken for an enumerated value.
+
+More broadly, **no conformance assessment has been performed and none is claimed.** Item 2.2 (Data Mask Image) and item 4.3 (geolocation accuracy) are known unmet Threshold requirements, and the per-burst inputs carry no documentary NRB assessment. Demonstrating full compliance is out of scope for this project.
 
 The coherence estimation window exists only in `CoherenceConfig` at graph-build time. It reaches a composite by exactly one route: the per-burst coherence products carry it in their tags, and `ResolutionWeighter` reads them back from its inputs. `PROCESSING_SOFTWARE` and `PROCESSING_SOFTWARE_VERSION` are inherited the same way.
 

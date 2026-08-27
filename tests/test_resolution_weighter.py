@@ -1217,7 +1217,7 @@ class TestCompositeTags:
             assert tags["CONTRIBUTING_OBSERVATIONS"] == "2"
             # The parameters must be the ones this call actually used.
             assert tags["COMPOSITING_PARAMETERS"] == "aggregation=mean;clip_max_resolution=2"
-            assert "Not a conformance claim." in tags["CEOS_ARD_ALIGNMENT"]
+            assert tags["METADATA_VOCABULARY"] == product_tags.METADATA_VOCABULARY
             assert src.units == ("linear power",)
             assert src.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
 
