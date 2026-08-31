@@ -11,60 +11,47 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 ### Added
 
 - **GeoTIFF metadata on every product.** Composites, QA layers and per-burst
-  products now carry dataset tags, band units and per-band tags describing how
-  they were processed and how to interpret them. The vocabulary follows
-  CEOS-ARD PFS SAR v1.3.1; no full conformance is claimed.
-- **SNAP 14 support.** Graphs now name the coregistered stack's bands to match
-  the installed SNAP (SNAP 13: `mst`, `slv1`; SNAP 14: `ref`, `sec1`). The
-  version is read from the installation's `VERSION.txt`; if that is missing,
-  the pre-14 naming is used and a warning says so.
-- `CoherenceConfig` added the parameters `correct_coherence_bias` and
-  `remove_local_phase_ramp`, two options that were added to SNAP's `Coherence`
-  operator with SNAP 14. Both default to `False`, so coherence stays
-  comparable across SNAP versions. Enabling either requires SNAP 14 or newer.
-- **Python 3.14 support.**. Verified in CI.
-- `prepare_dem_for_snap()` converts an orthometric external DEM to WGS 84
-  ellipsoidal heights when given a compound source CRS (for example,
-  `EPSG:4326+3855` for Copernicus GLO-30), while applying SNAP's half-pixel
-  geotransform compensation in the same cached raster pass. PROJ grids can be
-  downloaded explicitly with `download_missing_grids=True`.
-- `s1bursts.__version__`, read from the installed distribution metadata. The
-  version is still derived from git tags at build time by hatch-vcs; it is now
-  also reachable at runtime.
-- Runtime validation of public inputs: `SearchQuery` rejects unknown
-  polarization, mode, sub-swath, orbit-direction and platform identifiers,
-  requires positive burst IDs, and bounds the relative orbit number to 1-175;
-  `GeocodingConfig.grid_spacing` and `BackscatterConfig.dem_oversampling` must be
-  positive; the SNAP resampling options are restricted to the methods SNAP
-  accepts (exported as `ResamplingMethod` and `DEMResamplingMethod`); and
-  `find_pairs()` rejects a non-positive baseline or negative maximum deviation.
-- `CDSE_S3_PROFILE` (`CDSES3Settings.profile`), a named AWS profile resolved from
-  `~/.aws/credentials` as an alternative to `CDSE_S3_ACCESS_KEY_ID` /
-  `CDSE_S3_SECRET_ACCESS_KEY`. The profile takes precedence when both are configured
-  and removes boto's environment-variable credential provider, so ambient env vars
-  can never sign CDSE requests.
+  products now carry processing and interpretation metadata based on CEOS-ARD
+  PFS SAR v1.3.1. Full conformance is not claimed.
+- **SNAP 14 support.** Graphs select the SNAP 13 or 14 coregistered-band names
+  from the installed version. An unknown version warns and uses SNAP 13 names.
+- `CoherenceConfig.correct_coherence_bias` and `remove_local_phase_ramp`, both
+  defaulting to `False`. Enabling either requires SNAP 14 or newer.
+- **Python 3.14 support**, verified in CI.
+- `prepare_dem_for_snap()` can convert compound-CRS orthometric DEMs to WGS 84
+  ellipsoidal heights while applying SNAP's pixel-shift compensation. Set
+  `download_missing_grids=True` to download required PROJ grids.
+- Runtime version access through `s1bursts.__version__`.
+- Runtime validation for search fields, SNAP graph settings, resampling methods,
+  and burst-pair timing constraints.
+- Named AWS profiles through `CDSE_S3_PROFILE` (`CDSES3Settings.profile`). A
+  configured profile takes precedence over explicit CDSE S3 keys and ambient
+  AWS environment credentials.
+- Per-product composite codec profiles through
+  `ResolutionWeighter.rasterio_profile`, with an optional `"default"` profile.
+  Flat profiles retain their previous behavior.
 
 ### Fixed
 
-- **The no-data marker the graphs hand to Terrain-Correction is now finite.**
-  `ReplaceZerosWithNoData` (previously `ReplaceZerosWithNaNs`) marks the
-  radar-geometry zeros with a finite value instead of `NaN`, so that SNAP does
-  not interpolate over them during terrain correction. SNAP 13 cannot detect
-  `NaN` as no-data and so eroded more pixels than necessary. SNAP 13 and 14 now erode
-  the same number of pixels.
-- **Areas without DEM coverage no longer read as zero.** SNAP can leave zeros in the
-  product in areas that are not covered by the DEM. Per-burst products now convert
-  a pixel that is zero in every band into no-data while being written. The conversion
-  is skipped when `replace_zeros_with_nan` is off, since zeros are meaningful data
-  in that case.
-- A `TMPDIR` that is set but not writable now produces a warning when a
-  `SNAPConfig` is built, because `tempfile`, used during processing,
-  silently skips missing directories.
-- `compose_*` now refuses inputs that do not sit on the output grid.
-- `compose_coherence_lrw()` and `compose_coherence_by_pass()` now reject inputs
-  with differing temporal baselines.
-- A composite whose inputs disagree on the SNAP version now logs a warning
-  naming the values.
+- **SNAP terrain-correction masks are now consistent across SNAP 13 and 14.**
+  Graphs use a finite internal no-data marker, preventing interpolation over
+  radar-geometry fill pixels.
+- **Areas without DEM coverage no longer read as zero.** Per-burst products
+  convert all-band zero fill to no-data when `replace_zeros_with_nan` is enabled.
+- `SNAPConfig` now warns when `TMPDIR` is set but unusable.
+- `compose_*` rejects inputs that do not sit on the output grid.
+- Coherence compositing rejects inputs with differing temporal baselines.
+- Compositing warns when inputs report different SNAP versions.
+- `prepare_dem_for_snap(download_missing_grids=True)` now refreshes the PROJ
+  grid cache after downloading and attempts only installable open-license grids.
+- The compensated-DEM cache now uses source content and conversion-version keys,
+  preventing collisions between sources with the same basename.
+- Extracted burst manifests preserve the annotation's coordinate precision.
+- `BurstCollection` no longer writes through DataFrame views when sliced.
+- Reading GCP-georeferenced SLC TIFFs no longer emits a spurious
+  `NotGeoreferencedWarning`.
+- `SNAPConfig` and `SNAPSettings` reject resource budgets that cannot run a job
+  and suggest a valid configuration.
 
 ### Changed
 
@@ -74,81 +61,37 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   [CEOS-ARD SAR metadata specification](https://ceos.org/ard/) v1.3.
 - **Breaking:** The `QA-NUM` layer of an LRW composite now counts the
   observations that carry a non-zero resolution weight, rather than those
-  holding a finite value. This makes the layer identical to the *Contributing Observations Image* of the [CEOS-ARD SAR product family specification](https://ceos.org/ard/files/PFS/SAR/v1.3.1/CEOS-ARD_PFS_SAR_v1.3.1.pdf) (v1.3.1, item 2.21). RTC composites are unaffected, because SNAP masks the
-  intensity and the area band in the same operation and the two definitions
-  coincide there. Coherence composites do change, measured at 6-8% of pixels
-  over the Alps, lowering counts without emptying any pixel; regenerate their
-  QA products to update them.
-  Pass-composites are unweighted and keep counting finite values.
+  holding a finite value, matching the CEOS-ARD *Contributing Observations
+  Image*. Regenerate coherence QA products to update their counts. RTC results
+  are unchanged, and unweighted pass composites still count finite values.
 - **Breaking:** `compensate_dem_for_snap()` is renamed to
   `prepare_dem_for_snap()` to reflect that it can now apply both the pixel
   shift and vertical datum conversion of an external DEM for SNAP.
 - The area SNAP writes as `simulatedImage` is now called the *local
-  contributing area* throughout the documentation, after the term the CEOS-ARD
-  SAR product family specification uses for it.
-- Requires `freezebase[s3]>=0.6.1,<0.7`, which adds the `tags`, `band_tags` and
-  `units` parameters the product metadata above is written through and ensures
-  composite codec profiles reach the finished COG. Burst downloads also close
-  their `HTTPDownloader` when done, releasing the connection immediately
-  instead of leaving it to the garbage collector.
+  contributing area*, following CEOS-ARD terminology.
+- Requires `freezebase[s3]>=0.6.1,<0.7` for product metadata, composite codec
+  profiles, and context handling of burst downloadss.
 - **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
-  still carries the Terrain-Correction parameters every per-product config
-  inherits, but `to_xml()` is now an abstract method implemented by
-  `BackscatterConfig`, `CoherenceConfig`, and `InterferogramConfig`.
-  `to_mermaid()` is unchanged and still inherited from the base.
+  remains the base for shared Terrain-Correction parameters; concrete configs
+  implement `to_xml()`.
 - **Breaking:** `build_coherence_magnitude_graph()` is renamed to
-  `build_coherence_graph()`. With the complex variant gone there is only one
-  coherence graph, so the qualifier no longer distinguishes anything.
-
+  `build_coherence_graph()`.
 - The first-party dependency `freezecore` was renamed to `freezebase` and is now
-  resolved from PyPI instead of a Git source. Imports
-  moved from `freezecore.*` to `freezebase.*`; the cache environment variable it
-  reads is now `FREEZEBASE_CACHE`.
-
-### Fixed
-
-- **`prepare_dem_for_snap(download_missing_grids=True)` failed even though the download
-  was successful.** The transformation was reported as unavailable, because the PROJ
-  grid cache wasn't refreshed. The grid cache is now refreshed between the download
-  and rebuild.
-- **`prepare_dem_for_snap(download_missing_grids=True)` reported grids that cannot
-  be installed.** Now only grids with an open license that PROJ can download are
-  listed and attempted to be downloaded.
-- **The compensated-DEM cache could return the wrong raster.** The cache is now
-  keyed on the source's SHA-256 content digest and a conversion schema version,
-  with a verified JSON provenance sidecar per entry, so sources sharing a
-  basename can no longer collide.
-- **Footprint coordinates in the extracted burst manifest lost precision.** They
-  were reformatted through Python's float repr, matching neither the reference
-  extractor nor the burst products CDSE serves. The annotation's coordinate text
-  is now copied verbatim, preserving every digit.
-- `BurstCollection` no longer writes through a view of the DataFrame it is given.
-  Slicing a collection triggered a pandas `SettingWithCopyWarning` and could
-  modify the caller's frame.
-- Reading an SLC measurement TIFF no longer emits a spurious
-  `NotGeoreferencedWarning`. SLC products carry GCPs rather than a geotransform,
-  so the warning said nothing the caller could act on.
-- `SNAPConfig` and `SNAPSettings` now reject resource budgets that cannot
-  describe a runnable job (`max_workers`, `gpt_threads_per_job` ≥ 1;
-  `max_ram_gb` > 0; `gpt_cache_ratio` in (0, 1]), raising `ConfigurationError`
-  with a working budget suggested instead of silently over-allocating heap.
+  resolved from PyPI. Imports move from `freezecore.*` to `freezebase.*`, and
+  its cache environment variable is now `FREEZEBASE_CACHE`.
 
 ### Removed
 
 - **Breaking:** the complex coherence product and everything that existed only to
   produce it: `CoherenceConfig.write_complex`, `CoherenceConfig.map_looks`,
   `CoherenceComplexProduct`, `FileManager.find_coherence_complex_products()`, and
-  the `build_coherence_complex_ifg_graph()` graph builder. It was an experiment
-  that did not make the cut. `create_coherence()` / `create_coherences()` now
-  always write the single-band `COH` magnitude, and their return types narrow
-  from `CoherenceProduct | CoherenceComplexProduct` to `CoherenceProduct`.
+  `build_coherence_complex_ifg_graph()`. Coherence creation now always returns a
+  single-band `CoherenceProduct`.
 - **Breaking:** `s1bursts.dimap` (`BeamDimapDataset`) and `s1bursts.utils`
-  (`sliding_window_mean`). Both existed solely to serve the complex coherence
-  post-processing step and have no remaining caller.
+  (`sliding_window_mean`), which served only complex coherence processing.
 - **Breaking:** `build_terrain_correction_graph()`, and with it
-  `GeocodingConfig.to_xml()`. The standalone Terrain-Correction graph existed
-  only as the second stage of the complex coherence pipeline; every remaining
-  product runs a single-shot graph with the Terrain-Correction tail built in.
+  `GeocodingConfig.to_xml()`. Remaining products use single-shot graphs with
+  Terrain-Correction built in.
 
 ## [0.2.0] - 2026-07-31
 
