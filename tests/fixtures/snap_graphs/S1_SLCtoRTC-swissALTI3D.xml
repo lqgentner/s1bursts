@@ -73,7 +73,7 @@
       <sourceBands/>
       <demName>External DEM</demName>
       <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>
-      <externalDEMFile>/mnt/deep-glacier-mapping/data/dem/swissalti3d/interim/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
+      <externalDEMFile>/data/dem/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
       <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
       <externalDEMApplyEGM>false</externalDEMApplyEGM>
       <outputSimulatedImage>true</outputSimulatedImage>
@@ -114,7 +114,7 @@
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceBands/>
       <demName>External DEM</demName>
-      <externalDEMFile>/mnt/deep-glacier-mapping/data/dem/swissalti3d/interim/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
+      <externalDEMFile>/data/dem/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
       <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
       <externalDEMApplyEGM>false</externalDEMApplyEGM>
       <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>

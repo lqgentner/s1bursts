@@ -19,7 +19,7 @@ from s1bursts.snap_graph import (
 )
 
 _SWISSALTI3D = Path(
-    "/mnt/deep-glacier-mapping/data/dem/swissalti3d/interim/swissalti3d-4326-ellipsoid.tif",
+    "/data/dem/swissalti3d-4326-ellipsoid.tif",
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "snap_graphs"
@@ -294,7 +294,7 @@ def test_interferogram_output_bands() -> None:
 
 
 def test_external_dem_path_emits_external_dem_name() -> None:
-    dem = Path("/mnt/glacier/dems/swissalti3d-4326-ellipsoid.tif")
+    dem = Path("/data/dem/swissalti3d-4326-ellipsoid.tif")
     cfg = BackscatterConfig(dem=dem)
     xml = cfg.to_xml()
     root = fromstring(xml)
@@ -314,7 +314,7 @@ def test_builtin_dem_emits_no_external_file() -> None:
 
 
 def test_external_dem_string_path_coerced_to_path() -> None:
-    dem = "/mnt/glacier/dems/swissalti3d-4326-ellipsoid.tif"
+    dem = "/data/dem/swissalti3d-4326-ellipsoid.tif"
     cfg = BackscatterConfig(dem=dem)
     root = fromstring(cfg.to_xml())
     dem_names = [el.text for el in root.iter("demName")]
