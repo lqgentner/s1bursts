@@ -86,10 +86,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - The area SNAP writes as `simulatedImage` is now called the *local
   contributing area* throughout the documentation, after the term the CEOS-ARD
   SAR product family specification uses for it.
-- Requires `freezebase[s3]>=0.6,<0.7`, which adds the `tags`, `band_tags` and
-  `units` parameters the product metadata above is written through. Burst
-  downloads also close their `HTTPDownloader` when done, releasing the
-  connection immediately instead of leaving it to the garbage collector.
+- Requires `freezebase[s3]>=0.6.1,<0.7`, which adds the `tags`, `band_tags` and
+  `units` parameters the product metadata above is written through and ensures
+  composite codec profiles reach the finished COG. Burst downloads also close
+  their `HTTPDownloader` when done, releasing the connection immediately
+  instead of leaving it to the garbage collector.
 - **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
   still carries the Terrain-Correction parameters every per-product config
   inherits, but `to_xml()` is now an abstract method implemented by

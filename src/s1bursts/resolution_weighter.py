@@ -14,6 +14,7 @@ SNAP names the band ``simulatedImage``, CEOS-ARD names the layer
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -40,7 +41,7 @@ from s1bursts.product import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping, Sequence
+    from collections.abc import Collection, Sequence
 
     from freezebase.mgrs import MGRSGeoBox
 
@@ -65,6 +66,25 @@ type CohPassResult = tuple[CohPassComposite, CohPassQA]
 _OrbitDateKey = tuple[int, Timestamp]
 _LoadedEntry = tuple[ComposableProduct, NDArray[np.float32]]
 
+_DEFAULT_PROFILE_KEY = "default"
+
+
+def _split_profiles(
+    rasterio_profile: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Normalise the ``rasterio_profile`` argument to ``{product_type: profile}``.
+
+    A flat profile applies to every product and is stored under
+    ``"default"``; a mapping of product type to profile is kept as given. The
+    two are told apart by whether the values are themselves mappings, which a
+    flat rasterio profile never has.
+    """
+    if not rasterio_profile:
+        return {}
+    if all(isinstance(value, Mapping) for value in rasterio_profile.values()):
+        return {str(key): dict(value) for key, value in rasterio_profile.items()}
+    return {_DEFAULT_PROFILE_KEY: dict(rasterio_profile)}
+
 
 class ResolutionWeighter:
     """Compute LRW and per-pass composites for Sentinel-1 products.
@@ -81,9 +101,24 @@ class ResolutionWeighter:
     n_workers : int, default 8
         Number of threads for parallel file I/O during product loading.
     rasterio_profile : dict[str, Any] or None, optional
-        rasterio profile dictionary for GeoTIFF output. If None, uses
-        float32 as dtype, nan as nodata, pixel interleave,
-        deflate compression, and 512x512 tiling.
+        rasterio profile for GeoTIFF output. If None, uses float32 as dtype,
+        nan as nodata, pixel interleave, deflate compression, and 512x512
+        tiling.
+
+        Composites and their QA auxiliaries often want different settings --
+        a lossy bound suits backscatter but never a scene count -- so this
+        also accepts a mapping of :attr:`~s1bursts.product.Product.product_type`
+        to profile, with an optional ``"default"`` entry applied to the rest::
+
+            {
+                "default":        {"compress": "lerc_zstd", "max_z_error": 1e-5},
+                "COH_LRW":        {"max_z_error": 1e-3},
+                "RTC_LRW_QA-NUM": {"max_z_error": 0},
+            }
+
+        Per-product entries are merged *over* ``"default"``, so they need only
+        state what differs. A flat profile (no nested mappings) is treated as
+        the default for every product, which is the previous behaviour.
 
     References
     ----------
@@ -105,10 +140,7 @@ class ResolutionWeighter:
     ) -> None:
         self._fm = file_manager
         self._n_workers = n_workers
-
-        # Overwrite profile defaults with user-specified profile
-        base_profile = {"dtype": np.float32, "nodata": np.nan}
-        self.rasterio_profile = build_rasterio_profile(base_profile, rasterio_profile)
+        self._profiles = _split_profiles(rasterio_profile)
 
     # ------------------------------------------------------------------
     # Public API
@@ -852,6 +884,21 @@ class ResolutionWeighter:
         with ThreadPoolExecutor(max_workers=self._n_workers) as executor:
             return list(executor.map(_load_one, products))
 
+    def _profile_for(self, product: CompositeProduct | QAProduct) -> dict[str, Any]:
+        """Build the rasterio profile for one product.
+
+        The product's own entry is merged *over* the ``"default"`` one, so a
+        per-product override states only what differs and still inherits the
+        codec. Selecting instead of merging would silently drop the configured
+        compression and fall back to the library default.
+        """
+        override = {
+            **self._profiles.get(_DEFAULT_PROFILE_KEY, {}),
+            **self._profiles.get(product.product_type, {}),
+        }
+        base_profile = {"dtype": np.float32, "nodata": np.nan}
+        return build_rasterio_profile(base_profile, override)
+
     def _save(
         self,
         data: NDArray,
@@ -869,7 +916,7 @@ class ResolutionWeighter:
             logger.debug("skipping existing %s", path.name)
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        profile = self.rasterio_profile.copy()
+        profile = self._profile_for(product)
         profile.update(
             count=1,
             dtype=dtype,

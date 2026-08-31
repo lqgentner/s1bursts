@@ -18,6 +18,7 @@ import rasterio
 from s1bursts import product_tags
 from s1bursts.filemanager import FileManager
 from s1bursts.product import (
+    RTCLRWQA,
     CoherenceProduct,
     QaMetric,
     RTCLRWComposite,
@@ -1489,3 +1490,103 @@ class TestInputConsistency:
             scene.weighter.compose_rtc_lrw(products, scene.geobox)
 
         assert not [r for r in caplog.records if "disagree" in r.message]
+
+
+class TestPerProductProfiles:
+    """Composites and their QA auxiliaries can take different codec settings."""
+
+    @staticmethod
+    def _weighter(tmp_path: Path, profile: dict | None) -> ResolutionWeighter:
+        return ResolutionWeighter(
+            FileManager(base_dir=tmp_path),
+            rasterio_profile=profile,
+        )
+
+    @staticmethod
+    def _product(qa_metric: QaMetric | None = None) -> RTCLRWComposite | RTCLRWQA:
+        common = {
+            "mgrs_code": "32TMS03",
+            "start_date": Timestamp("2023-07-18"),
+            "end_date": Timestamp("2023-10-15"),
+            "polarization": "VV",
+        }
+        if qa_metric is None:
+            return RTCLRWComposite(**common)
+        return RTCLRWQA(**common, qa_metric=qa_metric)
+
+    def test_a_flat_profile_applies_to_every_product(self, tmp_path: Path) -> None:
+        w = self._weighter(tmp_path, {"compress": "zstd"})
+
+        for product in (self._product(), self._product(QaMetric.NUM)):
+            assert w._profile_for(product)["compress"] == "zstd"
+
+    def test_no_profile_keeps_the_library_default(self, tmp_path: Path) -> None:
+        w = self._weighter(tmp_path, None)
+
+        assert w._profile_for(self._product())["compress"] == "deflate"
+
+    def test_per_product_entry_overrides_the_default(self, tmp_path: Path) -> None:
+        w = self._weighter(
+            tmp_path,
+            {
+                "default": {"compress": "lerc_zstd", "max_z_error": 1e-5},
+                "RTC_LRW_QA-NUM": {"max_z_error": 0},
+            },
+        )
+
+        assert w._profile_for(self._product())["max_z_error"] == 1e-5
+        assert w._profile_for(self._product(QaMetric.NUM))["max_z_error"] == 0
+
+    def test_a_per_product_entry_inherits_the_default_codec(self, tmp_path: Path) -> None:
+        """Merging, not selecting.
+
+        Selecting would leave the QA entry with no ``compress`` key, and
+        ``build_rasterio_profile`` would then quietly restore deflate — the
+        specialised products would all end up on the wrong codec.
+        """
+        w = self._weighter(
+            tmp_path,
+            {
+                "default": {"compress": "lerc_zstd", "max_z_error": 1e-5},
+                "RTC_LRW_QA-NUM": {"max_z_error": 0},
+            },
+        )
+
+        assert w._profile_for(self._product(QaMetric.NUM))["compress"] == "lerc_zstd"
+
+    def test_a_product_without_an_entry_falls_back_to_the_default(self, tmp_path: Path) -> None:
+        w = self._weighter(tmp_path, {"default": {"compress": "lerc_zstd"}})
+
+        assert w._profile_for(self._product(QaMetric.CQM))["compress"] == "lerc_zstd"
+
+    def test_a_mapping_without_a_default_leaves_others_on_the_library_default(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        w = self._weighter(tmp_path, {"RTC_LRW": {"compress": "lerc_zstd"}})
+
+        assert w._profile_for(self._product())["compress"] == "lerc_zstd"
+        assert w._profile_for(self._product(QaMetric.NUM))["compress"] == "deflate"
+
+    def test_per_product_codec_reaches_the_written_cog(self, tmp_path: Path) -> None:
+        """Exercise the freezebase boundary, not only the profile lookup."""
+        manager = FileManager(base_dir=tmp_path)
+        weighter = ResolutionWeighter(
+            manager,
+            rasterio_profile={
+                "default": {"compress": "lerc_zstd", "max_z_error": 1e-5},
+                "RTC_LRW_QA-NUM": {"max_z_error": 0},
+            },
+        )
+        product = self._product()
+        weighter._save(
+            np.full((_TILE, _TILE), 0.25, dtype=np.float32),
+            product,
+            _geobox(),
+            product_tags.RasterMetadata(tags={}, band_names=["VV"], units=["natural"]),
+        )
+
+        with rasterio.open(manager.get_product_path(product)) as src:
+            structure = src.tags(ns="IMAGE_STRUCTURE")
+        assert structure["COMPRESSION"] == "LERC_ZSTD"
+        assert float(structure["MAX_Z_ERROR"]) == pytest.approx(1e-5)
