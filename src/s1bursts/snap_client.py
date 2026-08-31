@@ -193,27 +193,11 @@ def _extract_gpt_error(
 
 
 def _normalize_nodata(dataset: rasterio.io.DatasetWriter, nodata: float) -> int:
-    """Map the markers GPT left behind onto ``nodata``, in place.
+    """Replace SNAP's finite sentinel and all-band zero fill with ``nodata``.
 
-    Two reach the staging GeoTIFF, and neither is the value the product declares:
-
-    :data:`~s1bursts.snap_graph.NODATA_SENTINEL`
-        What the graph's band maths wrote in place of the radar-geometry zeros,
-        and what Terrain-Correction then wrote into the pixels it could not fill.
-        It is finite only so that SNAP can recognise it.
-    zeros
-        Terrain-Correction skips a tile whose DEM is entirely no-data and fills
-        it with the band's no-data value, but writes that fill into a copy of the
-        tile buffer it never hands back (``Tile.getRawSamples`` without the
-        matching ``setRawSamples``). The copy is only taken for tiles the image
-        edge clips, so such a tile reaches the product holding the zeros Java
-        allocated it with, while interior tiles are correctly filled. Verified in
-        SNAP 13.0.0 and 14.0.0; drop this once SNAP writes the fill back.
-
-    A valid pixel cannot carry either marker once the band maths has run, which
-    is why both conversions are tied to it. Requiring the zeros in *all* bands
-    keeps a signed band that legitimately crosses zero — the interferogram's real
-    and imaginary parts — from being masked on its own.
+    Terrain-Correction can leave zeros in edge tiles over DEM voids. Requiring
+    zero in every band preserves valid zero crossings in complex products. This
+    normalization is only safe after the graph's no-data band maths has run.
 
     Returns
     -------
@@ -482,10 +466,7 @@ class SNAPClient:
             for k, v in process_params.items():
                 commands.append(f"-P{k}={v}")
 
-        # The JVM ignores TMPDIR and defaults java.io.tmpdir to /tmp, where jblas
-        # extracts 30 MB of native libraries and deletes them from a shutdown hook
-        # that a SIGKILL skips. Keeping them under the userdir hands cleanup to
-        # snap_worker_userdir, which removes it however gpt died.
+        # Keep jblas files under the worker directory so SIGKILL cannot orphan them.
         java_tmpdir = snap_userdir / "tmp"
         java_tmpdir.mkdir(parents=True, exist_ok=True)
 
@@ -533,10 +514,7 @@ class SNAPClient:
                     e.stdout,
                     e.stderr,
                 )
-                # Fold SNAP's own error text into the exception, since
-                # CalledProcessError only reports the exit code. Without this the
-                # real cause (e.g. "No valid orbit file found") never reaches the
-                # ErrorResult / summary the caller sees.
+                # Preserve SNAP's cause; CalledProcessError reports only the exit code.
                 detail = _extract_gpt_error(e.stdout, e.stderr) or "<no output captured>"
                 msg = f"GPT processing failed (exit {e.returncode}): {detail}"
             else:

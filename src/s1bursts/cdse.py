@@ -385,10 +385,7 @@ class CDSEBurstClient:
             params["$count"] = bool(count)
         return params
 
-    # The catalogue endpoint intermittently returns spurious 500s under load, the same
-    # way `bursts.dataspace.copernicus.eu` does for individual burst downloads (there
-    # handled by trying the fallback endpoint). `search_bursts` has no fallback, so
-    # without retrying 500 here a single transient hiccup aborts the whole search.
+    # Search has no fallback endpoint, so retry its intermittent HTTP 500 responses.
     @retry_request(logger=logger, extra_status_codes=frozenset({500}))
     def search_bursts(
         self,

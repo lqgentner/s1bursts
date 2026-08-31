@@ -63,9 +63,7 @@ class BaseProduct(ABC):
     def __repr__(self) -> str:
         """Return string representation of the product."""
         field_strs = []
-        # Fields marked repr=False are skipped; this keeps __repr__ free of
-        # side effects (rel_orbit_number is resolved via the burst-map LUT,
-        # which may download data or raise for unknown bursts).
+        # Avoid resolving hidden LUT-backed fields while formatting.
         for f in fields(self):
             if not f.repr:
                 continue
@@ -114,10 +112,9 @@ class GeocodedBurst(BurstFootprintMixin, BaseProduct, ABC):
     burst_id: int
     sub_swath: SubSwath
     crs: CRSLike
-    # Relative orbit number propagated from the source burst; None falls back to the
-    # LUT via the mixin property. Keyword-only so subclasses can add required fields.
+    # None delegates to the mixin's burst-map lookup.
     _rel_orbit_number: int | None = field(default=None, repr=False, kw_only=True)
-    # Mixin property (propagated value or LUT), declared as a field for asdict() filenames.
+    # Include the resolved value in asdict()-based filenames.
     rel_orbit_number: int = field(init=False, repr=False)
 
     def __post_init__(self) -> None:

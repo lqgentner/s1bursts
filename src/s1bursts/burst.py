@@ -433,25 +433,16 @@ class BurstPair:
 class _BaseBurstCollection[TEntry]:
     """Base class for burst collections with shared functionality.
 
-    Provides iteration, indexing, concatenation, deduplication, and
-    HTML display for both BurstCollection and BurstPairCollection.
-    Subclasses must define the class-level column constants and implement
-    ``_row_to_entry``.
+    Subclasses define their column metadata and implement ``_row_to_entry``.
     """
 
-    # Subclasses must define these class variables
-    # Columns that uniquely describe an entry
     _UNIQUE_COLUMNS: ClassVar[list[str]]
-    # All columns of an entry
     _ALL_COLUMNS: ClassVar[list[str]]
-    # Optional columns: auto-filled with None if omitted, and not required by validation.
+    # Optional columns are filled with None and excluded from validation.
     _OPTIONAL_COLUMNS: ClassVar[list[str]] = []
-    # Entry names for display
     _ENTRY_NAME_SINGULAR: ClassVar[str]
     _ENTRY_NAME_PLURAL: ClassVar[str]
-    # Columns that uniquely describe a burst footprint
     _FOOTPRINT_UNIQUE_COLUMNS: ClassVar[list[str]] = ["burst_id", "sub_swath"]
-    # Columns that must match to make bursts compatibile for interferometry
     _INSAR_MATCH_COLUMNS: ClassVar[list[str]] = [
         "burst_id",
         "sub_swath",
@@ -461,15 +452,11 @@ class _BaseBurstCollection[TEntry]:
     @staticmethod
     @abstractmethod
     def _row_to_entry(row: Series) -> TEntry:
-        """Convert a DataFrame row to an entry (Burst or BurstPair).
-
-        Subclasses must implement this method.
-        """
+        """Convert a DataFrame row to a collection entry."""
         ...
 
     def __init__(self, df: gpd.GeoDataFrame | None = None) -> None:
-        """
-        Initialize collection with a GeoDataFrame.
+        """Initialize the collection from a GeoDataFrame.
 
         Parameters
         ----------
@@ -497,22 +484,7 @@ class _BaseBurstCollection[TEntry]:
         self.df = df.sort_values(self._UNIQUE_COLUMNS)
 
     def _validate_dataframe(self, df: gpd.GeoDataFrame) -> None:
-        """
-        Validate that the dataframe has the required type and columns.
-
-        Parameters
-        ----------
-        df : gpd.GeoDataFrame
-            DataFrame to validate.
-
-        Raises
-        ------
-        TypeError
-            If not a geopandas.GeoDataFrame
-        ValueError
-            If required columns are missing.
-
-        """
+        """Validate the dataframe type and required columns."""
         if not isinstance(df, gpd.GeoDataFrame):
             msg = f"`df` must be a GeoDataFrame, received '{type(df).__name__}'."
             raise TypeError(msg)
@@ -524,7 +496,6 @@ class _BaseBurstCollection[TEntry]:
             msg = f"DataFrame is missing required columns: {missing_columns}"
             raise ValueError(msg)
 
-        # Check for unexpected columns (warn but don't fail)
         unexpected_columns = df_columns - all_columns
         if unexpected_columns:
             warnings.warn(
@@ -533,49 +504,15 @@ class _BaseBurstCollection[TEntry]:
             )
 
     def _deduplicate_dataframe(self, df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-        """Remove duplicate entries based on unique column combinations.
-
-        Parameters
-        ----------
-        df : gpd.GeoDataFrame
-            A dataframe which can contain duplicates.
-
-        Returns
-        -------
-        gpd.GeoDataFrame
-            The dataframe with duplicates removed.
-        """
-        # Remove duplicates based on the columns which uniquely identify an entry
+        """Remove entries with duplicate identity columns."""
         return df.drop_duplicates(subset=self._UNIQUE_COLUMNS, ignore_index=True)
 
     def __len__(self) -> int:
-        """
-        Return the number of entries in the collection.
-
-        Returns
-        -------
-        int
-            Number of entries in the collection.
-
-        """
+        """Return the number of entries."""
         return len(self.df)
 
     def __add__(self, other: Self) -> Self:
-        """
-        Concatenate two collections with duplicates removed.
-
-        Parameters
-        ----------
-        other : Self
-            Another collection of the same type to concatenate.
-
-        Returns
-        -------
-        Self
-            Concatenated collection.
-
-        """
-        # Concatenate dataframes
+        """Concatenate two collections and remove duplicates."""
         combined_df = gpd.GeoDataFrame(
             pd.concat([self.df, other.df], ignore_index=True),
         )
@@ -583,15 +520,7 @@ class _BaseBurstCollection[TEntry]:
         return type(self)(combined_df)
 
     def __iter__(self) -> Iterator[TEntry]:
-        """
-        Iterate over individual entries in the collection.
-
-        Yields
-        ------
-        TEntry
-            Individual entry instances from the collection (Burst or BurstPair).
-
-        """
+        """Iterate over collection entries."""
         for _, row in self.df.iterrows():
             yield self._row_to_entry(row)
 
@@ -602,62 +531,26 @@ class _BaseBurstCollection[TEntry]:
     def __getitem__(self, index: slice) -> Self: ...
 
     def __getitem__(self, index: int | slice) -> TEntry | Self:
-        """
-        Get a specific entry or slice of entries from the collection.
-
-        Parameters
-        ----------
-        index : int | slice
-            Integer index for a single entry, or slice for multiple entries.
-
-        Returns
-        -------
-        TEntry | Self
-            Single entry if index is int, or new collection of same type if index is slice.
-
-        """
+        """Return an entry or sliced collection."""
         if isinstance(index, slice):
             return type(self)(self.df.iloc[index])
         return self._row_to_entry(self.df.iloc[index])
 
     def _repr_html_(self) -> str:
-        """
-        Generate HTML representation for Jupyter notebooks.
-
-        Returns
-        -------
-        str
-            HTML string for rich display.
-
-        """
-        # Get unique footprints
+        """Return the rich HTML representation."""
         unique_footprints = self.df.drop_duplicates(
             subset=self._FOOTPRINT_UNIQUE_COLUMNS,
         )
 
-        # Get stats
         n_bursts = len(self)
         n_footprints = len(unique_footprints)
 
-        # Create map SVG
         map_svg = ui.create_footprint_svg(unique_footprints)
-
-        # Create world map with target
         world_map_svg = ui.create_world_map_with_target(unique_footprints)
-
-        # Create dataframe HTML which only displays the unique columns
         df_html = self.df[self._UNIQUE_COLUMNS]._repr_html_()  # type: ignore[operator]
-
-        # Create CSS and HTML structure
         css = ui.get_burstinfo_css()
-
-        # Collection type
         col_name = type(self).__name__
-
-        # Entry name
         entry_name = self._ENTRY_NAME_SINGULAR if n_bursts == 1 else self._ENTRY_NAME_PLURAL
-
-        # Footprint name
         footprint_name = "Footprint" if n_footprints == 1 else "Footprints"
 
         return f"""

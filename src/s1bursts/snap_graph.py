@@ -474,28 +474,10 @@ def xml_to_mermaid(graph_xml: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-# Terrain-Correction only recognises a no-data sample by comparing it against the
-# band's declared value (`v == tileData.noDataValue`). That test is false for
-# every sample when the declared value is NaN, so SNAP 13 never takes its no-data
-# path: the NaN enters bilinear interpolation and poisons every output pixel
-# whose kernel touches it, eroding the footprint by a kernel width. SNAP 14 tests
-# for NaN explicitly and does not, which is why the two versions disagree on the
-# mask. A finite marker is detected by both, so both fall back to the nearest
-# valid sample as SNAP intends. It never reaches the user: `_finalize_product`
-# maps it onto the product's own no-data value.
-#
-# Two constraints pick the value, and the second is the one a round number fails:
-#
-# 1. It must lie outside every band's range. The binding case is the
-#    interferogram, whose real and imaginary parts are signed: no operator before
-#    it calibrates, so they are products of raw CInt16 SLC counts and bounded by
-#    2 * 32768**2 = 2**31. Everything else is non-negative. -2**40 clears that by
-#    a factor of 512.
-# 2. It must be exactly representable in float32. SNAP compares the float32
-#    sample, widened to double, against the double it parsed from the XML. A
-#    literal that is not exactly a float32 — -1e12 and -1e30 both fail — never
-#    compares equal, and the marker silently stops working the way NaN does.
-#    Powers of two written out in full satisfy both sides.
+# SNAP 13 detects no-data by equality, so NaN reaches interpolation instead.
+# This finite marker works across supported versions, exceeds the maximum
+# interferogram magnitude (2**31), and survives SNAP's float32-to-double
+# comparison exactly. `_finalize_product` converts it to the product's no-data.
 NODATA_SENTINEL: Final = -1099511627776.0  # -2**40
 
 _SENTINEL_EXPR = repr(NODATA_SENTINEL)
@@ -661,9 +643,7 @@ def _intensity_target_bands(snap_version: tuple[int, ...] | None) -> list[dict[s
 
 
 def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
-    # `i_ifg` and `q_ifg` must declare the same marker as each other: for a
-    # complex pair Terrain-Correction reads `srcBands[0].getNoDataValue()` — the
-    # real band's — and applies it to both.
+    # Terrain-Correction applies the real band's no-data value to the complex pair.
     cond = "(int1 != 0) and (int2 != 0)"
     return [
         {

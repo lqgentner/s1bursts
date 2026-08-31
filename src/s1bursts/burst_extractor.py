@@ -533,8 +533,7 @@ def _extract_tiff(
         width=meta.number_of_samples,
         height=meta.number_of_lines,
     )
-    # SLC measurement TIFFs carry no geotransform, so opening one warns. That is
-    # expected for this product type and says nothing the caller can act on.
+    # SLC TIFFs use GCPs instead of a geotransform, so this warning is expected.
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
         with rasterio_open(tiff_s3_path) as src:
@@ -542,16 +541,9 @@ def _extract_tiff(
             src_tags = src.tags()
             data = src.read(window=window)
     profile.update(width=meta.number_of_samples, height=meta.number_of_lines, crs=None)
-    # ESA SLC measurement TIFFs are striped (tiled=False, blockysize=1). The
-    # copied profile carries a blockxsize (= full-product width) that is only
-    # valid for tiled output, so forwarding it makes GDAL warn "BLOCKXSIZE can
-    # only be used with TILED=YES". Drop it to keep the striped layout.
+    # blockxsize is invalid for the striped SLC output inherited from the source.
     profile.pop("blockxsize", None)
-    # SLC files have no affine CRS — GCPs are the sole georeferencing.
-    # Setting GCPs on a file that has any geotransform (even a default one written
-    # by rasterio from the source profile) makes GDAL emit a CPLE_AppDefined
-    # "geotransform going to be cleared" message. Suppress that message at
-    # the logging level.
+    # Rasterio writes a default transform that GDAL clears when GCPs are assigned.
     _rasterio_logger = logging.getLogger("rasterio")
     _prev_level = _rasterio_logger.level
     _rasterio_logger.setLevel(logging.ERROR)
@@ -625,12 +617,10 @@ def extract_burst_from_s3(  # noqa: PLR0915
     s3_settings = get_settings().cdse.s3
     save_upath = UPath(save_path)
 
-    # --- Catalog lookup ---
     logger.info("Looking up S3 path for '%s'", parent_product_name)
     s3_path = _lookup_s3_path(parent_product_name)
     product_root = _make_s3_upath(s3_path, s3_settings)
 
-    # --- Download annotation and manifest ---
     logger.info("Downloading annotation XML (%s/%s)", swath, pol)
     ann_upath = _glob_annotation_xml(product_root, swath, pol)
     ann_text = ann_upath.read_text()
@@ -639,7 +629,6 @@ def extract_burst_from_s3(  # noqa: PLR0915
     ann_root = _parse_xml(ann_text.encode())
     mfst_root = _parse_xml(manifest_text.encode())
 
-    # --- Resolve burst position and build naming metadata ---
     meta = _resolve_burst(
         ann_root,
         mfst_root,
@@ -654,7 +643,7 @@ def extract_burst_from_s3(  # noqa: PLR0915
         meta.starting_line,
     )
 
-    # --- Extract GCPs from the raw (pre-edit) annotation; lines shifted to burst origin ---
+    # Read GCPs before editing shifts annotation lines to the burst origin.
     geoloc_pts: list[tuple[float, float, float, float, float]] = [
         (
             float(p.findtext("pixel")),
@@ -668,7 +657,6 @@ def extract_burst_from_s3(  # noqa: PLR0915
         )
     ]
 
-    # --- Build output locally, then move/upload the final zip to save_dir ---
     safe_name = (
         f"S1{meta.platform_number}_SLC_{meta.sensing_time_compact}"
         f"_{burst_id:06d}_{sub_swath.upper()}_{polarization.upper()}_{meta.datatake_id}.SAFE"
@@ -679,12 +667,10 @@ def extract_burst_from_s3(  # noqa: PLR0915
         (safe_dir / "annotation" / "calibration").mkdir(parents=True)
         (safe_dir / "measurement").mkdir()
 
-        # --- Annotation (edits ann_root in-place) ---
         logger.info("Editing annotation and auxiliary XML files")
         ann_bytes = _edit_annotation(ann_root, meta)
         (safe_dir / "annotation" / f"{meta.new_pattern}.xml").write_bytes(ann_bytes)
 
-        # --- Calibration ---
         cal_text = (
             product_root / f"annotation/calibration/calibration-{ann_upath.name}"
         ).read_text()
@@ -694,13 +680,11 @@ def extract_burst_from_s3(  # noqa: PLR0915
             _edit_calibration(cal_text, meta),
         )
 
-        # --- Noise ---
         noise_text = (product_root / f"annotation/calibration/noise-{ann_upath.name}").read_text()
         (safe_dir / "annotation" / "calibration" / f"noise-{meta.new_pattern}.xml").write_bytes(
             _edit_noise(noise_text, meta),
         )
 
-        # --- RFI (optional) ---
         rfi_upath = product_root / f"annotation/rfi/rfi-{ann_upath.name}"
         if rfi_upath.exists():
             (safe_dir / "annotation" / "rfi").mkdir()
@@ -708,9 +692,9 @@ def extract_burst_from_s3(  # noqa: PLR0915
                 _edit_rfi(rfi_upath.read_text(), meta),
             )
 
-        # --- Manifest (must come after annotation edit so footprint uses shifted lines) ---
-        old_pattern = ann_upath.name[:-4]  # annotation filename without .xml extension
-        footprint = _build_footprint(ann_root)  # ann_root is now the edited (shifted) tree
+        # Build the manifest after shifting the annotation footprint.
+        old_pattern = ann_upath.name[:-4]
+        footprint = _build_footprint(ann_root)
         (safe_dir / "manifest.safe").write_bytes(
             _edit_manifest(
                 manifest_text,
@@ -721,7 +705,6 @@ def extract_burst_from_s3(  # noqa: PLR0915
             ),
         )
 
-        # --- TIFF extraction ---
         tiff_s3_path = product_root / f"measurement/{ann_upath.name[:-4]}.tiff"
         dst_tiff = safe_dir / "measurement" / f"{meta.new_pattern}.tiff"
         logger.info(
@@ -734,9 +717,7 @@ def extract_burst_from_s3(  # noqa: PLR0915
         logger.info("Creating zip archive")
         zip_path = _zip_safe_dir(safe_dir)
 
-        # Move local zip to destination (may be local or remote).
-        # The outer zip filename is set by the caller via `save_path`; the
-        # inner SAFE folder retains the ESA-conventional naming.
+        # Keep the ESA name inside the caller-named archive.
         save_upath.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(save_upath, Path):
             shutil.move(zip_path, save_upath)

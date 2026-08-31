@@ -66,32 +66,20 @@ value is written on every product rather than being scoped per product type.
 LRW_REFERENCE = "https://doi.org/10.1109/TGRS.2021.3055562"
 """Small et al. (2022), the local-resolution-weighting method of item 1.7.24."""
 
-# The specification asks for the conversion to be declared, not applied: items
-# 3.1, 2.21 and 2.22 each note that "transformation to the logarithmic decibel
-# scale is not required or desired as this step can be completed by the user".
+# The specification asks products to declare this optional conversion.
 CONVERSION_EQ = "dB = 10*log10(DN)"
 
 _PIXEL_CONVENTION = "pixel centre"
 
-# Band unit for linear backscatter. The PFS names the two expression
-# conventions "linear amplitude" and "linear power" (items 2.21, 2.22, 3.1), so
-# the stored form is said in the specification's own words. The tag value stays
-# the metadata spec's enum, which is [Amplitude, Power]; the two documents
-# disagree here and the parameter list governs the parameter.
+# The PFS calls stored values "linear power" while the metadata enum uses "Power".
 _LINEAR_POWER_UNIT = "linear power"
 _DECIBEL_UNIT = "dB"
 
-# This package orchestrates the run and defines the vocabulary below, so the
-# product records which version wrote it. That is not cosmetic: the definition
-# of QA-NUM changed between releases, and nothing else in the file says which
-# of the two a reader is holding.
+# The package version identifies the metadata vocabulary, including QA-NUM semantics.
 _PIPELINE_SOFTWARE = "s1bursts"
 _PIPELINE_URL = "https://github.com/lqgentner/s1bursts"
 
-# Processing levels follow the usual EOSDIS ladder: the SLC input is L1, a
-# geocoded per-burst product is L2 (as OPERA's own RTC-S1 declares), and a
-# composite gridded in space and time is L3 (as ESA's Sentinel-1 monthly
-# mosaic, the closest analogue to these).
+# Follow the EOSDIS ladder: SLC input L1, geocoded bursts L2, composites L3.
 _LEVEL_SLC = "L1"
 _LEVEL_BURST = "L2"
 _LEVEL_COMPOSITE = "L3"

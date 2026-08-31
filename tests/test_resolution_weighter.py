@@ -1538,12 +1538,7 @@ class TestPerProductProfiles:
         assert w._profile_for(self._product(QaMetric.NUM))["max_z_error"] == 0
 
     def test_a_per_product_entry_inherits_the_default_codec(self, tmp_path: Path) -> None:
-        """Merging, not selecting.
-
-        Selecting would leave the QA entry with no ``compress`` key, and
-        ``build_rasterio_profile`` would then quietly restore deflate — the
-        specialised products would all end up on the wrong codec.
-        """
+        """A partial override must not restore the library's default codec."""
         w = self._weighter(
             tmp_path,
             {

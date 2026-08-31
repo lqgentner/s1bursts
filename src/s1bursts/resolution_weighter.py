@@ -72,13 +72,7 @@ _DEFAULT_PROFILE_KEY = "default"
 def _split_profiles(
     rasterio_profile: dict[str, Any] | None,
 ) -> dict[str, dict[str, Any]]:
-    """Normalise the ``rasterio_profile`` argument to ``{product_type: profile}``.
-
-    A flat profile applies to every product and is stored under
-    ``"default"``; a mapping of product type to profile is kept as given. The
-    two are told apart by whether the values are themselves mappings, which a
-    flat rasterio profile never has.
-    """
+    """Normalize a flat or per-product rasterio profile mapping."""
     if not rasterio_profile:
         return {}
     if all(isinstance(value, Mapping) for value in rasterio_profile.values()):
@@ -89,10 +83,8 @@ def _split_profiles(
 class ResolutionWeighter:
     """Compute LRW and per-pass composites for Sentinel-1 products.
 
-    The class is stateless with respect to the MGRS grid cell: the ``geobox``
-    that defines the spatial extent, CRS, and pixel grid is passed to each
-    compose call.  This allows one ``ResolutionWeighter`` instance to be
-    reused across many cells in a grid loop.
+    Each compose call receives its target ``geobox``, so one instance can be
+    reused across MGRS grid cells.
 
     Parameters
     ----------
@@ -101,24 +93,10 @@ class ResolutionWeighter:
     n_workers : int, default 8
         Number of threads for parallel file I/O during product loading.
     rasterio_profile : dict[str, Any] or None, optional
-        rasterio profile for GeoTIFF output. If None, uses float32 as dtype,
-        nan as nodata, pixel interleave, deflate compression, and 512x512
-        tiling.
-
-        Composites and their QA auxiliaries often want different settings --
-        a lossy bound suits backscatter but never a scene count -- so this
-        also accepts a mapping of :attr:`~s1bursts.product.Product.product_type`
-        to profile, with an optional ``"default"`` entry applied to the rest::
-
-            {
-                "default":        {"compress": "lerc_zstd", "max_z_error": 1e-5},
-                "COH_LRW":        {"max_z_error": 1e-3},
-                "RTC_LRW_QA-NUM": {"max_z_error": 0},
-            }
-
-        Per-product entries are merged *over* ``"default"``, so they need only
-        state what differs. A flat profile (no nested mappings) is treated as
-        the default for every product, which is the previous behaviour.
+        GeoTIFF profile applied to every product, or profiles keyed by product
+        type with an optional ``"default"`` entry. Product-specific settings
+        override the default. If omitted, uses the library defaults with
+        float32 data and NaN no-data.
 
     References
     ----------
@@ -199,14 +177,9 @@ class ResolutionWeighter:
     ) -> RTCLRWComposite | RTCLRWResult:
         r"""Compute a locally resolution weighted (LRW) RTC intensity composite.
 
-        Each RTC file provides two bands: band 1 (intensity / power) and band 2
-        (the local contributing area $A$).  The local area is inversely
-        proportional to the local resolution, so each observation is weighted by
-        $W_i = (1 / A_i) / \sum_j (1 / A_j)$ and the composite is
-        $\sum_i W_i \gamma^0_i$ ([1] eq. 3-4, [2] eq. A5.1-A5.3).
-
-        Bursts from the same orbit and acquisition date are mosaicked using the
-        first non-NaN pixel strategy before temporal aggregation.
+        Band 1 supplies intensity and band 2 the local contributing area $A$.
+        Observations are weighted by normalized $1/A$ ([1] eq. 3-4, [2]
+        eq. A5.1-A5.3) after mosaicking each orbit and acquisition date.
 
         Parameters
         ----------
@@ -214,31 +187,24 @@ class ResolutionWeighter:
             RTC products to composite.  All products must share the same
             polarization.
         geobox : MGRSGeoBox
-            Target MGRS grid cell defining the output CRS, spatial extent, and
-            pixel grid.
+            Target MGRS grid cell.
         aggregation : {"mean", "median"} or float, default "median"
             Temporal aggregation applied after weighting.  Pass ``"mean"`` or
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
         clip_max_resolution : float or None, default None
-            Upper limit applied to the resolution weight $W = 1 / A$
-            before further processing.  Suppresses extreme weights in radar
-            shadow areas.  Dimensionless, like $A$ itself: ``1.0`` is the
-            weight of a flat reference facet.
+            Upper limit for $W = 1/A$, used to suppress extreme weights in
+            radar shadow. ``1.0`` is the weight of a flat reference facet.
         decibel : bool, default False
-            If ``True``, convert the aggregated composite from intensity
-            (power) to decibels before writing; non-positive intensities
-            become NaN.  Aggregation always happens in the linear domain.
+            Convert the result from power to decibels after aggregation.
+            Non-positive values become NaN.
         write_qa : bool, default False
             If ``True``, also write two auxiliary QA products alongside the
             composite: a contributing-observations map (``QA-NUM``) and a
             composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
         cqm_decibel : bool, default False
-            If ``True``, write the ``QA-CQM`` map in decibels, that is
-            $-10 \log_{10}\left(\sum_i W_i A_i\right)$. Both forms are
-            dimensionless. Defaults to linear, as [2] item 2.22 leaves the
-            conversion to the user. Independent of ``decibel``: the CQM
-            describes the composite's local resolution, not its values.
+            Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
+            linear units. Independent of ``decibel``.
         overwrite : bool, default False
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
@@ -247,8 +213,7 @@ class ResolutionWeighter:
         -------
         RTCLRWComposite or tuple[RTCLRWComposite, tuple[RTCLRWQA, RTCLRWQA]]
             The composite product metadata, or ``(composite, (qa_num, qa_cqm))``
-            when ``write_qa=True``.  GeoTIFFs are written to the paths returned
-            by ``file_manager.get_product_path()``.
+            when ``write_qa=True``.
 
         Raises
         ------
@@ -383,14 +348,9 @@ class ResolutionWeighter:
     ) -> CohLRWComposite | CohLRWResult:
         r"""Compute a locally resolution weighted (LRW) coherence composite.
 
-        Coherence observations are weighted by the inverse local contributing
-        area $W = 1 / A$ taken from band 2 of the matched RTC files, normalized
-        to sum to one as in :meth:`compose_rtc_lrw`.  The match is made
-        per ``(rel_orbit_number, date_primary)`` group: for each coherence
-        group the contributing-area arrays are looked up from the corresponding RTC
-        products (matched by ``burst_id``, ``sub_swath``, and
-        ``date == date_primary``), then stitched in the same first-non-NaN
-        fashion.
+        Coherence observations are weighted by normalized $1/A$ from matching
+        RTC products. Products are matched and mosaicked by relative orbit and
+        primary acquisition date.
 
         Parameters
         ----------
@@ -399,8 +359,7 @@ class ResolutionWeighter:
             polarization and ``baseline_days``.
         rtc_products : Collection[RTCProduct]
             RTC products providing the local contributing area (band 2) used as
-            weights.
-            Must cover the same orbit/date combinations as ``coh_products``.
+            weights. They must cover the coherence orbit/date combinations.
         geobox : MGRSGeoBox
             Target MGRS grid cell.
         aggregation : {"mean", "median"} or float, default "median"
@@ -408,20 +367,15 @@ class ResolutionWeighter:
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
         clip_max_resolution : float or None, default None
-            Upper limit applied to the resolution weight $W = 1 / A$
-            before further processing.  Suppresses extreme weights in radar
-            shadow areas.  Dimensionless, like $A$ itself: ``1.0`` is the
-            weight of a flat reference facet.
+            Upper limit for $W = 1/A$, used to suppress extreme weights in
+            radar shadow. ``1.0`` is the weight of a flat reference facet.
         write_qa : bool, default False
             If ``True``, also write two auxiliary QA products alongside the
             composite: a contributing-observations map (``QA-NUM``) and a
             composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
         cqm_decibel : bool, default False
-            If ``True``, write the ``QA-CQM`` map in decibels, that is
-            $-10 \log_{10}\left(\sum_i W_i A_i\right)$. Both forms are
-            dimensionless. Defaults to linear, as [2] item 2.22 leaves the
-            conversion to the user. Independent of ``decibel``: the CQM
-            describes the composite's local resolution, not its values.
+            Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
+            linear units.
         overwrite : bool, default False
             Skip writing if the output file already exists.
 
@@ -885,13 +839,7 @@ class ResolutionWeighter:
             return list(executor.map(_load_one, products))
 
     def _profile_for(self, product: CompositeProduct | QAProduct) -> dict[str, Any]:
-        """Build the rasterio profile for one product.
-
-        The product's own entry is merged *over* the ``"default"`` one, so a
-        per-product override states only what differs and still inherits the
-        codec. Selecting instead of merging would silently drop the configured
-        compression and fall back to the library default.
-        """
+        """Merge the default and product-specific rasterio profiles."""
         override = {
             **self._profiles.get(_DEFAULT_PROFILE_KEY, {}),
             **self._profiles.get(product.product_type, {}),
