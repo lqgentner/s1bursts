@@ -329,6 +329,15 @@ class TestSnapProcessing:
             assert src.nodata is not None
             assert np.isnan(src.nodata)
 
+            bands = src.read()
+
+        valid = np.isfinite(bands)
+        assert valid.mean() > 0.1
+        # Gamma0 is a power ratio and simulatedImage an area: both positive where
+        # defined. This is also what catches a no-data marker that survived
+        # `_normalize_nodata` — the sentinel is finite, so nothing else would.
+        assert (bands[valid] > 0).all()
+
     @requires_cdse_s3
     @requires_snap
     def test_gpt_processes_the_exact_s3_extracted_artifact(

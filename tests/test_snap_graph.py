@@ -385,7 +385,7 @@ def test_mermaid_contains_expected_nodes_for_backscatter() -> None:
         "TOPSAR-Deburst",
         "Multilook",
         "Terrain-Flattening",
-        "ReplaceZerosWithNaNs",
+        "ReplaceZerosWithNoData",
         "Terrain-Correction",
     ]:
         assert op in mermaid

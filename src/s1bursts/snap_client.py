@@ -36,6 +36,7 @@ from s1bursts.product import (
     InterferogramProduct,
     RTCProduct,
 )
+from s1bursts.snap_graph import NODATA_SENTINEL
 from s1bursts.summary import ErrorResult, OkResult, OperationResult
 
 if TYPE_CHECKING:
@@ -191,41 +192,47 @@ def _extract_gpt_error(
     return detail[:max_chars]
 
 
-def _mask_zero_fill(dataset: rasterio.io.DatasetWriter, nodata: float) -> int:
-    """Replace every pixel that is zero in all bands with ``nodata``, in place.
+def _normalize_nodata(dataset: rasterio.io.DatasetWriter, nodata: float) -> int:
+    """Map the markers GPT left behind onto ``nodata``, in place.
 
-    Terrain-Correction skips a tile whose DEM is entirely no-data and fills it
-    with the band's no-data value, but writes that fill into a copy of the tile
-    buffer it never hands back (``Tile.getRawSamples`` without the matching
-    ``setRawSamples``). The copy is only taken for tiles the image edge clips, so
-    such a tile reaches the product holding the zeros Java allocated it with,
-    while interior tiles are correctly no-data. Verified in SNAP 13.0.0 and
-    14.0.0; drop this once SNAP writes the fill back.
+    Two reach the staging GeoTIFF, and neither is the value the product declares:
 
-    A valid pixel cannot be zero in every band, because the graph's band maths
-    has already mapped the zeros of the radar-geometry image to no-data before
-    geocoding. Requiring *all* bands keeps a signed band that legitimately
-    crosses zero — the interferogram's real and imaginary parts — from being
-    masked on its own.
+    :data:`~s1bursts.snap_graph.NODATA_SENTINEL`
+        What the graph's band maths wrote in place of the radar-geometry zeros,
+        and what Terrain-Correction then wrote into the pixels it could not fill.
+        It is finite only so that SNAP can recognise it.
+    zeros
+        Terrain-Correction skips a tile whose DEM is entirely no-data and fills
+        it with the band's no-data value, but writes that fill into a copy of the
+        tile buffer it never hands back (``Tile.getRawSamples`` without the
+        matching ``setRawSamples``). The copy is only taken for tiles the image
+        edge clips, so such a tile reaches the product holding the zeros Java
+        allocated it with, while interior tiles are correctly filled. Verified in
+        SNAP 13.0.0 and 14.0.0; drop this once SNAP writes the fill back.
+
+    A valid pixel cannot carry either marker once the band maths has run, which
+    is why both conversions are tied to it. Requiring the zeros in *all* bands
+    keeps a signed band that legitimately crosses zero — the interferogram's real
+    and imaginary parts — from being masked on its own.
 
     Returns
     -------
     int
         Number of pixels replaced.
     """
-    masked = 0
+    replaced = 0
     for _, window in dataset.block_windows(1):
         data = dataset.read(window=window)
-        zero_fill = (data == 0).all(axis=0)
-        count = int(zero_fill.sum())
-        if not count:
+        marked = data == NODATA_SENTINEL
+        marked[:, (data == 0).all(axis=0)] = True
+        if not marked.any():
             continue
-        data[:, zero_fill] = nodata
+        data[marked] = nodata
         dataset.write(data, window=window)
-        masked += count
-    if masked:
-        logger.debug("Masked %d zero-filled pixels left by Terrain-Correction", masked)
-    return masked
+        replaced += int(marked.any(axis=0).sum())
+    if replaced:
+        logger.debug("Replaced SNAP's no-data markers in %d pixels", replaced)
+    return replaced
 
 
 @dataclass
@@ -562,7 +569,7 @@ class SNAPClient:
         product_path: Path | UPath,
         *,
         metadata: RasterMetadata,
-        mask_zero_fill: bool = False,
+        normalize_nodata: bool = False,
     ) -> None:
         """Rewrite the staging GeoTIFF compressed to its final location.
 
@@ -578,11 +585,11 @@ class SNAPClient:
             Final product location (local or S3).
         metadata : RasterMetadata
             Tags, band descriptions and units to write into the product.
-        mask_zero_fill : bool, default False
-            Convert pixels that are zero in every band into no-data. Only pass
-            ``True`` for a graph whose zeros were already replaced upstream, so
-            that a remaining all-zero pixel can only be Terrain-Correction's
-            zero fill.
+        normalize_nodata : bool, default False
+            Convert the no-data markers GPT leaves behind into the product's own
+            no-data value; see :func:`_normalize_nodata`. Only pass ``True`` for
+            a graph that ran the band maths, since that is what makes the markers
+            unambiguous.
         """
         profile = self.config.rasterio_profile or {}
         nodata = profile.get("nodata")
@@ -596,8 +603,8 @@ class SNAPClient:
             if nodata is not None:
                 with rasterio.open(staging_file, "r+") as ds:
                     ds.nodata = float(nodata)
-                    if mask_zero_fill:
-                        _mask_zero_fill(ds, float(nodata))
+                    if normalize_nodata:
+                        _normalize_nodata(ds, float(nodata))
             # The staging file is a disposable copy in a TemporaryDirectory, so move
             # it into place rather than leaving a redundant copy behind.
             rewrite_tiff(
@@ -688,7 +695,7 @@ class SNAPClient:
                             config,
                             snap_version=self.config.resolved_snap_version,
                         ),
-                        mask_zero_fill=config.replace_zeros_with_nan,
+                        normalize_nodata=config.replace_zeros_with_nan,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst '%s'", burst)
@@ -770,7 +777,7 @@ class SNAPClient:
                             config,
                             snap_version=self.config.resolved_snap_version,
                         ),
-                        mask_zero_fill=config.replace_zeros_with_nan,
+                        normalize_nodata=config.replace_zeros_with_nan,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)
@@ -850,7 +857,7 @@ class SNAPClient:
                             config,
                             snap_version=self.config.resolved_snap_version,
                         ),
-                        mask_zero_fill=config.replace_zeros_with_nan,
+                        normalize_nodata=config.replace_zeros_with_nan,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)

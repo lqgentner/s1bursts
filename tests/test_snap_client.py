@@ -28,7 +28,7 @@ from s1bursts.snap_client import (
     snap_version,
     snap_worker_userdir,
 )
-from s1bursts.snap_graph import BackscatterConfig, CoherenceConfig
+from s1bursts.snap_graph import NODATA_SENTINEL, BackscatterConfig, CoherenceConfig
 from s1bursts.summary import ErrorResult, OkResult
 
 if TYPE_CHECKING:
@@ -465,7 +465,7 @@ class TestFinalizeProduct:
             staging,
             product,
             metadata=RasterMetadata(tags={}, band_names=["i_ifg", "q_ifg"], units=["", ""]),
-            mask_zero_fill=True,
+            normalize_nodata=True,
         )
 
         with rasterio.open(product) as ds:
@@ -474,11 +474,15 @@ class TestFinalizeProduct:
             assert ds.read(1)[0, 1] == 0.0
             assert ds.read(2)[0, 1] == 4.0
 
-    def test_keeps_zeros_when_masking_is_off(self, client: SNAPClient, tmp_path: Path) -> None:
-        """Without the band maths that removes them, zeros are data and are preserved."""
+    def test_keeps_both_markers_when_normalization_is_off(
+        self,
+        client: SNAPClient,
+        tmp_path: Path,
+    ) -> None:
+        """Without the band maths, neither marker is unambiguous, so neither is touched."""
         staging = tmp_path / "staging.tif"
         product = tmp_path / "final.tif"
-        data = np.zeros((1, 2, 2), dtype=np.float32)
+        data = np.array([[[0.0, NODATA_SENTINEL], [1.0, 2.0]]], dtype=np.float32)
         self._write_staging(staging, data)
 
         client._finalize_product(
@@ -489,6 +493,25 @@ class TestFinalizeProduct:
 
         with rasterio.open(product) as ds:
             assert np.array_equal(ds.read(1), data[0])
+
+    def test_converts_the_sentinel_to_nodata(self, client: SNAPClient, tmp_path: Path) -> None:
+        """The finite marker the graph needs never reaches the product."""
+        staging = tmp_path / "staging.tif"
+        product = tmp_path / "final.tif"
+        data = np.array([[[1.0, NODATA_SENTINEL], [2.0, 3.0]]], dtype=np.float32)
+        self._write_staging(staging, data)
+
+        client._finalize_product(
+            staging,
+            product,
+            metadata=RasterMetadata(tags={}, band_names=["Gamma0"], units=["linear power"]),
+            normalize_nodata=True,
+        )
+
+        with rasterio.open(product) as ds:
+            band = ds.read(1)
+        assert np.isnan(band[0, 1])
+        assert np.array_equal(band[[0, 1, 1], [0, 0, 1]], [1.0, 2.0, 3.0])
 
 
 class TestCreateCoherence:

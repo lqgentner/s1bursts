@@ -46,6 +46,12 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Fixed
 
+- **The no-data marker the graphs hand to Terrain-Correction is now finite.**
+  `ReplaceZerosWithNoData` (previously `ReplaceZerosWithNaNs`) marks the
+  radar-geometry zeros with a finite value instead of `NaN`, so that SNAP does
+  not interpolate over them during terrain correction. SNAP 13 cannot detect
+  `NaN` as no-data and so eroded more pixels than necessary. SNAP 13 and 14 now erode
+  the same number of pixels.
 - **Areas without DEM coverage no longer read as zero.** SNAP can leave zeros in the
   product in areas that are not covered by the DEM. Per-burst products now convert
   a pixel that is zero in every band into no-data while being written. The conversion

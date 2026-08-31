@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Final, Literal
 from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
 from lxml import etree
@@ -474,6 +474,33 @@ def xml_to_mermaid(graph_xml: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Terrain-Correction only recognises a no-data sample by comparing it against the
+# band's declared value (`v == tileData.noDataValue`). That test is false for
+# every sample when the declared value is NaN, so SNAP 13 never takes its no-data
+# path: the NaN enters bilinear interpolation and poisons every output pixel
+# whose kernel touches it, eroding the footprint by a kernel width. SNAP 14 tests
+# for NaN explicitly and does not, which is why the two versions disagree on the
+# mask. A finite marker is detected by both, so both fall back to the nearest
+# valid sample as SNAP intends. It never reaches the user: `_finalize_product`
+# maps it onto the product's own no-data value.
+#
+# Two constraints pick the value, and the second is the one a round number fails:
+#
+# 1. It must lie outside every band's range. The binding case is the
+#    interferogram, whose real and imaginary parts are signed: no operator before
+#    it calibrates, so they are products of raw CInt16 SLC counts and bounded by
+#    2 * 32768**2 = 2**31. Everything else is non-negative. -2**40 clears that by
+#    a factor of 512.
+# 2. It must be exactly representable in float32. SNAP compares the float32
+#    sample, widened to double, against the double it parsed from the XML. A
+#    literal that is not exactly a float32 — -1e12 and -1e30 both fail — never
+#    compares equal, and the marker silently stops working the way NaN does.
+#    Powers of two written out in full satisfy both sides.
+NODATA_SENTINEL: Final = -1099511627776.0  # -2**40
+
+_SENTINEL_EXPR = repr(NODATA_SENTINEL)
+
+
 def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[dict[str, Any]]:
     if flatten_terrain:
         return [
@@ -481,15 +508,16 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
                 "name": "Gamma0",
                 "type": "float32",
                 "expression": (
-                    "Gamma0_${swath}_${polarization} > 0 ? Gamma0_${swath}_${polarization} : NaN"
+                    f"Gamma0_${{swath}}_${{polarization}} > 0 ? "
+                    f"Gamma0_${{swath}}_${{polarization}} : {_SENTINEL_EXPR}"
                 ),
-                "noDataValue": "NaN",
+                "noDataValue": _SENTINEL_EXPR,
             },
             {
                 "name": "sim",
                 "type": "float32",
-                "expression": "simulatedImage > 0 ? simulatedImage : NaN",
-                "noDataValue": "NaN",
+                "expression": f"simulatedImage > 0 ? simulatedImage : {_SENTINEL_EXPR}",
+                "noDataValue": _SENTINEL_EXPR,
             },
         ]
     return [
@@ -497,9 +525,10 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
             "name": "Beta0",
             "type": "float32",
             "expression": (
-                "Beta0_${swath}_${polarization} > 0 ? Beta0_${swath}_${polarization} : NaN"
+                f"Beta0_${{swath}}_${{polarization}} > 0 ? "
+                f"Beta0_${{swath}}_${{polarization}} : {_SENTINEL_EXPR}"
             ),
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
     ]
 
@@ -510,10 +539,10 @@ def _replace_zeros_target_bands_coherence() -> list[dict[str, Any]]:
             "name": "coh",
             "type": "float32",
             "expression": (
-                "coh_${swath}_${polarization}_${date1}_${date2} > 0 ? "
-                "coh_${swath}_${polarization}_${date1}_${date2} : NaN"
+                f"coh_${{swath}}_${{polarization}}_${{date1}}_${{date2}} > 0 ? "
+                f"coh_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : {_SENTINEL_EXPR}"
             ),
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
     ]
 
@@ -632,39 +661,44 @@ def _intensity_target_bands(snap_version: tuple[int, ...] | None) -> list[dict[s
 
 
 def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
+    # `i_ifg` and `q_ifg` must declare the same marker as each other: for a
+    # complex pair Terrain-Correction reads `srcBands[0].getNoDataValue()` — the
+    # real band's — and applies it to both.
     cond = "(int1 != 0) and (int2 != 0)"
     return [
         {
             "name": "i_ifg",
             "type": "float32",
             "expression": (
-                f"{cond} ? i_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : NaN"
+                f"{cond} ? i_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : "
+                f"{_SENTINEL_EXPR}"
             ),
             "unit": "real",
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
         {
             "name": "q_ifg",
             "type": "float32",
             "expression": (
-                f"{cond} ? q_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : NaN"
+                f"{cond} ? q_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : "
+                f"{_SENTINEL_EXPR}"
             ),
             "unit": "imaginary",
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
         {
             "name": "intensity1",
             "type": "float32",
-            "expression": f"{cond} ? int1 : NaN",
+            "expression": f"{cond} ? int1 : {_SENTINEL_EXPR}",
             "unit": "intensity",
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
         {
             "name": "intensity2",
             "type": "float32",
-            "expression": f"{cond} ? int2 : NaN",
+            "expression": f"{cond} ? int2 : {_SENTINEL_EXPR}",
             "unit": "intensity",
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
     ]
 
@@ -700,7 +734,7 @@ def build_backscatter_graph(cfg: BackscatterConfig) -> str:
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
             g,
-            "ReplaceZerosWithNaNs",
+            "ReplaceZerosWithNoData",
             src,
             target_bands=_replace_zeros_target_bands_backscatter(
                 flatten_terrain=cfg.flatten_terrain,
@@ -767,7 +801,7 @@ def build_coherence_graph(
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
             g,
-            "ReplaceZerosWithNaNs",
+            "ReplaceZerosWithNoData",
             src,
             target_bands=_replace_zeros_target_bands_coherence(),
         )
@@ -846,7 +880,7 @@ def build_interferogram_graph(
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
             g,
-            "ReplaceZerosWithNaNs",
+            "ReplaceZerosWithNoData",
             src,
             target_bands=_ifg_replace_zeros_target_bands(),
             include_variables_element=False,
