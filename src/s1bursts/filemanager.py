@@ -56,8 +56,8 @@ class FieldSpec(NamedTuple):
     group: str = ""  # override regex group name (defaults to name)
 
 
-# Maps orbit direction letter to full string
-_ORBIT_DIRECTION = {"A": "ASCENDING", "D": "DESCENDING"}
+# Maps pass direction letter to full string
+_PASS_DIRECTION = {"A": "Ascending", "D": "Descending"}
 
 # Shared field specs
 _ORBIT = FieldSpec("rel_orbit_number", "{:03d}".format, r"\d{3}", int)
@@ -97,14 +97,14 @@ _PARSERS: dict[
     RTCPassComposite: (
         r"S1_RTC_COMP_(?P<orbit_letter>[AD])",
         _MGRS_BASE_SPEC,
-        [("orbit_letter", "orbit_direction", _ORBIT_DIRECTION.__getitem__)],
+        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
     ),
     CohPassComposite: (
         r"S1_COH(?P<baseline_days>\d{2})_COMP_(?P<orbit_letter>[AD])",
         _MGRS_BASE_SPEC,
         [
             ("baseline_days", "baseline_days", int),
-            ("orbit_letter", "orbit_direction", _ORBIT_DIRECTION.__getitem__),
+            ("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__),
         ],
     ),
     RTCLRWQA: (
@@ -123,14 +123,14 @@ _PARSERS: dict[
     RTCPassQA: (
         r"S1_RTC_COMP_(?P<orbit_letter>[AD])_QA-NUM",
         _MGRS_BASE_SPEC,
-        [("orbit_letter", "orbit_direction", _ORBIT_DIRECTION.__getitem__)],
+        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
     ),
     CohPassQA: (
         r"S1_COH(?P<baseline_days>\d{2})_COMP_(?P<orbit_letter>[AD])_QA-NUM",
         _MGRS_BASE_SPEC,
         [
             ("baseline_days", "baseline_days", int),
-            ("orbit_letter", "orbit_direction", _ORBIT_DIRECTION.__getitem__),
+            ("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__),
         ],
     ),
 }
@@ -717,14 +717,14 @@ class FileManager:
         Path
             Expected path to the RTC pass-composite GeoTIFF file.
         """
-        prefix = f"S1_RTC_COMP_{product.orbit_direction[0]}"
+        prefix = f"S1_RTC_COMP_{product.pass_direction[0]}"
         return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
     def find_rtc_pass_composites(
         self,
         mgrs_code: str | None = None,
         polarization: str | None = None,
-        orbit_direction: str | None = None,
+        pass_direction: str | None = None,
     ) -> list[RTCPassComposite]:
         """Find RTC pass-composite products matching criteria.
 
@@ -734,15 +734,15 @@ class FileManager:
             Filter by MGRS grid cell identifier.
         polarization : str, optional
             Filter by polarization.
-        orbit_direction : str, optional
-            Filter by orbit direction (``"ASCENDING"`` or ``"DESCENDING"``).
+        pass_direction : str, optional
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
 
         Returns
         -------
         list[RTCPassComposite]
             List of matching RTC pass-composite products.
         """
-        od = orbit_direction[0] if orbit_direction is not None else "*"
+        od = pass_direction[0] if pass_direction is not None else "*"
         pattern = self._build_pattern(
             f"S1_RTC_COMP_{od}",
             _MGRS_BASE_SPEC,
@@ -764,14 +764,14 @@ class FileManager:
         Path
             Expected path to the coherence pass-composite GeoTIFF file.
         """
-        prefix = f"S1_COH{product.baseline_days:02d}_COMP_{product.orbit_direction[0]}"
+        prefix = f"S1_COH{product.baseline_days:02d}_COMP_{product.pass_direction[0]}"
         return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
     def find_coh_pass_composites(
         self,
         mgrs_code: str | None = None,
         polarization: str | None = None,
-        orbit_direction: str | None = None,
+        pass_direction: str | None = None,
         baseline_days: int | None = None,
     ) -> list[CohPassComposite]:
         """Find coherence pass-composite products matching criteria.
@@ -782,8 +782,8 @@ class FileManager:
             Filter by MGRS grid cell identifier.
         polarization : str, optional
             Filter by polarization.
-        orbit_direction : str, optional
-            Filter by orbit direction (``"ASCENDING"`` or ``"DESCENDING"``).
+        pass_direction : str, optional
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
         baseline_days : int, optional
             Filter by temporal baseline in days.
 
@@ -793,7 +793,7 @@ class FileManager:
             List of matching coherence pass-composite products.
         """
         bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
-        od = orbit_direction[0] if orbit_direction is not None else "*"
+        od = pass_direction[0] if pass_direction is not None else "*"
         pattern = self._build_pattern(
             f"S1_COH{bd}_COMP_{od}",
             _MGRS_BASE_SPEC,
@@ -816,12 +816,12 @@ class FileManager:
 
     def _get_rtc_pass_qa_path(self, product: RTCPassQA) -> Path | UPath:
         """Generate the file path for an RTC pass-composite QA auxiliary product."""
-        prefix = f"S1_RTC_COMP_{product.orbit_direction[0]}_QA-NUM"
+        prefix = f"S1_RTC_COMP_{product.pass_direction[0]}_QA-NUM"
         return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
     def _get_coh_pass_qa_path(self, product: CohPassQA) -> Path | UPath:
         """Generate the file path for a coherence pass-composite QA auxiliary product."""
-        prefix = f"S1_COH{product.baseline_days:02d}_COMP_{product.orbit_direction[0]}_QA-NUM"
+        prefix = f"S1_COH{product.baseline_days:02d}_COMP_{product.pass_direction[0]}_QA-NUM"
         return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
     def find_rtc_lrw_qa(
@@ -894,9 +894,9 @@ class FileManager:
         self,
         mgrs_code: str | None = None,
         polarization: str | None = None,
-        orbit_direction: str | None = None,
+        pass_direction: str | None = None,
     ) -> list[RTCPassQA]:
-        """Find RTC pass-composite QA (number-of-observations) products matching criteria.
+        """Find RTC pass-composite QA (contributing-observations) products matching criteria.
 
         Parameters
         ----------
@@ -904,15 +904,15 @@ class FileManager:
             Filter by MGRS grid cell identifier.
         polarization : str, optional
             Filter by polarization.
-        orbit_direction : str, optional
-            Filter by orbit direction (``"ASCENDING"`` or ``"DESCENDING"``).
+        pass_direction : str, optional
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
 
         Returns
         -------
         list[RTCPassQA]
             List of matching RTC pass-composite QA products.
         """
-        od = orbit_direction[0] if orbit_direction is not None else "*"
+        od = pass_direction[0] if pass_direction is not None else "*"
         pattern = self._build_pattern(
             f"S1_RTC_COMP_{od}_QA-NUM",
             _MGRS_BASE_SPEC,
@@ -925,10 +925,10 @@ class FileManager:
         self,
         mgrs_code: str | None = None,
         polarization: str | None = None,
-        orbit_direction: str | None = None,
+        pass_direction: str | None = None,
         baseline_days: int | None = None,
     ) -> list[CohPassQA]:
-        """Find coherence pass-composite QA (number-of-observations) products matching criteria.
+        """Find coherence pass-composite QA (contributing-observations) products matching criteria.
 
         Parameters
         ----------
@@ -936,8 +936,8 @@ class FileManager:
             Filter by MGRS grid cell identifier.
         polarization : str, optional
             Filter by polarization.
-        orbit_direction : str, optional
-            Filter by orbit direction (``"ASCENDING"`` or ``"DESCENDING"``).
+        pass_direction : str, optional
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
         baseline_days : int, optional
             Filter by temporal baseline in days.
 
@@ -947,7 +947,7 @@ class FileManager:
             List of matching coherence pass-composite QA products.
         """
         bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
-        od = orbit_direction[0] if orbit_direction is not None else "*"
+        od = pass_direction[0] if pass_direction is not None else "*"
         pattern = self._build_pattern(
             f"S1_COH{bd}_COMP_{od}_QA-NUM",
             _MGRS_BASE_SPEC,

@@ -118,7 +118,7 @@ _PARSE_CASES = [
             "polarization": "VH",
             "start_date": pd.Timestamp("20150706"),
             "end_date": pd.Timestamp("20151001"),
-            "orbit_direction": "ASCENDING",
+            "pass_direction": "Ascending",
         },
         id="rtc-pass",
     ),
@@ -131,7 +131,7 @@ _PARSE_CASES = [
             "start_date": pd.Timestamp("20150706"),
             "end_date": pd.Timestamp("20150919"),
             "baseline_days": 12,
-            "orbit_direction": "DESCENDING",
+            "pass_direction": "Descending",
         },
         id="coh-pass",
     ),
@@ -180,7 +180,7 @@ _PARSE_CASES = [
             "polarization": "VH",
             "start_date": pd.Timestamp("20150706"),
             "end_date": pd.Timestamp("20151001"),
-            "orbit_direction": "ASCENDING",
+            "pass_direction": "Ascending",
         },
         id="rtc-pass-qa-num",
     ),
@@ -193,7 +193,7 @@ _PARSE_CASES = [
             "start_date": pd.Timestamp("20150706"),
             "end_date": pd.Timestamp("20150919"),
             "baseline_days": 12,
-            "orbit_direction": "DESCENDING",
+            "pass_direction": "Descending",
         },
         id="coh-pass-qa-num",
     ),
@@ -562,21 +562,21 @@ class TestFindRTCPassComposites:
         assert all(isinstance(p, RTCPassComposite) for p in results)
 
     def test_filter_ascending(self, fm: FileManager) -> None:
-        """ASCENDING filter returns only ascending-orbit products."""
-        results = fm.find_rtc_pass_composites(orbit_direction="ASCENDING")
+        """Ascending filter returns only ascending-pass products."""
+        results = fm.find_rtc_pass_composites(pass_direction="Ascending")
         assert len(results) == 2
-        assert all(p.orbit_direction == "ASCENDING" for p in results)
+        assert all(p.pass_direction == "Ascending" for p in results)
 
     def test_filter_descending(self, fm: FileManager) -> None:
-        """DESCENDING filter returns only descending-orbit products."""
-        results = fm.find_rtc_pass_composites(orbit_direction="DESCENDING")
+        """Descending filter returns only descending-pass products."""
+        results = fm.find_rtc_pass_composites(pass_direction="Descending")
         assert len(results) == 1
-        assert results[0].orbit_direction == "DESCENDING"
+        assert results[0].pass_direction == "Descending"
 
-    def test_orbit_direction_is_full_string(self, fm: FileManager) -> None:
-        """orbit_direction must be the full word, not the single-letter code."""
+    def test_pass_direction_is_full_string(self, fm: FileManager) -> None:
+        """pass_direction must be the full word, not the single-letter code."""
         results = fm.find_rtc_pass_composites()
-        assert all(p.orbit_direction in {"ASCENDING", "DESCENDING"} for p in results)
+        assert all(p.pass_direction in {"Ascending", "Descending"} for p in results)
 
 
 # ---------------------------------------------------------------------------
@@ -608,8 +608,8 @@ class TestFindCohPassComposites:
         assert all(isinstance(p, CohPassComposite) for p in results)
 
     def test_filter_baseline_and_direction(self, fm: FileManager) -> None:
-        """Combining baseline_days and orbit_direction returns exactly one match."""
-        results = fm.find_coh_pass_composites(baseline_days=12, orbit_direction="ASCENDING")
+        """Combining baseline_days and pass_direction returns exactly one match."""
+        results = fm.find_coh_pass_composites(baseline_days=12, pass_direction="Ascending")
         assert len(results) == 1
         assert results[0].baseline_days == 12
-        assert results[0].orbit_direction == "ASCENDING"
+        assert results[0].pass_direction == "Ascending"

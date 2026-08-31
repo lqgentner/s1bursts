@@ -14,8 +14,8 @@ from pandas import DataFrame, Series, Timedelta, Timestamp
 from s1bursts import ui
 from s1bursts.burstmap import (
     create_s1_geometry_lut,
-    create_s1_orbit_direction_lut,
     create_s1_orbit_number_lut,
+    create_s1_pass_direction_lut,
 )
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from s1bursts.burstmap import Mode
     from s1bursts.cdse import CDSEResponse
-    from s1bursts.query import OrbitDirection, Polarization, SubSwath
+    from s1bursts.query import PassDirection, Polarization, SubSwath
 
 
 class BurstFootprintMixin:
@@ -46,7 +46,7 @@ class BurstFootprintMixin:
     # Authoritative overrides; None here so subclasses without their own field
     # (e.g. product.GeocodedBurst) inherit the LUT-fallback behaviour.
     _rel_orbit_number: int | None = None
-    _orbit_direction: OrbitDirection | None = None
+    _pass_direction: PassDirection | None = None
     _geometry: Polygon | MultiPolygon | None = None
 
     @property
@@ -110,13 +110,13 @@ class BurstFootprintMixin:
         return self._lut_lookup(create_s1_orbit_number_lut(mode=self.mode))
 
     @property
-    def orbit_direction(self) -> OrbitDirection:
-        """Orbit pass direction looked up from the Sentinel-1 burst map.
+    def pass_direction(self) -> PassDirection:
+        """Pass direction looked up from the Sentinel-1 burst map.
 
         Returns
         -------
-        OrbitDirection
-            ``"ASCENDING"`` or ``"DESCENDING"``.
+        PassDirection
+            ``"Ascending"`` or ``"Descending"``.
 
         Raises
         ------
@@ -126,9 +126,9 @@ class BurstFootprintMixin:
         KeyError
             If the burst is not found in the map.
         """
-        if self._orbit_direction is not None:
-            return self._orbit_direction
-        return self._lut_lookup(create_s1_orbit_direction_lut(mode=self.mode))
+        if self._pass_direction is not None:
+            return self._pass_direction
+        return self._lut_lookup(create_s1_pass_direction_lut(mode=self.mode))
 
     @property
     def geometry(self) -> Polygon | MultiPolygon:
@@ -186,7 +186,7 @@ def _scalar_or_none[T](value: T) -> T | None:
 # ``Burst.from_dict`` accepts parsed-filename/response dicts.
 _FOOTPRINT_ALIASES = {
     "rel_orbit_number": "_rel_orbit_number",
-    "orbit_direction": "_orbit_direction",
+    "pass_direction": "_pass_direction",
     "geometry": "_geometry",
 }
 
@@ -215,7 +215,7 @@ class Burst(BurstFootprintMixin):
     parent_product_name: str | None = field(default=None, compare=False, hash=False)
     # Footprint values propagated from CDSE or an SLC filename; None falls back to the LUT.
     _rel_orbit_number: int | None = field(default=None, compare=False, hash=False, repr=False)
-    _orbit_direction: OrbitDirection | None = field(
+    _pass_direction: PassDirection | None = field(
         default=None,
         compare=False,
         hash=False,
@@ -256,7 +256,7 @@ class Burst(BurstFootprintMixin):
     def from_dict(cls, data: dict[str, Any]) -> Self:
         """Instantiate from a mapping, silently dropping unknown and non-init fields.
 
-        Public footprint keys (``rel_orbit_number``, ``orbit_direction``,
+        Public footprint keys (``rel_orbit_number``, ``pass_direction``,
         ``geometry``) are mapped onto the private override fields, so a burst
         reconstructed from a parsed SLC filename keeps its relative orbit number
         instead of re-deriving it from the LUT.
@@ -387,20 +387,20 @@ class BurstPair:
         return self.primary.rel_orbit_number
 
     @property
-    def orbit_direction(self) -> OrbitDirection:
-        """Orbit pass direction, looked up via the primary burst.
+    def pass_direction(self) -> PassDirection:
+        """Pass direction, looked up via the primary burst.
 
         Returns
         -------
-        OrbitDirection
-            ``"ASCENDING"`` or ``"DESCENDING"``.
+        PassDirection
+            ``"Ascending"`` or ``"Descending"``.
 
         Raises
         ------
         KeyError
             If the burst is not found in the burst map.
         """
-        return self.primary.orbit_direction
+        return self.primary.pass_direction
 
     @property
     def geometry(self) -> Polygon | MultiPolygon:
@@ -433,25 +433,16 @@ class BurstPair:
 class _BaseBurstCollection[TEntry]:
     """Base class for burst collections with shared functionality.
 
-    Provides iteration, indexing, concatenation, deduplication, and
-    HTML display for both BurstCollection and BurstPairCollection.
-    Subclasses must define the class-level column constants and implement
-    ``_row_to_entry``.
+    Subclasses define their column metadata and implement ``_row_to_entry``.
     """
 
-    # Subclasses must define these class variables
-    # Columns that uniquely describe an entry
     _UNIQUE_COLUMNS: ClassVar[list[str]]
-    # All columns of an entry
     _ALL_COLUMNS: ClassVar[list[str]]
-    # Optional columns: auto-filled with None if omitted, and not required by validation.
+    # Optional columns are filled with None and excluded from validation.
     _OPTIONAL_COLUMNS: ClassVar[list[str]] = []
-    # Entry names for display
     _ENTRY_NAME_SINGULAR: ClassVar[str]
     _ENTRY_NAME_PLURAL: ClassVar[str]
-    # Columns that uniquely describe a burst footprint
     _FOOTPRINT_UNIQUE_COLUMNS: ClassVar[list[str]] = ["burst_id", "sub_swath"]
-    # Columns that must match to make bursts compatibile for interferometry
     _INSAR_MATCH_COLUMNS: ClassVar[list[str]] = [
         "burst_id",
         "sub_swath",
@@ -461,15 +452,11 @@ class _BaseBurstCollection[TEntry]:
     @staticmethod
     @abstractmethod
     def _row_to_entry(row: Series) -> TEntry:
-        """Convert a DataFrame row to an entry (Burst or BurstPair).
-
-        Subclasses must implement this method.
-        """
+        """Convert a DataFrame row to a collection entry."""
         ...
 
     def __init__(self, df: gpd.GeoDataFrame | None = None) -> None:
-        """
-        Initialize collection with a GeoDataFrame.
+        """Initialize the collection from a GeoDataFrame.
 
         Parameters
         ----------
@@ -488,6 +475,7 @@ class _BaseBurstCollection[TEntry]:
                 geometry="geometry",
             )
         self._validate_dataframe(df)
+        df = df.copy()
         for col in self._OPTIONAL_COLUMNS:
             if col not in df.columns:
                 df[col] = None
@@ -496,22 +484,7 @@ class _BaseBurstCollection[TEntry]:
         self.df = df.sort_values(self._UNIQUE_COLUMNS)
 
     def _validate_dataframe(self, df: gpd.GeoDataFrame) -> None:
-        """
-        Validate that the dataframe has the required type and columns.
-
-        Parameters
-        ----------
-        df : gpd.GeoDataFrame
-            DataFrame to validate.
-
-        Raises
-        ------
-        TypeError
-            If not a geopandas.GeoDataFrame
-        ValueError
-            If required columns are missing.
-
-        """
+        """Validate the dataframe type and required columns."""
         if not isinstance(df, gpd.GeoDataFrame):
             msg = f"`df` must be a GeoDataFrame, received '{type(df).__name__}'."
             raise TypeError(msg)
@@ -523,7 +496,6 @@ class _BaseBurstCollection[TEntry]:
             msg = f"DataFrame is missing required columns: {missing_columns}"
             raise ValueError(msg)
 
-        # Check for unexpected columns (warn but don't fail)
         unexpected_columns = df_columns - all_columns
         if unexpected_columns:
             warnings.warn(
@@ -532,49 +504,15 @@ class _BaseBurstCollection[TEntry]:
             )
 
     def _deduplicate_dataframe(self, df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-        """Remove duplicate entries based on unique column combinations.
-
-        Parameters
-        ----------
-        df : gpd.GeoDataFrame
-            A dataframe which can contain duplicates.
-
-        Returns
-        -------
-        gpd.GeoDataFrame
-            The dataframe with duplicates removed.
-        """
-        # Remove duplicates based on the columns which uniquely identify an entry
+        """Remove entries with duplicate identity columns."""
         return df.drop_duplicates(subset=self._UNIQUE_COLUMNS, ignore_index=True)
 
     def __len__(self) -> int:
-        """
-        Return the number of entries in the collection.
-
-        Returns
-        -------
-        int
-            Number of entries in the collection.
-
-        """
+        """Return the number of entries."""
         return len(self.df)
 
     def __add__(self, other: Self) -> Self:
-        """
-        Concatenate two collections with duplicates removed.
-
-        Parameters
-        ----------
-        other : Self
-            Another collection of the same type to concatenate.
-
-        Returns
-        -------
-        Self
-            Concatenated collection.
-
-        """
-        # Concatenate dataframes
+        """Concatenate two collections and remove duplicates."""
         combined_df = gpd.GeoDataFrame(
             pd.concat([self.df, other.df], ignore_index=True),
         )
@@ -582,15 +520,7 @@ class _BaseBurstCollection[TEntry]:
         return type(self)(combined_df)
 
     def __iter__(self) -> Iterator[TEntry]:
-        """
-        Iterate over individual entries in the collection.
-
-        Yields
-        ------
-        TEntry
-            Individual entry instances from the collection (Burst or BurstPair).
-
-        """
+        """Iterate over collection entries."""
         for _, row in self.df.iterrows():
             yield self._row_to_entry(row)
 
@@ -601,62 +531,26 @@ class _BaseBurstCollection[TEntry]:
     def __getitem__(self, index: slice) -> Self: ...
 
     def __getitem__(self, index: int | slice) -> TEntry | Self:
-        """
-        Get a specific entry or slice of entries from the collection.
-
-        Parameters
-        ----------
-        index : int | slice
-            Integer index for a single entry, or slice for multiple entries.
-
-        Returns
-        -------
-        TEntry | Self
-            Single entry if index is int, or new collection of same type if index is slice.
-
-        """
+        """Return an entry or sliced collection."""
         if isinstance(index, slice):
             return type(self)(self.df.iloc[index])
         return self._row_to_entry(self.df.iloc[index])
 
     def _repr_html_(self) -> str:
-        """
-        Generate HTML representation for Jupyter notebooks.
-
-        Returns
-        -------
-        str
-            HTML string for rich display.
-
-        """
-        # Get unique footprints
+        """Return the rich HTML representation."""
         unique_footprints = self.df.drop_duplicates(
             subset=self._FOOTPRINT_UNIQUE_COLUMNS,
         )
 
-        # Get stats
         n_bursts = len(self)
         n_footprints = len(unique_footprints)
 
-        # Create map SVG
         map_svg = ui.create_footprint_svg(unique_footprints)
-
-        # Create world map with target
         world_map_svg = ui.create_world_map_with_target(unique_footprints)
-
-        # Create dataframe HTML which only displays the unique columns
         df_html = self.df[self._UNIQUE_COLUMNS]._repr_html_()  # type: ignore[operator]
-
-        # Create CSS and HTML structure
         css = ui.get_burstinfo_css()
-
-        # Collection type
         col_name = type(self).__name__
-
-        # Entry name
         entry_name = self._ENTRY_NAME_SINGULAR if n_bursts == 1 else self._ENTRY_NAME_PLURAL
-
-        # Footprint name
         footprint_name = "Footprint" if n_footprints == 1 else "Footprints"
 
         return f"""
@@ -713,13 +607,13 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         "parent_product_name",
         "geometry",
         "_rel_orbit_number",
-        "_orbit_direction",
+        "_pass_direction",
         "_lines_per_burst",
         "_samples_per_burst",
     ]
     _OPTIONAL_COLUMNS: ClassVar[list[str]] = [
         "_rel_orbit_number",
-        "_orbit_direction",
+        "_pass_direction",
         # Burst pixel dimensions, propagated from CDSE and used only to pick the
         # most complete of near-identical-timestamp duplicates.
         "_lines_per_burst",
@@ -750,6 +644,22 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         super().__init__(df)
         self._remove_timestamp_duplicates()
 
+    @staticmethod
+    def _validate_pair_search(baseline: Timedelta, max_delta: Timedelta) -> None:
+        """Reject baselines that cannot describe an interferometric pair.
+
+        Raises
+        ------
+        ValueError
+            If ``baseline`` is not positive or ``max_delta`` is negative.
+        """
+        if baseline <= Timedelta(0):
+            msg = f"`baseline` must be a positive duration, received {baseline}."
+            raise ValueError(msg)
+        if max_delta < Timedelta(0):
+            msg = f"`max_delta` must not be negative, received {max_delta}."
+            raise ValueError(msg)
+
     def find_pairs(
         self,
         baseline: Timedelta | int,
@@ -771,17 +681,20 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         Returns
         -------
         BurstPairCollection
-            Collection of burst pairs matching the baseline criteria.
+            Collection of burst pairs matching the baseline criteria. Empty if
+            no pair satisfies them.
 
         Raises
         ------
         ValueError
-            If no valid burst pairs are found.
+            If ``baseline`` is not positive or ``max_delta`` is negative.
         """
         if not isinstance(baseline, Timedelta):
             baseline = Timedelta(baseline, unit="days")
         if not isinstance(max_delta, Timedelta):
             max_delta = Timedelta(max_delta, unit="hours")
+
+        self._validate_pair_search(baseline, max_delta)
         df_bursts = self.df.sort_values("date")
         pairs = []
         renamer_1 = {
@@ -838,9 +751,9 @@ class BurstCollection(_BaseBurstCollection[Burst]):
                 _scalar_or_none(row.get("parent_product_name")),
             ),
             _rel_orbit_number=None if rel_orbit is None else int(rel_orbit),
-            _orbit_direction=cast(
-                "OrbitDirection | None",
-                _scalar_or_none(row.get("_orbit_direction")),
+            _pass_direction=cast(
+                "PassDirection | None",
+                _scalar_or_none(row.get("_pass_direction")),
             ),
             _geometry=cast("Polygon | MultiPolygon | None", _scalar_or_none(row.get("geometry"))),
         )
@@ -898,7 +811,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
                 "geometry": cdse_df["geometry"],
                 # Propagated from CDSE so footprint properties need no LUT lookup.
                 "_rel_orbit_number": cdse_df["relative_orbit_number"],
-                "_orbit_direction": cdse_df["orbit_direction"],
+                "_pass_direction": cdse_df["orbit_direction"].str.capitalize(),
                 # Used only to resolve near-identical-timestamp duplicates.
                 "_lines_per_burst": cdse_df["lines_per_burst"],
                 "_samples_per_burst": cdse_df["samples_per_burst"],
@@ -937,7 +850,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
                 # Stored overrides, not the LUT-backed properties, to avoid a burst-map load.
                 "geometry": burst._geometry,  # noqa: SLF001
                 "_rel_orbit_number": burst._rel_orbit_number,  # noqa: SLF001
-                "_orbit_direction": burst._orbit_direction,  # noqa: SLF001
+                "_pass_direction": burst._pass_direction,  # noqa: SLF001
             }
             for burst in bursts
         ]
@@ -1039,11 +952,11 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         "parent_product_name_2",
         "geometry",
         "_rel_orbit_number",
-        "_orbit_direction",
+        "_pass_direction",
     ]
     # Footprint overrides propagated from CDSE (shared by both bursts of a pair);
     # optional so raw-dataframe callers need not supply them.
-    _OPTIONAL_COLUMNS: ClassVar[list[str]] = ["_rel_orbit_number", "_orbit_direction"]
+    _OPTIONAL_COLUMNS: ClassVar[list[str]] = ["_rel_orbit_number", "_pass_direction"]
     # Entry names for display
     _ENTRY_NAME_SINGULAR: ClassVar[str] = "Burst pair"
     _ENTRY_NAME_PLURAL: ClassVar[str] = "Burst pairs"
@@ -1055,9 +968,9 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         rel_orbit = _scalar_or_none(row.get("_rel_orbit_number"))
         overrides: dict[str, Any] = {
             "_rel_orbit_number": None if rel_orbit is None else int(rel_orbit),
-            "_orbit_direction": cast(
-                "OrbitDirection | None",
-                _scalar_or_none(row.get("_orbit_direction")),
+            "_pass_direction": cast(
+                "PassDirection | None",
+                _scalar_or_none(row.get("_pass_direction")),
             ),
             "_geometry": cast(
                 "Polygon | MultiPolygon | None",
@@ -1145,7 +1058,7 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
                 # Stored overrides from the primary burst (not the LUT properties).
                 "geometry": pair.primary._geometry,  # noqa: SLF001
                 "_rel_orbit_number": pair.primary._rel_orbit_number,  # noqa: SLF001
-                "_orbit_direction": pair.primary._orbit_direction,  # noqa: SLF001
+                "_pass_direction": pair.primary._pass_direction,  # noqa: SLF001
             }
             for pair in pairs
         ]

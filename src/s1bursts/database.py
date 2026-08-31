@@ -92,10 +92,7 @@ class BurstDatabase:
         self.show_progress = show_progress
         self.continue_on_error = continue_on_error
         self.default_endpoint: Endpoint = default_endpoint
-        # Bursts confirmed unavailable at the source (BurstNotFoundError from either
-        # endpoint), cached for the lifetime of this instance so repeat requests for
-        # the same burst skip straight to failure instead of repeating the retry+fallback
-        # sequence.
+        # Cache source-confirmed absences to avoid repeating both endpoint attempts.
         self._unavailable_bursts: dict[Burst, BurstNotFoundError] = {}
         self._unavailable_lock = threading.Lock()
         self._auth_lock = threading.Lock()
@@ -328,10 +325,7 @@ class BurstDatabase:
             fallback_result.error,
         )
 
-        # BurstNotFoundError means the source deterministically confirmed the burst
-        # doesn't exist (as opposed to a transient HTTPError/OSError that might
-        # succeed on a later attempt) — remember it so future requests for this
-        # burst don't repeat the retry+fallback sequence.
+        # Cache only definitive absences, not transient transport failures.
         not_found_error = next(
             (
                 err
@@ -403,13 +397,15 @@ class BurstDatabase:
         list[str]
             List of OData filter expressions to pass to the CDSE API.
         """
+        # CDSE spells the pass direction upper case and calls it OrbitDirection.
+        pass_direction = query.pass_direction.upper() if query.pass_direction else None
         simple_filters: list[tuple[str | int | None, str]] = [
             (query.burst_id, f"BurstId eq {query.burst_id}"),
             (query.abs_burst_id, f"AbsoluteBurstId eq {query.abs_burst_id}"),
             (query.polarization, f"PolarisationChannels eq '{query.polarization}'"),
             (query.mode, f"OperationalMode eq '{query.mode}'"),
             (query.sub_swath, f"SwathIdentifier eq '{query.sub_swath}'"),
-            (query.orbit_direction, f"OrbitDirection eq '{query.orbit_direction}'"),
+            (pass_direction, f"OrbitDirection eq '{pass_direction}'"),
             (
                 query.platform_serial_id,
                 f"PlatformSerialIdentifier eq '{query.platform_serial_id}'",

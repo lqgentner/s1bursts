@@ -385,10 +385,7 @@ class CDSEBurstClient:
             params["$count"] = bool(count)
         return params
 
-    # The catalogue endpoint intermittently returns spurious 500s under load, the same
-    # way `bursts.dataspace.copernicus.eu` does for individual burst downloads (there
-    # handled by trying the fallback endpoint). `search_bursts` has no fallback, so
-    # without retrying 500 here a single transient hiccup aborts the whole search.
+    # Search has no fallback endpoint, so retry its intermittent HTTP 500 responses.
     @retry_request(logger=logger, extra_status_codes=frozenset({500}))
     def search_bursts(
         self,
@@ -488,13 +485,14 @@ class CDSEBurstClient:
             msg = "`auth` not valid. Must be an instance of 'CDSEAuth' to download bursts."
             raise TypeError(msg)
 
-        downloader = HTTPDownloader(
+        # Closed on exit, releasing the pooled connection immediately
+        with HTTPDownloader(
             auth=self.auth,
             progress=progress,
             method="POST",
             timeout=self.request_timeout,
-        )
-        return downloader(url=url, save_dir=save_path.parent, filename=save_path.name)
+        ) as downloader:
+            return downloader(url=url, save_dir=save_path.parent, filename=save_path.name)
 
     def download_burst_from_s3(
         self,

@@ -7,16 +7,19 @@ from lxml.etree import fromstring, tostring
 from pydantic import ValidationError
 import pytest
 
+from s1bursts.errors import ConfigurationError
 from s1bursts.snap_graph import (
     BackscatterConfig,
     CoherenceConfig,
     GeocodingConfig,
     InterferogramConfig,
+    stack_band_suffixes,
+    supports_coherence_options,
     xml_to_mermaid,
 )
 
 _SWISSALTI3D = Path(
-    "/mnt/deep-glacier-mapping/data/dem/swissalti3d/interim/swissalti3d-4326-ellipsoid.tif",
+    "/data/dem/swissalti3d-4326-ellipsoid.tif",
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "snap_graphs"
@@ -135,6 +138,135 @@ def test_dynamic_graph_matches_fixture(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Back-Geocoding band naming, which SNAP 14 changed
+
+
+@pytest.mark.parametrize(
+    ("snap_version", "expected"),
+    [
+        (None, ("mst", "slv1")),
+        ((13, 0, 0), ("mst", "slv1")),
+        ((14, 0, 0), ("ref", "sec1")),
+        ((15, 1), ("ref", "sec1")),
+    ],
+)
+def test_stack_band_suffixes(
+    snap_version: tuple[int, ...] | None,
+    expected: tuple[str, str],
+) -> None:
+    assert stack_band_suffixes(snap_version) == expected
+
+
+@pytest.mark.parametrize(
+    ("snap_version", "present", "absent"),
+    [
+        (None, ("_mst_", "_slv1_"), ("_ref_", "_sec1_")),
+        ((13, 0, 0), ("_mst_", "_slv1_"), ("_ref_", "_sec1_")),
+        ((14, 0, 0), ("_ref_", "_sec1_"), ("_mst_", "_slv1_")),
+    ],
+)
+def test_interferogram_intensity_expressions_follow_the_snap_version(
+    snap_version: tuple[int, ...] | None,
+    present: tuple[str, ...],
+    absent: tuple[str, ...],
+) -> None:
+    """GPT rejects the graph outright when these names are wrong for its version."""
+    xml = InterferogramConfig().to_xml(snap_version=snap_version)
+
+    for fragment in present:
+        assert fragment in xml
+    for fragment in absent:
+        assert fragment not in xml
+
+
+def test_backscatter_graph_ignores_the_snap_version() -> None:
+    """It names no stack bands and has no version-dependent options."""
+    assert BackscatterConfig().to_xml(snap_version=(14, 0, 0)) == BackscatterConfig().to_xml()
+
+
+# ---------------------------------------------------------------------------
+# Coherence options SNAP 14 added
+
+
+@pytest.mark.parametrize(
+    ("snap_version", "expected"),
+    [
+        (None, False),
+        ((13, 0, 0), False),
+        ((14, 0, 0), True),
+        ((15, 1), True),
+    ],
+)
+def test_supports_coherence_options(
+    snap_version: tuple[int, ...] | None,
+    expected: bool,
+) -> None:
+    assert supports_coherence_options(snap_version) is expected
+
+
+def test_coherence_graph_for_snap_14_matches_fixture() -> None:
+    expected_xml = (FIXTURES / "S1_SLCtoCoh-snap14.xml").read_text()
+    _assert_xml_equal(expected_xml, CoherenceConfig().to_xml(snap_version=(14, 0, 0)))
+
+
+@pytest.mark.parametrize("snap_version", [None, (13, 0, 0)])
+def test_coherence_options_are_left_out_before_snap_14(
+    snap_version: tuple[int, ...] | None,
+) -> None:
+    """GPT rejects a parameter the operator does not know."""
+    xml = CoherenceConfig().to_xml(snap_version=snap_version)
+
+    assert "correctCoherenceBias" not in xml
+    assert "removeLocalPhaseRamp" not in xml
+
+
+def test_coherence_options_are_written_off_for_snap_14() -> None:
+    """SNAP 14 defaults the bias correction on, so leaving them out is not off."""
+    root = fromstring(CoherenceConfig().to_xml(snap_version=(14, 0, 0)))
+    params = root.find('./node[@id="Coherence"]/parameters')
+
+    assert params.find("correctCoherenceBias").text == "false"
+    assert params.find("removeLocalPhaseRamp").text == "false"
+
+
+def test_coherence_options_reach_the_graph_when_enabled() -> None:
+    cfg = CoherenceConfig(correct_coherence_bias=True, remove_local_phase_ramp=True)
+    root = fromstring(cfg.to_xml(snap_version=(14, 0, 0)))
+    params = root.find('./node[@id="Coherence"]/parameters')
+
+    assert params.find("correctCoherenceBias").text == "true"
+    assert params.find("removeLocalPhaseRamp").text == "true"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"correct_coherence_bias": True}, "correct_coherence_bias=True"),
+        ({"remove_local_phase_ramp": True}, "remove_local_phase_ramp=True"),
+        (
+            {"correct_coherence_bias": True, "remove_local_phase_ramp": True},
+            "correct_coherence_bias=True, remove_local_phase_ramp=True",
+        ),
+    ],
+)
+@pytest.mark.parametrize("snap_version", [None, (13, 0, 0)])
+def test_enabled_coherence_options_reject_a_snap_older_than_14(
+    kwargs: dict[str, bool],
+    match: str,
+    snap_version: tuple[int, ...] | None,
+) -> None:
+    cfg = CoherenceConfig(**kwargs)
+    with pytest.raises(ConfigurationError, match=match):
+        cfg.to_xml(snap_version=snap_version)
+
+
+def test_coherence_mermaid_takes_the_snap_version() -> None:
+    """The diagram does not vary, but the graph behind it has to build."""
+    cfg = CoherenceConfig(correct_coherence_bias=True)
+    assert cfg.to_mermaid(snap_version=(14, 0, 0)) == CoherenceConfig().to_mermaid()
+
+
 def test_backscatter_output_bands_rtc() -> None:
     assert BackscatterConfig().output_bands == ["Gamma0", "simulatedImage"]
 
@@ -162,7 +294,7 @@ def test_interferogram_output_bands() -> None:
 
 
 def test_external_dem_path_emits_external_dem_name() -> None:
-    dem = Path("/mnt/glacier/dems/swissalti3d-4326-ellipsoid.tif")
+    dem = Path("/data/dem/swissalti3d-4326-ellipsoid.tif")
     cfg = BackscatterConfig(dem=dem)
     xml = cfg.to_xml()
     root = fromstring(xml)
@@ -182,7 +314,7 @@ def test_builtin_dem_emits_no_external_file() -> None:
 
 
 def test_external_dem_string_path_coerced_to_path() -> None:
-    dem = "/mnt/glacier/dems/swissalti3d-4326-ellipsoid.tif"
+    dem = "/data/dem/swissalti3d-4326-ellipsoid.tif"
     cfg = BackscatterConfig(dem=dem)
     root = fromstring(cfg.to_xml())
     dem_names = [el.text for el in root.iter("demName")]
@@ -253,7 +385,7 @@ def test_mermaid_contains_expected_nodes_for_backscatter() -> None:
         "TOPSAR-Deburst",
         "Multilook",
         "Terrain-Flattening",
-        "ReplaceZerosWithNaNs",
+        "ReplaceZerosWithNoData",
         "Terrain-Correction",
     ]:
         assert op in mermaid
@@ -270,3 +402,58 @@ def test_mermaid_passthrough_xml_to_mermaid_function() -> None:
     cfg = BackscatterConfig()
     direct = xml_to_mermaid(cfg.to_xml())
     assert direct == cfg.to_mermaid()
+
+
+class TestGeocodingValidation:
+    """Graph parameters that SNAP would only reject mid-run are checked up front."""
+
+    @pytest.mark.parametrize("spacing", [0, -10])
+    def test_rejects_non_positive_grid_spacing(self, spacing: float) -> None:
+        with pytest.raises(ValidationError, match="grid_spacing"):
+            BackscatterConfig(grid_spacing=spacing)
+
+    @pytest.mark.parametrize("oversampling", [0, -1.5])
+    def test_rejects_non_positive_dem_oversampling(self, oversampling: float) -> None:
+        with pytest.raises(ValidationError, match="dem_oversampling"):
+            BackscatterConfig(dem_oversampling=oversampling)
+
+    def test_rejects_an_unknown_image_resampling_method(self) -> None:
+        with pytest.raises(ValidationError, match="img_resampling"):
+            BackscatterConfig(img_resampling="LANCZOS")
+
+    def test_rejects_an_unknown_dem_resampling_method(self) -> None:
+        with pytest.raises(ValidationError, match="dem_resampling"):
+            BackscatterConfig(dem_resampling="MAGIC")
+
+    def test_rejects_lower_case_resampling_method(self) -> None:
+        """SNAP's parameter values are upper case; a lower-case name is silently ignored."""
+        with pytest.raises(ValidationError, match="img_resampling"):
+            BackscatterConfig(img_resampling="bilinear_interpolation")
+
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "NEAREST_NEIGHBOUR",
+            "BILINEAR_INTERPOLATION",
+            "CUBIC_CONVOLUTION",
+            "BISINC_5_POINT_INTERPOLATION",
+            "BISINC_11_POINT_INTERPOLATION",
+            "BISINC_21_POINT_INTERPOLATION",
+            "BICUBIC_INTERPOLATION",
+        ],
+    )
+    def test_accepts_every_supported_image_resampling_method(self, method: str) -> None:
+        config = BackscatterConfig(img_resampling=method)
+
+        assert f"<imgResamplingMethod>{method}</imgResamplingMethod>" in config.to_xml()
+
+    def test_dem_resampling_additionally_accepts_delaunay(self) -> None:
+        """SNAP offers Delaunay interpolation for the DEM but not for the image."""
+        config = BackscatterConfig(dem_resampling="DELAUNAY_INTERPOLATION")
+
+        assert "DELAUNAY_INTERPOLATION" in config.to_xml()
+        with pytest.raises(ValidationError):
+            BackscatterConfig(img_resampling="DELAUNAY_INTERPOLATION")
+
+    def test_accepts_a_fine_grid_spacing(self) -> None:
+        assert CoherenceConfig(grid_spacing=0.5).grid_spacing == 0.5

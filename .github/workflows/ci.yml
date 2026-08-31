@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Lets publish.yml run this exact gate before uploading anything, so a release
+  # can never ship a commit that has not passed these checks.
+  workflow_call:
+    inputs:
+      build_version:
+        description: Optional PEP 440 version override used for TestPyPI builds.
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,7 +27,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --all-extras
+      - run: uv sync
       - name: Ruff lint
         run: uv run ruff check .
       - name: Ruff format check
@@ -31,30 +40,49 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --all-extras
+      - run: uv sync
       - name: mypy
         run: uv run mypy src/s1bursts
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      - name: Install the GDAL CLI
+        # Only `gdal_translate`, and only for the test that diffs the port's
+        # raster extraction against an independent GDAL implementation
+        # (tests/test_gdal_reference_extraction.py). That test skips without it,
+        # so this is what keeps it from silently never running. The package
+        # itself installs from wheels and needs no system GDAL.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gdal-bin
       - name: Run offline unit tests with coverage
         run: >
-          uv run --python ${{ matrix.python-version }} --all-extras
-          pytest -q --cov=s1bursts --cov-branch --cov-report=term-missing
+          uv run --python ${{ matrix.python-version }}
+          pytest -q --cov=s1bursts --cov-branch
+          --cov-report=term-missing --cov-report=xml
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.14'
+        uses: codecov/codecov-action@v7
+        with:
+          files: ./coverage.xml
+          use_oidc: true
 
   test-lowest:
     # Verifies the declared dependency lower bounds actually install and pass on
     # the minimum supported Python (3.12). `--resolution lowest-direct` pins
-    # every direct dependency (runtime, extras, and dev tools) to its floor, so
+    # every direct dependency (runtime and dev tools) to its floor, so
     # the dev group carries lower bounds too (see [dependency-groups] in
     # pyproject.toml).
     runs-on: ubuntu-latest
@@ -64,7 +92,7 @@ jobs:
         with:
           enable-cache: true
       - name: Sync dependencies at their lower bounds
-        run: uv sync --all-extras --resolution lowest-direct --python 3.12
+        run: uv sync --resolution lowest-direct --python 3.12
       - name: Run tests
         # --no-sync keeps `uv run` from re-resolving the environment back to the
         # latest versions before running.
@@ -81,9 +109,48 @@ jobs:
         with:
           enable-cache: true
       - name: Build sdist and wheel
-        run: uv build
+        env:
+          BUILD_VERSION: ${{ inputs.build_version }}
+        run: |
+          if [ -n "$BUILD_VERSION" ]; then
+            export SETUPTOOLS_SCM_PRETEND_VERSION="$BUILD_VERSION"
+          fi
+          uv build
       - name: Check metadata
         run: uvx twine check dist/*
+      - name: Assert the distributions carry what they claim
+        # Guards the packaging config: the wheel must ship the runtime package
+        # with its data files and typing marker, and the sdist must carry the
+        # sources and tests needed to rebuild and verify from it.
+        run: |
+          python - <<'EOF'
+          import glob, sys, tarfile, zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          required = [
+              "s1bursts/__init__.py",
+              "s1bursts/py.typed",
+              "s1bursts/burstinfo.css",
+          ]
+          missing = [name for name in required if name not in names]
+          modules = [n for n in names if n.startswith("s1bursts/") and n.endswith(".py")]
+
+          sdist = glob.glob("dist/*.tar.gz")[0]
+          members = ["/".join(n.split("/")[1:]) for n in tarfile.open(sdist).getnames()]
+          for name in ("pyproject.toml", "README.md", "LICENSE", "CHANGELOG.md"):
+              if name not in members:
+                  missing.append(f"sdist:{name}")
+          if not any(m.startswith("tests/") for m in members):
+              missing.append("sdist:tests/")
+          if not any(m.startswith("src/s1bursts/") for m in members):
+              missing.append("sdist:src/s1bursts/")
+
+          print(f"wheel modules: {len(modules)}")
+          if missing:
+              sys.exit(f"Distributions are missing: {missing}")
+          print("packaging OK")
+          EOF
       - name: Smoke-test the wheel in a clean environment
         run: |
           uv venv /tmp/smoke
@@ -93,3 +160,5 @@ jobs:
         with:
           name: dist
           path: dist/*
+          if-no-files-found: error
+          retention-days: 14

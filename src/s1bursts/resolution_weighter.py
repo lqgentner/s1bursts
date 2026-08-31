@@ -1,8 +1,20 @@
-"""Locally Resolution Weighted (LRW) compositing for Sentinel-1 products."""
+"""Locally Resolution Weighted (LRW) compositing for Sentinel-1 products.
+
+Implements the LRW backscatter composite and its composite quality map (CQM)
+of [Small et al. (2022)](https://doi.org/10.1109/TGRS.2021.3055562), which the CEOS-ARD
+Product Family Specification for Synthetic Aperture Radar adopts as its
+Composite Backscatter (CB) product.
+
+The weights come from the local contributing area ``A``, the area terrain
+flattening divides beta nought by, so ``A = 1`` is a flat reference facet.
+SNAP names the band ``simulatedImage``, CEOS-ARD names the layer
+``scatteringArea``, and OPERA names it ``rtc_anf_gamma0_to_beta0``.
+"""
 
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from typing import TYPE_CHECKING, Any, Literal, overload
@@ -13,6 +25,7 @@ from numpy.typing import NDArray
 from pandas import Timestamp
 from rasterio.windows import from_bounds
 
+from s1bursts import product_tags
 from s1bursts.product import (
     RTCLRWQA,
     CoherenceProduct,
@@ -28,12 +41,13 @@ from s1bursts.product import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping, Sequence
+    from collections.abc import Collection, Sequence
 
     from freezebase.mgrs import MGRSGeoBox
 
     from s1bursts.filemanager import FileManager
-    from s1bursts.query import OrbitDirection, Polarization
+    from s1bursts.product_tags import RasterMetadata
+    from s1bursts.query import PassDirection, Polarization
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +66,25 @@ type CohPassResult = tuple[CohPassComposite, CohPassQA]
 _OrbitDateKey = tuple[int, Timestamp]
 _LoadedEntry = tuple[ComposableProduct, NDArray[np.float32]]
 
+_DEFAULT_PROFILE_KEY = "default"
+
+
+def _split_profiles(
+    rasterio_profile: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Normalize a flat or per-product rasterio profile mapping."""
+    if not rasterio_profile:
+        return {}
+    if all(isinstance(value, Mapping) for value in rasterio_profile.values()):
+        return {str(key): dict(value) for key, value in rasterio_profile.items()}
+    return {_DEFAULT_PROFILE_KEY: dict(rasterio_profile)}
+
 
 class ResolutionWeighter:
-    """Compute LRW and per-orbit-pass composites for Sentinel-1 products.
+    """Compute LRW and per-pass composites for Sentinel-1 products.
 
-    The class is stateless with respect to the MGRS grid cell: the ``geobox``
-    that defines the spatial extent, CRS, and pixel grid is passed to each
-    compose call.  This allows one ``ResolutionWeighter`` instance to be
-    reused across many cells in a grid loop.
+    Each compose call receives its target ``geobox``, so one instance can be
+    reused across MGRS grid cells.
 
     Parameters
     ----------
@@ -68,9 +93,20 @@ class ResolutionWeighter:
     n_workers : int, default 8
         Number of threads for parallel file I/O during product loading.
     rasterio_profile : dict[str, Any] or None, optional
-        rasterio profile dictionary for GeoTIFF output. If None, uses
-        float32 as dtype, nan as nodata, pixel interleave,
-        deflate compression, and 512x512 tiling.
+        GeoTIFF profile applied to every product, or profiles keyed by product
+        type with an optional ``"default"`` entry. Product-specific settings
+        override the default. If omitted, uses the library defaults with
+        float32 data and NaN no-data.
+
+    References
+    ----------
+    .. [1] Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
+       (2022). Wide-Area Analysis-Ready Radar Backscatter Composites. IEEE
+       Transactions on Geoscience and Remote Sensing, 60, 5201814.
+       https://doi.org/10.1109/TGRS.2021.3055562
+    .. [2] CEOS-ARD Product Family Specification: Synthetic Aperture Radar,
+       version 1.3.1 (2026). Committee on Earth Observation Satellites.
+       https://ceos.org/ard/files/PFS/SAR/v1.3.1/CEOS-ARD_PFS_SAR_v1.3.1.pdf
     """
 
     def __init__(
@@ -82,10 +118,7 @@ class ResolutionWeighter:
     ) -> None:
         self._fm = file_manager
         self._n_workers = n_workers
-
-        # Overwrite profile defaults with user-specified profile
-        base_profile = {"dtype": np.float32, "nodata": np.nan}
-        self.rasterio_profile = build_rasterio_profile(base_profile, rasterio_profile)
+        self._profiles = _split_profiles(rasterio_profile)
 
     # ------------------------------------------------------------------
     # Public API
@@ -142,12 +175,11 @@ class ResolutionWeighter:
         cqm_decibel: bool = False,
         overwrite: bool = False,
     ) -> RTCLRWComposite | RTCLRWResult:
-        """Compute a locally resolution weighted (LRW) RTC intensity composite.
+        r"""Compute a locally resolution weighted (LRW) RTC intensity composite.
 
-        Each RTC file provides two bands: band 1 (intensity / power) and band 2
-        (simulated illuminated area used as the inverse weight ``w = 1/A``).
-        Bursts from the same orbit and acquisition date are mosaicked using the
-        first non-NaN pixel strategy before temporal aggregation.
+        Band 1 supplies intensity and band 2 the local contributing area $A$.
+        Observations are weighted by normalized $1/A$ ([1] eq. 3-4, [2]
+        eq. A5.1-A5.3) after mosaicking each orbit and acquisition date.
 
         Parameters
         ----------
@@ -155,28 +187,24 @@ class ResolutionWeighter:
             RTC products to composite.  All products must share the same
             polarization.
         geobox : MGRSGeoBox
-            Target MGRS grid cell defining the output CRS, spatial extent, and
-            pixel grid.
+            Target MGRS grid cell.
         aggregation : {"mean", "median"} or float, default "median"
             Temporal aggregation applied after weighting.  Pass ``"mean"`` or
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
         clip_max_resolution : float or None, default None
-            Upper limit applied to the resolution weight ``1/area`` before
-            further processing.  Suppresses extreme weights in radar shadow
-            areas.
+            Upper limit for $W = 1/A$, used to suppress extreme weights in
+            radar shadow. ``1.0`` is the weight of a flat reference facet.
         decibel : bool, default False
-            If ``True``, convert the aggregated composite from intensity
-            (power) to decibels before writing; non-positive intensities
-            become NaN.  Aggregation always happens in the linear domain.
+            Convert the result from power to decibels after aggregation.
+            Non-positive values become NaN.
         write_qa : bool, default False
             If ``True``, also write two auxiliary QA products alongside the
-            composite: a number-of-observations map (``QA-NUM``) and a composite
-            quality map (``QA-CQM``).
+            composite: a contributing-observations map (``QA-NUM``) and a
+            composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
         cqm_decibel : bool, default False
-            If ``True``, write the ``QA-CQM`` map in decibels instead of square
-            metres. Independent of ``decibel``: the CQM describes the composite's
-            local resolution, not its values.
+            Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
+            linear units. Independent of ``decibel``.
         overwrite : bool, default False
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
@@ -185,8 +213,7 @@ class ResolutionWeighter:
         -------
         RTCLRWComposite or tuple[RTCLRWComposite, tuple[RTCLRWQA, RTCLRWQA]]
             The composite product metadata, or ``(composite, (qa_num, qa_cqm))``
-            when ``write_qa=True``.  GeoTIFFs are written to the paths returned
-            by ``file_manager.get_product_path()``.
+            when ``write_qa=True``.
 
         Raises
         ------
@@ -237,11 +264,20 @@ class ResolutionWeighter:
         composite = self._aggregate_weighted(rtc_obs, weights, aggregation)
         if decibel:
             composite = self._to_decibel(composite)
+        source_tags = self._input_tags(rtc_products)
+        n_observations = len(rtc_obs)
         self._save(
             composite,
             product,
             geobox,
-            polarization,
+            product_tags.rtc_lrw_metadata(
+                product,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+                n_observations=n_observations,
+                decibel=decibel,
+                source_tags=source_tags,
+            ),
             overwrite=overwrite,
         )
         if qa:
@@ -251,7 +287,10 @@ class ResolutionWeighter:
                 weights,
                 qa,
                 geobox,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
                 cqm_decibel=cqm_decibel,
+                source_tags=source_tags,
                 overwrite=overwrite,
             )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
@@ -307,15 +346,11 @@ class ResolutionWeighter:
         cqm_decibel: bool = False,
         overwrite: bool = False,
     ) -> CohLRWComposite | CohLRWResult:
-        """Compute a locally resolution weighted (LRW) coherence composite.
+        r"""Compute a locally resolution weighted (LRW) coherence composite.
 
-        Coherence observations are weighted by the inverse simulated area
-        ``1/A`` taken from band 2 of the matched RTC files.  The match is made
-        per ``(rel_orbit_number, date_primary)`` group: for each coherence
-        group the sim-area arrays are looked up from the corresponding RTC
-        products (matched by ``burst_id``, ``sub_swath``, and
-        ``date == date_primary``), then stitched in the same first-non-NaN
-        fashion.
+        Coherence observations are weighted by normalized $1/A$ from matching
+        RTC products. Products are matched and mosaicked by relative orbit and
+        primary acquisition date.
 
         Parameters
         ----------
@@ -323,8 +358,8 @@ class ResolutionWeighter:
             Coherence products to composite.  All must share the same
             polarization and ``baseline_days``.
         rtc_products : Collection[RTCProduct]
-            RTC products providing the simulated area (band 2) used as weights.
-            Must cover the same orbit/date combinations as ``coh_products``.
+            RTC products providing the local contributing area (band 2) used as
+            weights. They must cover the coherence orbit/date combinations.
         geobox : MGRSGeoBox
             Target MGRS grid cell.
         aggregation : {"mean", "median"} or float, default "median"
@@ -332,17 +367,15 @@ class ResolutionWeighter:
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
         clip_max_resolution : float or None, default None
-            Upper limit applied to the resolution weight ``1/area`` before
-            further processing.  Suppresses extreme weights in radar shadow
-            areas.
+            Upper limit for $W = 1/A$, used to suppress extreme weights in
+            radar shadow. ``1.0`` is the weight of a flat reference facet.
         write_qa : bool, default False
             If ``True``, also write two auxiliary QA products alongside the
-            composite: a number-of-observations map (``QA-NUM``) and a composite
-            quality map (``QA-CQM``).
+            composite: a contributing-observations map (``QA-NUM``) and a
+            composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
         cqm_decibel : bool, default False
-            If ``True``, write the ``QA-CQM`` map in decibels instead of square
-            metres. Independent of ``decibel``: the CQM describes the composite's
-            local resolution, not its values.
+            Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
+            linear units.
         overwrite : bool, default False
             Skip writing if the output file already exists.
 
@@ -363,7 +396,7 @@ class ResolutionWeighter:
             raise ValueError(msg)
 
         polarization = self._check_polarization(coh_products)
-        baseline_days = coh_products[0].baseline_days
+        baseline_days = self._check_baseline_days(coh_products)
         start_date = min(self._acquisition_date(p) for p in coh_products)
         end_date = max(self._acquisition_date(p) for p in coh_products)
 
@@ -401,11 +434,21 @@ class ResolutionWeighter:
         sim_obs = np.stack([sim_groups[key] for key in coh_groups])  # (N, H, W)
 
         weights = self._calc_weights(sim_obs, clip_max_resolution)
+        composite = self._aggregate_weighted(coh_obs, weights, aggregation)
+        source_tags = self._input_tags(coh_products, additional_dem_products=rtc_products)
+        n_observations = len(coh_obs)
         self._save(
-            self._aggregate_weighted(coh_obs, weights, aggregation),
+            composite,
             product,
             geobox,
-            polarization,
+            product_tags.coh_lrw_metadata(
+                product,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+                n_observations=n_observations,
+                statistics=product_tags.coherence_statistics(composite),
+                source_tags=source_tags,
+            ),
             overwrite=overwrite,
         )
         if qa:
@@ -415,7 +458,10 @@ class ResolutionWeighter:
                 weights,
                 qa,
                 geobox,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
                 cqm_decibel=cqm_decibel,
+                source_tags=source_tags,
                 overwrite=overwrite,
             )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
@@ -430,7 +476,7 @@ class ResolutionWeighter:
         decibel: bool = ...,
         write_qa: Literal[False] = False,
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, RTCPassComposite]: ...
+    ) -> dict[PassDirection, RTCPassComposite]: ...
     @overload
     def compose_rtc_by_pass(
         self,
@@ -441,7 +487,7 @@ class ResolutionWeighter:
         decibel: bool = ...,
         write_qa: Literal[True],
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, RTCPassResult]: ...
+    ) -> dict[PassDirection, RTCPassResult]: ...
     @overload
     def compose_rtc_by_pass(
         self,
@@ -452,7 +498,7 @@ class ResolutionWeighter:
         decibel: bool = ...,
         write_qa: bool,
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, RTCPassComposite | RTCPassResult]: ...
+    ) -> dict[PassDirection, RTCPassComposite | RTCPassResult]: ...
     def compose_rtc_by_pass(
         self,
         rtc_products: Collection[RTCProduct],
@@ -462,18 +508,18 @@ class ResolutionWeighter:
         decibel: bool = False,
         write_qa: bool = False,
         overwrite: bool = False,
-    ) -> Mapping[OrbitDirection, RTCPassComposite | RTCPassResult]:
-        """Compute unweighted RTC composites stratified by orbit direction.
+    ) -> Mapping[PassDirection, RTCPassComposite | RTCPassResult]:
+        """Compute unweighted RTC composites stratified by pass direction.
 
         Bursts from the same orbit and acquisition date are mosaicked using the
         first non-NaN pixel strategy.  The resulting orbit-date observations are
-        then aggregated temporally (mean or median) per orbit direction
+        then aggregated temporally (mean or median) per pass direction
         (ascending / descending).
 
         Parameters
         ----------
         rtc_products : Collection[RTCProduct]
-            RTC products to composite.  Products from both orbit directions may
+            RTC products to composite.  Products from both pass directions may
             be mixed; they are split automatically via the ESA burst map.
         geobox : MGRSGeoBox
             Target MGRS grid cell.
@@ -486,15 +532,15 @@ class ResolutionWeighter:
             (power) to decibels before writing; non-positive intensities
             become NaN.  Aggregation always happens in the linear domain.
         write_qa : bool, default False
-            If ``True``, also write a number-of-observations QA product
-            (``QA-NUM``) per orbit direction.
+            If ``True``, also write a contributing-observations QA product
+            (``QA-NUM``) per pass direction.
         overwrite : bool, default False
             Skip writing if the output file already exists.
 
         Returns
         -------
-        dict[OrbitDirection, RTCPassComposite or tuple[RTCPassComposite, RTCPassQA]]
-            One entry per orbit direction.  Each value is the composite, or
+        dict[PassDirection, RTCPassComposite or tuple[RTCPassComposite, RTCPassQA]]
+            One entry per pass direction.  Each value is the composite, or
             ``(composite, qa_num)`` when ``write_qa=True``.
         """
         rtc_products = list(rtc_products)
@@ -507,18 +553,18 @@ class ResolutionWeighter:
 
         loaded = self._load_band(rtc_products, geobox, band=1)
 
-        subsets: defaultdict[OrbitDirection, list[_LoadedEntry]] = defaultdict(list)
+        subsets: defaultdict[PassDirection, list[_LoadedEntry]] = defaultdict(list)
         for prod, data in loaded:
-            subsets[prod.orbit_direction].append((prod, data))
+            subsets[prod.pass_direction].append((prod, data))
 
-        result: dict[OrbitDirection, RTCPassComposite | RTCPassResult] = {}
+        result: dict[PassDirection, RTCPassComposite | RTCPassResult] = {}
         for direction, subset in subsets.items():
             product = RTCPassComposite(
                 mgrs_code=geobox.mgrs_code,
                 start_date=start_date,
                 end_date=end_date,
                 polarization=polarization,
-                orbit_direction=direction,
+                pass_direction=direction,
             )
             qa_num: list[RTCPassQA] = (
                 [
@@ -527,7 +573,7 @@ class ResolutionWeighter:
                         start_date=start_date,
                         end_date=end_date,
                         polarization=polarization,
-                        orbit_direction=direction,
+                        pass_direction=direction,
                     ),
                 ]
                 if write_qa
@@ -543,11 +589,18 @@ class ResolutionWeighter:
             composite = self._aggregate_unweighted(rtc_obs, aggregation)
             if decibel:
                 composite = self._to_decibel(composite)
+            source_tags = self._input_tags([prod for prod, _ in subset])
             self._save(
                 composite,
                 product,
                 geobox,
-                polarization,
+                product_tags.rtc_pass_metadata(
+                    product,
+                    aggregation=aggregation,
+                    n_observations=len(rtc_obs),
+                    decibel=decibel,
+                    source_tags=source_tags,
+                ),
                 overwrite=overwrite,
             )
             for qa_product in qa_num:
@@ -555,7 +608,12 @@ class ResolutionWeighter:
                     self._count_observations(rtc_obs),
                     qa_product,
                     geobox,
-                    "num_obs",
+                    product_tags.qa_metadata(
+                        qa_product,
+                        aggregation=aggregation,
+                        n_observations=len(rtc_obs),
+                        source_tags=source_tags,
+                    ),
                     dtype=np.uint16,
                     nodata=0,
                     overwrite=overwrite,
@@ -573,7 +631,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         write_qa: Literal[False] = False,
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, CohPassComposite]: ...
+    ) -> dict[PassDirection, CohPassComposite]: ...
     @overload
     def compose_coherence_by_pass(
         self,
@@ -583,7 +641,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         write_qa: Literal[True],
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, CohPassResult]: ...
+    ) -> dict[PassDirection, CohPassResult]: ...
     @overload
     def compose_coherence_by_pass(
         self,
@@ -593,7 +651,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         write_qa: bool,
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, CohPassComposite | CohPassResult]: ...
+    ) -> dict[PassDirection, CohPassComposite | CohPassResult]: ...
     def compose_coherence_by_pass(
         self,
         coh_products: Collection[CoherenceProduct],
@@ -602,8 +660,8 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = "median",
         write_qa: bool = False,
         overwrite: bool = False,
-    ) -> Mapping[OrbitDirection, CohPassComposite | CohPassResult]:
-        """Compute unweighted coherence composites stratified by orbit direction.
+    ) -> Mapping[PassDirection, CohPassComposite | CohPassResult]:
+        """Compute unweighted coherence composites stratified by pass direction.
 
         Bursts from the same orbit and primary acquisition date are mosaicked
         using the first non-NaN pixel strategy.  The resulting orbit-date
@@ -622,15 +680,15 @@ class ResolutionWeighter:
             the corresponding statistic, or a float in ``(0, 1)`` for an
             interpolated quantile at that level.
         write_qa : bool, default False
-            If ``True``, also write a number-of-observations QA product
-            (``QA-NUM``) per orbit direction.
+            If ``True``, also write a contributing-observations QA product
+            (``QA-NUM``) per pass direction.
         overwrite : bool, default False
             Skip writing if the output file already exists.
 
         Returns
         -------
-        dict[OrbitDirection, CohPassComposite or tuple[CohPassComposite, CohPassQA]]
-            One entry per orbit direction.  Each value is the composite, or
+        dict[PassDirection, CohPassComposite or tuple[CohPassComposite, CohPassQA]]
+            One entry per pass direction.  Each value is the composite, or
             ``(composite, qa_num)`` when ``write_qa=True``.
         """
         coh_products = list(coh_products)
@@ -638,24 +696,24 @@ class ResolutionWeighter:
             return {}
 
         polarization = self._check_polarization(coh_products)
-        baseline_days = coh_products[0].baseline_days
+        baseline_days = self._check_baseline_days(coh_products)
         start_date = min(self._acquisition_date(p) for p in coh_products)
         end_date = max(self._acquisition_date(p) for p in coh_products)
 
         loaded = self._load_band(coh_products, geobox, band=1)
 
-        subsets: defaultdict[OrbitDirection, list[_LoadedEntry]] = defaultdict(list)
+        subsets: defaultdict[PassDirection, list[_LoadedEntry]] = defaultdict(list)
         for prod, data in loaded:
-            subsets[prod.orbit_direction].append((prod, data))
+            subsets[prod.pass_direction].append((prod, data))
 
-        result: dict[OrbitDirection, CohPassComposite | CohPassResult] = {}
+        result: dict[PassDirection, CohPassComposite | CohPassResult] = {}
         for direction, subset in subsets.items():
             product = CohPassComposite(
                 mgrs_code=geobox.mgrs_code,
                 start_date=start_date,
                 end_date=end_date,
                 polarization=polarization,
-                orbit_direction=direction,
+                pass_direction=direction,
                 baseline_days=baseline_days,
             )
             qa_num: list[CohPassQA] = (
@@ -665,7 +723,7 @@ class ResolutionWeighter:
                         start_date=start_date,
                         end_date=end_date,
                         polarization=polarization,
-                        orbit_direction=direction,
+                        pass_direction=direction,
                         baseline_days=baseline_days,
                     ),
                 ]
@@ -679,11 +737,19 @@ class ResolutionWeighter:
 
             groups = self._stitch_by_orbit_date(subset)
             coh_obs = np.stack(list(groups.values()))  # (N, H, W)
+            composite = self._aggregate_unweighted(coh_obs, aggregation)
+            source_tags = self._input_tags([prod for prod, _ in subset])
             self._save(
-                self._aggregate_unweighted(coh_obs, aggregation),
+                composite,
                 product,
                 geobox,
-                polarization,
+                product_tags.coh_pass_metadata(
+                    product,
+                    aggregation=aggregation,
+                    n_observations=len(coh_obs),
+                    statistics=product_tags.coherence_statistics(composite),
+                    source_tags=source_tags,
+                ),
                 overwrite=overwrite,
             )
             for qa_product in qa_num:
@@ -691,7 +757,12 @@ class ResolutionWeighter:
                     self._count_observations(coh_obs),
                     qa_product,
                     geobox,
-                    "num_obs",
+                    product_tags.qa_metadata(
+                        qa_product,
+                        aggregation=aggregation,
+                        n_observations=len(coh_obs),
+                        source_tags=source_tags,
+                    ),
                     dtype=np.uint16,
                     nodata=0,
                     overwrite=overwrite,
@@ -703,6 +774,21 @@ class ResolutionWeighter:
     # ------------------------------------------------------------------
     # Private helpers — I/O
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_baseline_days(products: Sequence[CoherenceProduct]) -> int:
+        """Return the common temporal baseline, or raise ValueError if products differ.
+
+        Coherence falls off with the baseline, so mixing 12-day and 24-day
+        pairs averages two different quantities — and the composite carries a
+        single ``baseline_days`` in its name and its tags.
+        """
+        baselines = {p.baseline_days for p in products}
+        if len(baselines) != 1:
+            listed = ", ".join(str(b) for b in sorted(baselines))
+            msg = f"All coherence products must share a temporal baseline; got {listed} days."
+            raise ValueError(msg)
+        return baselines.pop()
 
     @staticmethod
     def _check_polarization(products: Sequence[ComposableProduct]) -> Polarization:
@@ -733,6 +819,18 @@ class ResolutionWeighter:
                 msg = f"product file not found: {path}"
                 raise FileNotFoundError(msg)
             with rasterio_open(path) as src:
+                if src.crs != geobox.crs:
+                    msg = (
+                        f"'{path.name}' is in {src.crs}, but the target grid is "
+                        f"{geobox.crs}; reproject it or compose onto its own grid."
+                    )
+                    raise ValueError(msg)
+                if src.res != (geobox.resolution.x, abs(geobox.resolution.y)):
+                    msg = (
+                        f"'{path.name}' has {src.res[0]} m pixels, but the target grid has "
+                        f"{geobox.resolution.x} m; all inputs must share the output grid."
+                    )
+                    raise ValueError(msg)
                 win = from_bounds(*bounds, src.transform).round_lengths().round_offsets()
                 data = src.read(band, window=win, boundless=True, fill_value=np.nan)
             return prod, data.astype(np.float32)
@@ -740,12 +838,21 @@ class ResolutionWeighter:
         with ThreadPoolExecutor(max_workers=self._n_workers) as executor:
             return list(executor.map(_load_one, products))
 
+    def _profile_for(self, product: CompositeProduct | QAProduct) -> dict[str, Any]:
+        """Merge the default and product-specific rasterio profiles."""
+        override = {
+            **self._profiles.get(_DEFAULT_PROFILE_KEY, {}),
+            **self._profiles.get(product.product_type, {}),
+        }
+        base_profile = {"dtype": np.float32, "nodata": np.nan}
+        return build_rasterio_profile(base_profile, override)
+
     def _save(
         self,
         data: NDArray,
         product: CompositeProduct | QAProduct,
         geobox: MGRSGeoBox,
-        band_name: str,
+        metadata: RasterMetadata,
         *,
         dtype: type[np.generic] = np.float32,
         nodata: float = np.nan,
@@ -757,7 +864,7 @@ class ResolutionWeighter:
             logger.debug("skipping existing %s", path.name)
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        profile = self.rasterio_profile.copy()
+        profile = self._profile_for(product)
         profile.update(
             count=1,
             dtype=dtype,
@@ -767,36 +874,119 @@ class ResolutionWeighter:
             height=geobox.height,
             width=geobox.width,
         )
-        write_cog(data, path, profile, band_names=[band_name])
+        write_cog(
+            data,
+            path,
+            profile,
+            band_names=metadata.band_names,
+            tags=metadata.tags,
+            band_tags=metadata.band_tags or None,
+            units=metadata.units,
+        )
         logger.debug("saved %s", path.name)
+
+    def _input_tags(
+        self,
+        products: Collection[ComposableProduct],
+        *,
+        additional_dem_products: Collection[ComposableProduct] = (),
+    ) -> dict[str, str]:
+        """Tags that every per-burst input agrees on.
+
+        The SNAP version and the coherence estimation window exist nowhere at
+        compositing time except in the input files. A key is carried forward
+        only where every input states the same value, so a composite spanning
+        two SNAP versions stays silent instead of claiming whichever its first
+        input happened to use.
+
+        All inputs must identify the same DEM. ``additional_dem_products``
+        supports coherence LRW composites, whose RTC contributing-area rasters
+        also depend on a DEM but do not supply the other coherence provenance.
+
+        Called only after ``_load_band`` has read the same products, so the
+        files are there.
+        """
+
+        def read(product: ComposableProduct) -> dict[str, str]:
+            with rasterio_open(self._fm.get_product_path(product)) as src:
+                return dict(src.tags())
+
+        primary_count = len(products)
+        all_products = [*products, *additional_dem_products]
+        with ThreadPoolExecutor(max_workers=self._n_workers) as executor:
+            all_input_tags = list(executor.map(read, all_products))
+        per_input = all_input_tags[:primary_count]
+        if not per_input:
+            return {}
+
+        dem_values = {tags.get("DEM", product_tags.UNKNOWN) for tags in all_input_tags}
+        if len(dem_values) > 1:
+            listed = ", ".join(sorted(dem_values))
+            msg = f"All inputs must use the same DEM; got {listed}."
+            raise ValueError(msg)
+
+        first, *rest = per_input
+        agreed = {k: v for k, v in first.items() if all(other.get(k) == v for other in rest)}
+        agreed["DEM"] = dem_values.pop()
+
+        # Mixing SNAP versions is legitimate, but it is worth saying out loud
+        for key in ("PROCESSING_SOFTWARE_VERSION",):
+            values = {tags[key] for tags in per_input if key in tags}
+            # Absent from every input is agreement, not disagreement: an archive
+            # written before these tags existed simply has nothing to say.
+            if key in agreed or len(values) < 2:  # noqa: PLR2004
+                continue
+            logger.warning(
+                "inputs disagree on %s (%s); the composite will record it as unknown",
+                key,
+                ", ".join(sorted(values)),
+            )
+        return agreed
 
     def _write_lrw_qa(
         self,
         values: NDArray[np.floating[Any]],
-        sim_area: NDArray[np.floating[Any]],
+        contributing_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
         qa: Mapping[QaMetric, LRWQAProduct],
         geobox: MGRSGeoBox,
         *,
+        aggregation: Literal["mean", "median"] | float,
+        clip_max_resolution: float | None,
         cqm_decibel: bool,
+        source_tags: Mapping[str, str],
         overwrite: bool,
     ) -> None:
-        """Compute and write the number-of-observations and composite quality map QA products."""
+        """Compute and write the contributing-observations and composite quality QA products."""
+        n_observations = len(values)
         self._save(
-            self._count_observations(values),
+            self._count_contributions(values, weights),
             qa[QaMetric.NUM],
             geobox,
-            "num_obs",
+            product_tags.qa_metadata(
+                qa[QaMetric.NUM],
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+                n_observations=n_observations,
+                source_tags=source_tags,
+            ),
             dtype=np.uint16,
             nodata=0,
             overwrite=overwrite,
         )
-        cqm = self._calc_cqm(values, sim_area, weights)
+        cqm = self._calc_cqm(values, contributing_area, weights)
         self._save(
             self._to_decibel(cqm) if cqm_decibel else cqm,
             qa[QaMetric.CQM],
             geobox,
-            "cqm",
+            product_tags.qa_metadata(
+                qa[QaMetric.CQM],
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+                n_observations=n_observations,
+                cqm_decibel=cqm_decibel,
+                source_tags=source_tags,
+            ),
             dtype=np.float32,
             nodata=np.nan,
             overwrite=overwrite,
@@ -870,24 +1060,28 @@ class ResolutionWeighter:
         missing = [key for key in obs_groups if key not in sim_groups]
         if missing:
             formatted = ", ".join(f"(orbit {orbit}, {date.date()})" for orbit, date in missing)
-            msg = f"No matching RTC simulated area for orbit/date group(s): {formatted}"
+            msg = f"No matching RTC contributing area for orbit/date group(s): {formatted}"
             raise ValueError(msg)
 
     @staticmethod
     def _calc_weights(
-        sim_area: NDArray[np.floating[Any]],
+        contributing_area: NDArray[np.floating[Any]],
         clip_max_resolution: float | None,
     ) -> NDArray[np.floating[Any]]:
-        """Compute resolution weights from simulated illuminated area.
+        """Compute resolution weights from the local contributing area.
 
-        The resolution weight is ``w = 1 / sim_area``.  Invalid pixels
-        (``sim_area <= 0`` or non-finite) receive weight zero.  An optional
-        upper clip on the resolution weight ``1/area`` suppresses extreme
-        weights in shadow areas.
+        The local area is inversely proportional to the local resolution, so
+        the unnormalized resolution weight is ``w = 1 / A`` (Small et al. 2022,
+        eq. 3-4; CEOS-ARD SAR v1.3.1, eq. A5.1).  Normalization to sum one
+        (eq. A5.2) happens in the aggregation, which needs the clipped weights.
+
+        Invalid pixels (``contributing_area <= 0`` or non-finite) receive weight
+        zero.  An optional upper clip on ``1/A`` suppresses extreme weights in
+        shadow areas.
         """
-        is_valid = (sim_area > 0) & np.isfinite(sim_area)
+        is_valid = (contributing_area > 0) & np.isfinite(contributing_area)
         with np.errstate(divide="ignore", invalid="ignore"):
-            weights = np.where(is_valid, 1.0 / sim_area, 0.0)
+            weights = np.where(is_valid, 1.0 / contributing_area, 0.0)
         if clip_max_resolution is not None:
             weights = weights.clip(max=clip_max_resolution)
         return weights
@@ -906,21 +1100,36 @@ class ResolutionWeighter:
         return np.count_nonzero(np.isfinite(values), axis=0).astype(np.uint16)
 
     @staticmethod
+    def _count_contributions(
+        values: NDArray[np.floating[Any]],
+        weights: NDArray[np.floating[Any]],
+    ) -> NDArray[np.uint16]:
+        """Per-pixel count of observations that carry weight into the composite.
+
+        An observation contributes when it is finite and its resolution weight
+        is non-zero, which is the pairing :meth:`_weighted_mean` sums over.  The
+        CEOS-ARD Contributing Observations Image (SAR PFS v1.3.1, item 2.21).
+        """
+        contributes = np.isfinite(values) & (weights > 0)
+        return np.count_nonzero(contributes, axis=0).astype(np.uint16)
+
+    @staticmethod
     def _calc_cqm(
         values: NDArray[np.floating[Any]],
-        sim_area: NDArray[np.floating[Any]],
+        contributing_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
     ) -> NDArray[np.float32]:
         """Composite quality map (CQM) over the first (N) axis.
 
-        Computed as ``1 / Σ(wᵢ · Aᵢ)`` where ``wᵢ`` are the resolution weights
-        normalized to sum to one and ``Aᵢ`` is the contributing area.  Uses the
-        same (clipped) weights as the composite.
+        Computed as ``1 / Σ(Wᵢ · Aᵢ)`` where ``Wᵢ`` are the resolution weights
+        normalized to sum to one (CEOS-ARD SAR v1.3.1, eq. A5.2) and ``Aᵢ`` is
+        the local contributing area.  Uses the same (clipped) weights as the
+        composite, so it describes the composite that was actually written.
         """
         weight_sum = weights.sum(axis=0)  # (H, W)
         with np.errstate(divide="ignore", invalid="ignore"):
             norm = np.where(weight_sum[np.newaxis] > 0, weights / weight_sum[np.newaxis], 0.0)
-            weighted_area = 1.0 / np.nansum(sim_area * norm, axis=0)
+            weighted_area = 1.0 / np.nansum(contributing_area * norm, axis=0)
         cqm = weighted_area.astype(np.float32)
         invalid = (weight_sum == 0) | ~np.isfinite(values).any(axis=0)
         cqm[invalid] = np.nan

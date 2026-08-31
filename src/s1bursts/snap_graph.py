@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, Final, Literal
 from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
 from lxml import etree
@@ -28,6 +28,8 @@ from pydantic import (
     computed_field,
     field_validator,
 )
+
+from s1bursts.errors import ConfigurationError
 
 # Hardened parser: no entity resolution, no network access (XXE-safe).
 _XML_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
@@ -250,6 +252,8 @@ def _coherence(
     subtract_flat_earth_phase: bool,
     subtract_topographic_phase: bool,
     square_pixel: bool,
+    correct_coherence_bias: bool | None,
+    remove_local_phase_ramp: bool | None,
     dem: str | Path,
     nodata: float,
     apply_egm: bool,
@@ -265,6 +269,12 @@ def _coherence(
     _add_param(p, "orbitDegree", 3)
     _add_param(p, "squarePixel", square_pixel)
     _add_param(p, "subtractTopographicPhase", subtract_topographic_phase)
+    # ``None`` for a SNAP that does not know the option; see
+    # `supports_coherence_options`.
+    if correct_coherence_bias is not None:
+        _add_param(p, "correctCoherenceBias", correct_coherence_bias)
+    if remove_local_phase_ramp is not None:
+        _add_param(p, "removeLocalPhaseRamp", remove_local_phase_ramp)
     _add_param(p, "demName", dem_name)
     _add_param(p, "externalDEMFile", dem_file)
     _add_param(p, "externalDEMNoDataValue", nodata)
@@ -464,6 +474,15 @@ def xml_to_mermaid(graph_xml: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# SNAP 13 detects no-data by equality, so NaN reaches interpolation instead.
+# This finite marker works across supported versions, exceeds the maximum
+# interferogram magnitude (2**31), and survives SNAP's float32-to-double
+# comparison exactly. `_finalize_product` converts it to the product's no-data.
+NODATA_SENTINEL: Final = -1099511627776.0  # -2**40
+
+_SENTINEL_EXPR = repr(NODATA_SENTINEL)
+
+
 def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[dict[str, Any]]:
     if flatten_terrain:
         return [
@@ -471,15 +490,16 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
                 "name": "Gamma0",
                 "type": "float32",
                 "expression": (
-                    "Gamma0_${swath}_${polarization} > 0 ? Gamma0_${swath}_${polarization} : NaN"
+                    f"Gamma0_${{swath}}_${{polarization}} > 0 ? "
+                    f"Gamma0_${{swath}}_${{polarization}} : {_SENTINEL_EXPR}"
                 ),
-                "noDataValue": "NaN",
+                "noDataValue": _SENTINEL_EXPR,
             },
             {
                 "name": "sim",
                 "type": "float32",
-                "expression": "simulatedImage > 0 ? simulatedImage : NaN",
-                "noDataValue": "NaN",
+                "expression": f"simulatedImage > 0 ? simulatedImage : {_SENTINEL_EXPR}",
+                "noDataValue": _SENTINEL_EXPR,
             },
         ]
     return [
@@ -487,9 +507,10 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
             "name": "Beta0",
             "type": "float32",
             "expression": (
-                "Beta0_${swath}_${polarization} > 0 ? Beta0_${swath}_${polarization} : NaN"
+                f"Beta0_${{swath}}_${{polarization}} > 0 ? "
+                f"Beta0_${{swath}}_${{polarization}} : {_SENTINEL_EXPR}"
             ),
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
     ]
 
@@ -500,22 +521,110 @@ def _replace_zeros_target_bands_coherence() -> list[dict[str, Any]]:
             "name": "coh",
             "type": "float32",
             "expression": (
-                "coh_${swath}_${polarization}_${date1}_${date2} > 0 ? "
-                "coh_${swath}_${polarization}_${date1}_${date2} : NaN"
+                f"coh_${{swath}}_${{polarization}}_${{date1}}_${{date2}} > 0 ? "
+                f"coh_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : {_SENTINEL_EXPR}"
             ),
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
     ]
 
 
-def _intensity_target_bands() -> list[dict[str, Any]]:
+# SNAP 14 renamed Back-Geocoding's stack suffixes: `mst` to `ref`, `slv1` to
+# `sec1`. The expressions below name those bands, so the wrong choice fails
+# graph parsing with "Undefined symbol".
+_SNAP_RENAMED_STACK_BANDS = (14,)
+
+
+def stack_band_suffixes(snap_version: tuple[int, ...] | None) -> tuple[str, str]:
+    """Back-Geocoding's primary and secondary band suffixes for a SNAP version.
+
+    Parameters
+    ----------
+    snap_version : tuple of int or None
+        SNAP version as returned by :func:`s1bursts.snap_client.snap_version`.
+        ``None`` selects the naming of SNAP 13 and earlier.
+
+    Returns
+    -------
+    tuple of str
+        The primary and secondary suffixes, e.g. ``("ref", "sec1")``.
+    """
+    if snap_version is not None and snap_version >= _SNAP_RENAMED_STACK_BANDS:
+        return ("ref", "sec1")
+    return ("mst", "slv1")
+
+
+# SNAP 14 added the `correctCoherenceBias` and `removeLocalPhaseRamp` options
+# to the Coherence operator. GPT rejects a parameter its operator does not
+# know, so the graph carries them only for the versions that have them.
+_SNAP_ADDED_COHERENCE_OPTIONS = (14,)
+
+
+def supports_coherence_options(snap_version: tuple[int, ...] | None) -> bool:
+    """Whether a SNAP version knows the Coherence operator's SNAP 14 options.
+
+    Parameters
+    ----------
+    snap_version : tuple of int or None
+        SNAP version as returned by :func:`s1bursts.snap_client.snap_version`.
+        ``None`` (an installation whose version could not be read) counts as
+        not supporting them.
+
+    Returns
+    -------
+    bool
+        ``True`` for SNAP 14 and newer.
+    """
+    return snap_version is not None and snap_version >= _SNAP_ADDED_COHERENCE_OPTIONS
+
+
+def _coherence_option_values(
+    cfg: CoherenceConfig,
+    snap_version: tuple[int, ...] | None,
+) -> tuple[bool | None, bool | None]:
+    """Resolve the SNAP 14 Coherence options to write, ``None`` each to leave out.
+
+    Raises
+    ------
+    ConfigurationError
+        If an option is enabled but the SNAP version cannot run it.
+    """
+    if supports_coherence_options(snap_version):
+        return (cfg.correct_coherence_bias, cfg.remove_local_phase_ramp)
+
+    enabled = [
+        name
+        for name, value in (
+            ("correct_coherence_bias", cfg.correct_coherence_bias),
+            ("remove_local_phase_ramp", cfg.remove_local_phase_ramp),
+        )
+        if value
+    ]
+    if enabled:
+        installed = (
+            "the installed SNAP version could not be determined"
+            if snap_version is None
+            else f"the installed version is {'.'.join(str(part) for part in snap_version)}"
+        )
+        msg = (
+            f"CoherenceConfig({', '.join(f'{name}=True' for name in enabled)}) requires "
+            f"SNAP 14 or newer, but {installed}. Upgrade SNAP, or leave the option off."
+        )
+        raise ConfigurationError(msg)
+    # Not writing them is not the same as turning them off: SNAP 14 defaults
+    # `correctCoherenceBias` to true. Older SNAP has neither behaviour anyway.
+    return (None, None)
+
+
+def _intensity_target_bands(snap_version: tuple[int, ...] | None) -> list[dict[str, Any]]:
+    primary, secondary = stack_band_suffixes(snap_version)
     return [
         {
             "name": "int1",
             "type": "float32",
             "expression": (
-                "sq(i_${swath}_${polarization}_mst_${date1}) + "
-                "sq(q_${swath}_${polarization}_mst_${date1})"
+                f"sq(i_${{swath}}_${{polarization}}_{primary}_${{date1}}) + "
+                f"sq(q_${{swath}}_${{polarization}}_{primary}_${{date1}})"
             ),
             "unit": "intensity",
             "noDataValue": 0,
@@ -524,8 +633,8 @@ def _intensity_target_bands() -> list[dict[str, Any]]:
             "name": "int2",
             "type": "float32",
             "expression": (
-                "sq(i_${swath}_${polarization}_slv1_${date2}) + "
-                "sq(q_${swath}_${polarization}_slv1_${date2})"
+                f"sq(i_${{swath}}_${{polarization}}_{secondary}_${{date2}}) + "
+                f"sq(q_${{swath}}_${{polarization}}_{secondary}_${{date2}})"
             ),
             "unit": "intensity",
             "noDataValue": 0,
@@ -534,39 +643,42 @@ def _intensity_target_bands() -> list[dict[str, Any]]:
 
 
 def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
+    # Terrain-Correction applies the real band's no-data value to the complex pair.
     cond = "(int1 != 0) and (int2 != 0)"
     return [
         {
             "name": "i_ifg",
             "type": "float32",
             "expression": (
-                f"{cond} ? i_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : NaN"
+                f"{cond} ? i_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : "
+                f"{_SENTINEL_EXPR}"
             ),
             "unit": "real",
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
         {
             "name": "q_ifg",
             "type": "float32",
             "expression": (
-                f"{cond} ? q_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : NaN"
+                f"{cond} ? q_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : "
+                f"{_SENTINEL_EXPR}"
             ),
             "unit": "imaginary",
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
         {
             "name": "intensity1",
             "type": "float32",
-            "expression": f"{cond} ? int1 : NaN",
+            "expression": f"{cond} ? int1 : {_SENTINEL_EXPR}",
             "unit": "intensity",
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
         {
             "name": "intensity2",
             "type": "float32",
-            "expression": f"{cond} ? int2 : NaN",
+            "expression": f"{cond} ? int2 : {_SENTINEL_EXPR}",
             "unit": "intensity",
-            "noDataValue": "NaN",
+            "noDataValue": _SENTINEL_EXPR,
         },
     ]
 
@@ -602,7 +714,7 @@ def build_backscatter_graph(cfg: BackscatterConfig) -> str:
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
             g,
-            "ReplaceZerosWithNaNs",
+            "ReplaceZerosWithNoData",
             src,
             target_bands=_replace_zeros_target_bands_backscatter(
                 flatten_terrain=cfg.flatten_terrain,
@@ -640,8 +752,13 @@ def _build_pair_prefix(g: Element, cfg: GeocodingConfig) -> str:
     )
 
 
-def build_coherence_graph(cfg: CoherenceConfig) -> str:
+def build_coherence_graph(
+    cfg: CoherenceConfig,
+    *,
+    snap_version: tuple[int, ...] | None = None,
+) -> str:
     """Single-shot SLC→Coherence→Terrain-Correction graph."""
+    correct_coherence_bias, remove_local_phase_ramp = _coherence_option_values(cfg, snap_version)
     g = _new_graph()
     src = _build_pair_prefix(g, cfg)
     win_rg, win_az = cfg.window
@@ -654,6 +771,8 @@ def build_coherence_graph(cfg: CoherenceConfig) -> str:
         subtract_flat_earth_phase=cfg.subtract_flat_earth_phase,
         subtract_topographic_phase=cfg.subtract_topographic_phase,
         square_pixel=cfg.square_pixel,
+        correct_coherence_bias=correct_coherence_bias,
+        remove_local_phase_ramp=remove_local_phase_ramp,
         dem=cfg.dem,
         nodata=cfg.external_dem_nodata,
         apply_egm=cfg.external_dem_apply_egm,
@@ -662,7 +781,7 @@ def build_coherence_graph(cfg: CoherenceConfig) -> str:
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
             g,
-            "ReplaceZerosWithNaNs",
+            "ReplaceZerosWithNoData",
             src,
             target_bands=_replace_zeros_target_bands_coherence(),
         )
@@ -691,6 +810,7 @@ def _build_ifg_branched_graph(
     dem: str | Path,
     nodata: float,
     apply_egm: bool,
+    snap_version: tuple[int, ...] | None,
 ) -> str:
     """Emit the Interferogram + IntensityBands branches and merge them.
 
@@ -712,14 +832,18 @@ def _build_ifg_branched_graph(
         g,
         "IntensityBands",
         "Back-Geocoding",
-        target_bands=_intensity_target_bands(),
+        target_bands=_intensity_target_bands(snap_version),
         include_variables_element=False,
     )
     _band_merge(g, "BandMerge", ["IfgSelect", "IntensityBands"])
     return _topsar_deburst(g, "TOPSAR-Deburst", "BandMerge")
 
 
-def build_interferogram_graph(cfg: InterferogramConfig) -> str:
+def build_interferogram_graph(
+    cfg: InterferogramConfig,
+    *,
+    snap_version: tuple[int, ...] | None = None,
+) -> str:
     """Branched SLC→(Ifg | intensities)→merge→deburst→Terrain-Correction graph."""
     g = _new_graph()
     _build_pair_prefix(g, cfg)
@@ -731,11 +855,12 @@ def build_interferogram_graph(cfg: InterferogramConfig) -> str:
         dem=cfg.dem,
         nodata=cfg.external_dem_nodata,
         apply_egm=cfg.external_dem_apply_egm,
+        snap_version=snap_version,
     )
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
             g,
-            "ReplaceZerosWithNaNs",
+            "ReplaceZerosWithNoData",
             src,
             target_bands=_ifg_replace_zeros_target_bands(),
             include_variables_element=False,
@@ -764,6 +889,37 @@ def build_interferogram_graph(cfg: InterferogramConfig) -> str:
 # ---------------------------------------------------------------------------
 
 _PositiveInt = Annotated[int, Field(gt=0)]
+_PositiveFloat = Annotated[float, Field(gt=0)]
+
+# Plain assignments rather than PEP 695 `type` aliases: these annotate Pydantic
+# fields, and older Pydantic releases within the supported range do not resolve
+# a `type` alias to its value, warning and falling back to no validation.
+ResamplingMethod = Literal[
+    "NEAREST_NEIGHBOUR",
+    "BILINEAR_INTERPOLATION",
+    "CUBIC_CONVOLUTION",
+    "BISINC_5_POINT_INTERPOLATION",
+    "BISINC_11_POINT_INTERPOLATION",
+    "BISINC_21_POINT_INTERPOLATION",
+    "BICUBIC_INTERPOLATION",
+]
+"""Resampling methods SNAP's Terrain-Correction operator accepts.
+
+An unsupported name is not rejected by GPT until the graph has already run for
+minutes, so it is checked when the config is built instead.
+"""
+
+DEMResamplingMethod = Literal[
+    "NEAREST_NEIGHBOUR",
+    "BILINEAR_INTERPOLATION",
+    "CUBIC_CONVOLUTION",
+    "BISINC_5_POINT_INTERPOLATION",
+    "BISINC_11_POINT_INTERPOLATION",
+    "BISINC_21_POINT_INTERPOLATION",
+    "BICUBIC_INTERPOLATION",
+    "DELAUNAY_INTERPOLATION",
+]
+"""Resampling methods SNAP accepts for the DEM, which adds Delaunay interpolation."""
 
 
 class GeocodingConfig(BaseModel):
@@ -775,14 +931,17 @@ class GeocodingConfig(BaseModel):
     Parameters
     ----------
     grid_spacing : float, default 10.0
-        Output pixel spacing in metres of the target CRS.
+        Output pixel spacing in metres of the target CRS. Must be positive.
     dem : str or Path, default "Copernicus 30m Global DEM"
         DEM used for geocoding. A string selects one of SNAP's auto-download
         DEMs; a path (or a string with a file suffix) is passed as an external
         DEM.
-    img_resampling : str, default "BILINEAR_INTERPOLATION"
+    dem_name : str or None, optional
+        Identification written to product metadata for an external DEM. Ignored
+        for SNAP's built-in DEMs, whose ``dem`` value is already their name.
+    img_resampling : ResamplingMethod, default "BILINEAR_INTERPOLATION"
         Resampling of the image during terrain correction.
-    dem_resampling : str, default "BILINEAR_INTERPOLATION"
+    dem_resampling : DEMResamplingMethod, default "BILINEAR_INTERPOLATION"
         Resampling of the DEM during terrain correction.
     align_to_standard_grid : bool, default True
         Snap the output to a fixed global grid, so products from different
@@ -800,7 +959,10 @@ class GeocodingConfig(BaseModel):
         Set it ``True`` for an orthometric DEM (heights above mean sea level,
         the usual case for national DEMs) and leave it ``False`` only when the
         DEM already carries ellipsoidal heights. Note this default differs from
-        SNAP's own, which is ``True``.
+        SNAP's own, which is ``True``. Leave it ``False`` for a DEM returned by
+        :func:`s1bursts.prepare_dem_for_snap`, which has already been converted
+        to ellipsoidal heights. SNAP only applies EGM96, so preprocess DEMs in
+        other vertical datums such as EGM2008 instead of enabling this option.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
@@ -817,10 +979,11 @@ class GeocodingConfig(BaseModel):
             return Path(v)
         return v
 
-    grid_spacing: float = 10.0
+    grid_spacing: _PositiveFloat = 10.0
     dem: str | Path = "Copernicus 30m Global DEM"
-    img_resampling: str = "BILINEAR_INTERPOLATION"
-    dem_resampling: str = "BILINEAR_INTERPOLATION"
+    dem_name: str | None = None
+    img_resampling: ResamplingMethod = "BILINEAR_INTERPOLATION"
+    dem_resampling: DEMResamplingMethod = "BILINEAR_INTERPOLATION"
     align_to_standard_grid: bool = True
     external_dem_nodata: float = 0.0
     external_dem_apply_egm: bool = False
@@ -833,12 +996,32 @@ class GeocodingConfig(BaseModel):
         return (half, half)
 
     @abstractmethod
-    def to_xml(self) -> str:
-        """Build the SNAP GPT graph XML for this config."""
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
+        """Build the SNAP GPT graph XML for this config.
 
-    def to_mermaid(self) -> str:
-        """Mermaid ``flowchart LR`` diagram source for this config's graph."""
-        return xml_to_mermaid(self.to_xml())
+        Parameters
+        ----------
+        snap_version : tuple of int, optional
+            SNAP version the graph will run under, from
+            :func:`s1bursts.snap_client.snap_version`. The backscatter graph
+            does not vary with it; the interferogram graph names the stack
+            bands accordingly (see :func:`stack_band_suffixes`) and the
+            coherence graph writes only the options that version has (see
+            :func:`supports_coherence_options`). Defaults to SNAP 13 and
+            earlier.
+        """
+
+    def to_mermaid(self, *, snap_version: tuple[int, ...] | None = None) -> str:
+        """Mermaid ``flowchart LR`` diagram source for this config's graph.
+
+        Parameters
+        ----------
+        snap_version : tuple of int, optional
+            SNAP version the graph will run under, as for :meth:`to_xml`. No
+            diagram varies with it, but a config whose options need SNAP 14
+            cannot build its graph without it.
+        """
+        return xml_to_mermaid(self.to_xml(snap_version=snap_version))
 
 
 class BackscatterConfig(GeocodingConfig):
@@ -862,7 +1045,7 @@ class BackscatterConfig(GeocodingConfig):
         the range looks and the local geometry and discards the requested
         ``n_az_looks`` is pinned off. Therefore, the looks given are the looks applied.
     dem_oversampling : float, default 1.0
-        DEM oversampling factor used by ``Terrain-Flattening``.
+        DEM oversampling factor used by ``Terrain-Flattening``. Must be positive.
     additional_overlap : float, default 0.2
         Additional overlap percentage used by ``Terrain-Flattening`` when
         searching for terrain contributions outside the tile.
@@ -873,7 +1056,7 @@ class BackscatterConfig(GeocodingConfig):
 
     flatten_terrain: bool = True
     multilook: tuple[_PositiveInt, _PositiveInt] | None = (5, 1)
-    dem_oversampling: float = 1.0
+    dem_oversampling: _PositiveFloat = 1.0
     additional_overlap: float = Field(default=0.2, ge=0.0)
     replace_zeros_with_nan: bool = True
 
@@ -884,8 +1067,12 @@ class BackscatterConfig(GeocodingConfig):
             return ["Gamma0", "simulatedImage"]
         return ["Beta0"]
 
-    def to_xml(self) -> str:
-        """Build the backscatter graph XML for this config."""
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:  # noqa: ARG002
+        """Build the backscatter graph XML for this config.
+
+        Takes ``snap_version`` for a uniform signature; this graph names no
+        Back-Geocoding bands, so the version does not change it.
+        """
         return build_backscatter_graph(self)
 
 
@@ -915,6 +1102,16 @@ class CoherenceConfig(GeocodingConfig):
         square ground pixels. Leave off: as with SNAP's ``grSquarePixel`` on
         the ``Multilook`` operator, enabling it means the applied window is not
         the requested one.
+    correct_coherence_bias : bool, default False
+        Remove the positive bias a finite estimation window leaves in the
+        coherence magnitude. Requires SNAP 14; building the graph for an older
+        or undetermined version raises ``ConfigurationError``. Off by default,
+        unlike SNAP's own default, so that the estimator stays the one the
+        window describes and stays comparable across SNAP versions.
+    remove_local_phase_ramp : bool, default False
+        Let SNAP estimate and remove a local phase ramp within each estimation
+        window before averaging, which recovers coherence lost to residual
+        fringes. Requires SNAP 14, as above.
     replace_zeros_with_nan : bool, default True
         Convert SNAP's zero fill value to NaN.
     """
@@ -923,6 +1120,8 @@ class CoherenceConfig(GeocodingConfig):
     subtract_flat_earth_phase: bool = True
     subtract_topographic_phase: bool = True
     square_pixel: bool = False
+    correct_coherence_bias: bool = False
+    remove_local_phase_ramp: bool = False
     replace_zeros_with_nan: bool = True
 
     @property
@@ -930,9 +1129,16 @@ class CoherenceConfig(GeocodingConfig):
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
         return ["coh"]
 
-    def to_xml(self) -> str:
-        """Build the coherence graph XML for this config."""
-        return build_coherence_graph(self)
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
+        """Build the coherence graph XML for this config.
+
+        Raises
+        ------
+        ConfigurationError
+            If ``correct_coherence_bias`` or ``remove_local_phase_ramp`` is
+            enabled but ``snap_version`` is older than 14 or unknown.
+        """
+        return build_coherence_graph(self, snap_version=snap_version)
 
 
 class InterferogramConfig(GeocodingConfig):
@@ -963,18 +1169,22 @@ class InterferogramConfig(GeocodingConfig):
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
         return ["ifg_i", "ifg_q", "intensity_1", "intensity_2"]
 
-    def to_xml(self) -> str:
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
         """Build the interferogram graph XML for this config."""
-        return build_interferogram_graph(self)
+        return build_interferogram_graph(self, snap_version=snap_version)
 
 
 __all__ = [
     "BackscatterConfig",
     "CoherenceConfig",
+    "DEMResamplingMethod",
     "GeocodingConfig",
     "InterferogramConfig",
+    "ResamplingMethod",
     "build_backscatter_graph",
     "build_coherence_graph",
     "build_interferogram_graph",
+    "stack_band_suffixes",
+    "supports_coherence_options",
     "xml_to_mermaid",
 ]

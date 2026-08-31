@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from functools import lru_cache
 import logging
+import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from freezebase.raster import (
     build_rasterio_profile,
@@ -19,7 +22,8 @@ from freezebase.raster import (
 )
 import rasterio
 
-from s1bursts.config import get_settings
+from s1bursts import product_tags
+from s1bursts.config import get_settings, warn_if_tmpdir_unusable
 from s1bursts.errors import (
     BurstError,
     ConfigurationError,
@@ -32,6 +36,7 @@ from s1bursts.product import (
     InterferogramProduct,
     RTCProduct,
 )
+from s1bursts.snap_graph import NODATA_SENTINEL
 from s1bursts.summary import ErrorResult, OkResult, OperationResult
 
 if TYPE_CHECKING:
@@ -42,6 +47,7 @@ if TYPE_CHECKING:
     from s1bursts.burst import Burst, BurstPair
     from s1bursts.config import SNAPSettings
     from s1bursts.filemanager import FileManager
+    from s1bursts.product_tags import RasterMetadata
     from s1bursts.snap_graph import (
         BackscatterConfig,
         CoherenceConfig,
@@ -49,6 +55,13 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+# Non-heap memory a GPT run needs beyond `-Xmx`: JVM metaspace, thread stacks,
+# GDAL's native buffers, and enough left over for the OS page cache.
+_JVM_OVERHEAD_MB = 3_000
+
+# Smallest per-worker heap that can load SNAP's operator graph.
+_MIN_HEAP_MB = 512
 
 _AUXDATA_SUBDIRS: tuple[str, ...] = ("dem", "Orbits")
 
@@ -99,6 +112,46 @@ def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path
     return gpt_path
 
 
+# Tested versions, as (major, minor). The CI matrix and README badge must agree;
+# tests/test_supported_snap_versions.py enforces that.
+SUPPORTED_SNAP_VERSIONS: Final[tuple[tuple[int, int], ...]] = ((13, 0), (14, 0))
+
+
+_BARE_VERSION_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)\s*$")
+
+
+def _as_version(text: str) -> tuple[int, ...] | None:
+    """Parse a dotted version string into a comparable tuple."""
+    match = _BARE_VERSION_PATTERN.match(text)
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+@lru_cache(maxsize=8)
+def snap_version(gpt_path: Path) -> tuple[int, ...] | None:
+    """Version of the SNAP installation a ``gpt`` executable belongs to.
+
+    Reads ``VERSION.txt`` from the installation directory. The result is cached
+    per executable.
+
+    Parameters
+    ----------
+    gpt_path : Path
+        The ``gpt`` executable, as resolved by :func:`_resolve_gpt_path`.
+
+    Returns
+    -------
+    tuple of int or None
+        The version as a comparable tuple, e.g. ``(14, 0, 0)``, or ``None``
+        where the file is missing or unparsable.
+    """
+    version_file = gpt_path.parent.parent / "VERSION.txt"
+    with suppress(OSError):
+        return _as_version(version_file.read_text())
+    return None
+
+
 def _extract_gpt_error(
     stdout: str | None,
     stderr: str | None,
@@ -139,6 +192,33 @@ def _extract_gpt_error(
     return detail[:max_chars]
 
 
+def _normalize_nodata(dataset: rasterio.io.DatasetWriter, nodata: float) -> int:
+    """Replace SNAP's finite sentinel and all-band zero fill with ``nodata``.
+
+    Terrain-Correction can leave zeros in edge tiles over DEM voids. Requiring
+    zero in every band preserves valid zero crossings in complex products. This
+    normalization is only safe after the graph's no-data band maths has run.
+
+    Returns
+    -------
+    int
+        Number of pixels replaced.
+    """
+    replaced = 0
+    for _, window in dataset.block_windows(1):
+        data = dataset.read(window=window)
+        marked = data == NODATA_SENTINEL
+        marked[:, (data == 0).all(axis=0)] = True
+        if not marked.any():
+            continue
+        data[marked] = nodata
+        dataset.write(data, window=window)
+        replaced += int(marked.any(axis=0).sum())
+    if replaced:
+        logger.debug("Replaced SNAP's no-data markers in %d pixels", replaced)
+    return replaced
+
+
 @dataclass
 class SNAPConfig:
     """Runtime configuration for SNAP GPT processing.
@@ -152,20 +232,28 @@ class SNAPConfig:
         Overrides for the rasterio profile used when rewriting GPT output
         GeoTIFFs. Merged over ``{"dtype": "float32", "nodata": "nan"}``.
     max_workers : int, optional
-        Number of parallel GPT subprocesses. Defaults to ``SNAP_MAX_WORKERS``
-        (or 1).
+        Number of parallel GPT subprocesses; at least 1. Defaults to
+        ``SNAP_MAX_WORKERS`` (or 1).
     max_ram_gb : float, optional
-        Total RAM budget across all GPT processes in GB. Defaults to
-        ``SNAP_MAX_RAM_GB`` (or 4).
+        Total RAM budget across all GPT processes in GB; must be positive and
+        large enough to give every worker a 512 MB heap on top of 3 GB of JVM
+        and OS overhead. Defaults to ``SNAP_MAX_RAM_GB`` (or 4).
     gpt_threads_per_job : int, optional
-        Threads per GPT process (``-q``). Defaults to ``SNAP_THREADS_PER_JOB``
-        or ``cpu_count // max_workers``.
+        Threads per GPT process (``-q``); at least 1. Defaults to
+        ``SNAP_THREADS_PER_JOB`` or ``cpu_count // max_workers``.
     gpt_cache_ratio : float, optional
-        Fraction of the per-process RAM budget used for the GPT tile cache
-        (``-c``). Defaults to ``SNAP_CACHE_RATIO`` (or 0.7).
+        Fraction of the per-process Java heap used for the GPT tile cache
+        (``-c``); greater than 0 and at most 1. Defaults to
+        ``SNAP_CACHE_RATIO`` (or 0.7).
     auxdata_path : Path, optional
         Shared SNAP auxdata cache (DEM tiles, orbit files). Defaults to
         ``SNAP_AUXDATA_PATH`` (or ``~/.snap/auxdata``).
+
+    Raises
+    ------
+    ConfigurationError
+        If a resource value is out of range, if the RAM budget cannot cover the
+        requested workers, or if GPT or the auxdata path cannot be resolved.
     """
 
     bin: Path | None = None
@@ -187,6 +275,8 @@ class SNAPConfig:
         # Update profile with default values if not specified by user
         base_profile = {"dtype": "float32", "nodata": "nan"}
         self.rasterio_profile = build_rasterio_profile(base_profile, self.rasterio_profile)
+        # Each GPT run stages an uncompressed GeoTIFF through tempfile.
+        warn_if_tmpdir_unusable()
         snap_settings = get_settings().snap
         self._resolve_paths(snap_settings)
         self._resolve_resources(snap_settings)
@@ -195,6 +285,29 @@ class SNAPConfig:
         """Resolve GPT and auxdata paths from explicit values and settings."""
         self.resolved_gpt_path = _resolve_gpt_path(self.bin, snap_settings)
         logger.debug("Resolved SNAP GPT executable: %s", self.resolved_gpt_path)
+
+        # Graph band names depend on it; see `stack_band_suffixes`.
+        self.resolved_snap_version = snap_version(self.resolved_gpt_path)
+        if self.resolved_snap_version is None:
+            logger.warning(
+                "Could not determine the SNAP version of '%s'; assuming the band naming "
+                "of SNAP 13 and earlier. Interferogram processing will fail if this "
+                "installation is SNAP 14 or newer.",
+                self.resolved_gpt_path,
+            )
+        else:
+            logger.debug(
+                "Resolved SNAP version: %s",
+                ".".join(str(part) for part in self.resolved_snap_version),
+            )
+            if self.resolved_snap_version[:2] not in SUPPORTED_SNAP_VERSIONS:
+                logger.warning(
+                    "SNAP %s has not been tested with this version of s1bursts, which is "
+                    "tested against %s. Processing may still work; graph band names are "
+                    "chosen for the closest known naming.",
+                    ".".join(str(part) for part in self.resolved_snap_version),
+                    ", ".join(f"{major}.{minor}" for major, minor in SUPPORTED_SNAP_VERSIONS),
+                )
 
         auxdata_path = self.auxdata_path or snap_settings.auxdata_path
         if auxdata_path is None:
@@ -206,20 +319,62 @@ class SNAPConfig:
 
         self.resolved_auxdata_path = auxdata_path
 
+    def _validate_resources(self) -> None:
+        """Reject resource values that cannot describe a runnable job.
+
+        These are caught here rather than left to GPT, which reports an
+        out-of-range heap only after the JVM has already failed to start.
+        """
+        for name, value, minimum in (
+            ("max_workers", self.max_workers, 1),
+            ("gpt_threads_per_job", self.gpt_threads_per_job, 1),
+        ):
+            if value is not None and value < minimum:
+                msg = f"`{name}` must be at least {minimum}, received {value}."
+                raise ConfigurationError(msg)
+
+        if self.max_ram_gb is not None and self.max_ram_gb <= 0:
+            msg = f"`max_ram_gb` must be positive, received {self.max_ram_gb}."
+            raise ConfigurationError(msg)
+
+        if self.gpt_cache_ratio is not None and not 0 < self.gpt_cache_ratio <= 1:
+            msg = (
+                "`gpt_cache_ratio` must be greater than 0 and at most 1, "
+                f"received {self.gpt_cache_ratio}."
+            )
+            raise ConfigurationError(msg)
+
     def _resolve_resources(self, snap_settings: SNAPSettings) -> None:
         """Resolve GPT resource parameters from explicit values, settings, and defaults."""
+        self._validate_resources()
         n_cpus = os.cpu_count() or 4
 
         # max_workers: explicit > settings > 1
-        self.resolved_max_workers = max(1, self.max_workers or snap_settings.max_workers)
+        self.resolved_max_workers = self.max_workers or snap_settings.max_workers
 
         # total RAM budget for Xmx calculation
         ram_gb = self.max_ram_gb or snap_settings.max_ram_gb
         ram_mb = int(ram_gb * 1024)
 
-        # per-job Xmx (MB), with a floor so small RAM budgets never produce
-        # a zero or negative -Xmx value
-        self.resolved_xmx_mb = max(512, (ram_mb - 3_000) // self.resolved_max_workers)
+        # Reserve headroom for the JVM's own non-heap memory and the OS, then
+        # split what is left between workers.
+        self.resolved_xmx_mb = (ram_mb - _JVM_OVERHEAD_MB) // self.resolved_max_workers
+
+        # A heap below this cannot load SNAP's operator graph at all, so an
+        # over-subscribed budget is reported rather than quietly rounded up past
+        # the RAM the caller said was available.
+        if self.resolved_xmx_mb < _MIN_HEAP_MB:
+            required_mb = _JVM_OVERHEAD_MB + _MIN_HEAP_MB * self.resolved_max_workers
+            # Round the suggestion up, so following it actually clears the check.
+            required_gb = math.ceil(required_mb / 1024 * 100) / 100
+            msg = (
+                f"A RAM budget of {ram_gb:g} GB across {self.resolved_max_workers} worker(s) "
+                f"leaves {self.resolved_xmx_mb} MB of heap per worker, below the "
+                f"{_MIN_HEAP_MB} MB SNAP needs (after {_JVM_OVERHEAD_MB} MB of JVM and OS "
+                f"overhead). Raise `max_ram_gb` to at least {required_gb:g} "
+                f"or lower `max_workers`."
+            )
+            raise ConfigurationError(msg)
 
         # threads per job (-q)
         self.resolved_threads_per_job = (
@@ -311,10 +466,7 @@ class SNAPClient:
             for k, v in process_params.items():
                 commands.append(f"-P{k}={v}")
 
-        # The JVM ignores TMPDIR and defaults java.io.tmpdir to /tmp, where jblas
-        # extracts 30 MB of native libraries and deletes them from a shutdown hook
-        # that a SIGKILL skips. Keeping them under the userdir hands cleanup to
-        # snap_worker_userdir, which removes it however gpt died.
+        # Keep jblas files under the worker directory so SIGKILL cannot orphan them.
         java_tmpdir = snap_userdir / "tmp"
         java_tmpdir.mkdir(parents=True, exist_ok=True)
 
@@ -362,10 +514,7 @@ class SNAPClient:
                     e.stdout,
                     e.stderr,
                 )
-                # Fold SNAP's own error text into the exception, since
-                # CalledProcessError only reports the exit code. Without this the
-                # real cause (e.g. "No valid orbit file found") never reaches the
-                # ErrorResult / summary the caller sees.
+                # Preserve SNAP's cause; CalledProcessError reports only the exit code.
                 detail = _extract_gpt_error(e.stdout, e.stderr) or "<no output captured>"
                 msg = f"GPT processing failed (exit {e.returncode}): {detail}"
             else:
@@ -397,7 +546,8 @@ class SNAPClient:
         staging_file: Path,
         product_path: Path | UPath,
         *,
-        band_names: list[str],
+        metadata: RasterMetadata,
+        normalize_nodata: bool = False,
     ) -> None:
         """Rewrite the staging GeoTIFF compressed to its final location.
 
@@ -411,8 +561,13 @@ class SNAPClient:
             Uncompressed GeoTIFF written by GPT.
         product_path : Path | UPath
             Final product location (local or S3).
-        band_names : list[str]
-            Band descriptions, one per band.
+        metadata : RasterMetadata
+            Tags, band descriptions and units to write into the product.
+        normalize_nodata : bool, default False
+            Convert the no-data markers GPT leaves behind into the product's own
+            no-data value; see :func:`_normalize_nodata`. Only pass ``True`` for
+            a graph that ran the band maths, since that is what makes the markers
+            unambiguous.
         """
         profile = self.config.rasterio_profile or {}
         nodata = profile.get("nodata")
@@ -426,13 +581,18 @@ class SNAPClient:
             if nodata is not None:
                 with rasterio.open(staging_file, "r+") as ds:
                     ds.nodata = float(nodata)
+                    if normalize_nodata:
+                        _normalize_nodata(ds, float(nodata))
             # The staging file is a disposable copy in a TemporaryDirectory, so move
             # it into place rather than leaving a redundant copy behind.
             rewrite_tiff(
                 src_file=staging_file,
                 dst_file=product_path,
                 profile=profile,
-                band_names=band_names,
+                band_names=metadata.band_names,
+                tags=metadata.tags,
+                band_tags=metadata.band_tags or None,
+                units=metadata.units,
                 move=True,
             )
         finally:
@@ -486,7 +646,11 @@ class SNAPClient:
         with tempfile.TemporaryDirectory(prefix="s1bursts-") as tmp:
             tmp_dir = Path(tmp)
             staging_file = tmp_dir / product_path.name
-            graph_file = _write_graph(tmp_dir, "backscatter", config.to_xml())
+            graph_file = _write_graph(
+                tmp_dir,
+                "backscatter",
+                config.to_xml(snap_version=self.config.resolved_snap_version),
+            )
             with snap_worker_userdir(self.config.resolved_auxdata_path, tmp_dir) as snap_userdir:
                 try:
                     source_file = self._stage_slc(burst, tmp_dir)
@@ -504,7 +668,12 @@ class SNAPClient:
                     self._finalize_product(
                         staging_file,
                         product_path,
-                        band_names=config.output_bands,
+                        metadata=product_tags.burst_metadata(
+                            product,
+                            config,
+                            snap_version=self.config.resolved_snap_version,
+                        ),
+                        normalize_nodata=config.replace_zeros_with_nan,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst '%s'", burst)
@@ -553,7 +722,11 @@ class SNAPClient:
         with tempfile.TemporaryDirectory(prefix="s1bursts-") as tmp:
             tmp_dir = Path(tmp)
             staging_file = tmp_dir / product_path.name
-            graph_file = _write_graph(tmp_dir, "coherence", config.to_xml())
+            graph_file = _write_graph(
+                tmp_dir,
+                "coherence",
+                config.to_xml(snap_version=self.config.resolved_snap_version),
+            )
             with snap_worker_userdir(self.config.resolved_auxdata_path, tmp_dir) as snap_userdir:
                 try:
                     primary_file = self._stage_slc(pair.primary, tmp_dir)
@@ -577,7 +750,12 @@ class SNAPClient:
                     self._finalize_product(
                         staging_file,
                         product_path,
-                        band_names=config.output_bands,
+                        metadata=product_tags.burst_metadata(
+                            product,
+                            config,
+                            snap_version=self.config.resolved_snap_version,
+                        ),
+                        normalize_nodata=config.replace_zeros_with_nan,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)
@@ -624,7 +802,11 @@ class SNAPClient:
         with tempfile.TemporaryDirectory(prefix="s1bursts-") as tmp:
             tmp_dir = Path(tmp)
             staging_file = tmp_dir / product_path.name
-            graph_file = _write_graph(tmp_dir, "interferogram", config.to_xml())
+            graph_file = _write_graph(
+                tmp_dir,
+                "interferogram",
+                config.to_xml(snap_version=self.config.resolved_snap_version),
+            )
             with snap_worker_userdir(self.config.resolved_auxdata_path, tmp_dir) as snap_userdir:
                 try:
                     primary_file = self._stage_slc(pair.primary, tmp_dir)
@@ -648,7 +830,12 @@ class SNAPClient:
                     self._finalize_product(
                         staging_file,
                         product_path,
-                        band_names=config.output_bands,
+                        metadata=product_tags.burst_metadata(
+                            product,
+                            config,
+                            snap_version=self.config.resolved_snap_version,
+                        ),
+                        normalize_nodata=config.replace_zeros_with_nan,
                     )
                 except (BurstError, FileNotFoundError, RuntimeError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)

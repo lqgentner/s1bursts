@@ -1,19 +1,24 @@
 name: Integration
 
-# Live tests against CDSE (OData + S3) and, where available, a local SNAP GPT
-# install. These need real credentials and are slow, so they do not run on every
-# push: trigger them manually (workflow_dispatch) or on the weekly schedule.
+# Live tests against CDSE (OData + S3) and ESA SNAP. These need real credentials
+# and are slow, so they do not run on every push: trigger them manually
+# (workflow_dispatch) or on the weekly schedule.
 #
 # Configure these repository secrets before first use:
 #   CDSE_USERNAME, CDSE_PASSWORD                       -- OData downloads
 #   CDSE_S3_ACCESS_KEY_ID, CDSE_S3_SECRET_ACCESS_KEY   -- S3 burst extraction
 #
-# Each integration test skips itself when its prerequisites are missing (see
-# tests/test_integration.py), so the SNAP-dependent cases are skipped until a
-# `gpt` executable is provisioned on the runner (see the commented step below).
+# SNAP comes from the images built by container.yml, one per supported version.
+# Every prerequisite is provided here, so S1BURSTS_REQUIRE_INTEGRATION turns a
+# skipped test into a failure: a run that skipped everything would look passing.
 
 on:
   workflow_dispatch:
+    inputs:
+      snap_image:
+        description: "Run a single leg against this image instead of the supported set"
+        type: string
+        default: ""
   schedule:
     # Mondays at 05:00 UTC.
     - cron: "0 5 * * 1"
@@ -23,25 +28,102 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  integration:
+  legs:
+    name: Resolve SNAP versions
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - id: resolve
+        # The first leg runs the whole suite; the rest only the SNAP subset,
+        # since a second full leg re-downloads the same bursts for nothing.
+        # Tags are pinned per version: publish with container.yml, then bump.
+        # `snap_image` overrides with a single image, passed via the
+        # environment so an arbitrary input cannot reach the shell.
+        env:
+          SNAP_IMAGE: ${{ inputs.snap_image }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SNAP_IMAGE}" ]; then
+            matrix="$(jq -cn --arg image "${SNAP_IMAGE}" \
+              '[{snap: "dispatch", image: $image, select: "integration"}]')"
+          else
+            matrix='[
+              {"snap": "13.0.0", "image": "ghcr.io/lqgentner/s1bursts-snap:snap13.0.0", "select": "integration"},
+              {"snap": "14.0.0", "image": "ghcr.io/lqgentner/s1bursts-snap:snap14.0.0", "select": "integration and snap"}
+            ]'
+            matrix="$(printf '%s' "${matrix}" | jq -c .)"
+          fi
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+          printf 'legs: %s\n' "${matrix}"
+
+  integration:
+    name: SNAP ${{ matrix.leg.snap }}
+    needs: legs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      # A break in one version must not cancel the other leg's result.
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJSON(needs.legs.outputs.matrix) }}
+    container:
+      image: ${{ matrix.leg.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    # A cold auxdata cache (DEM tiles, precise orbits) plus a full burst process
+    # outruns the default step budget.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
         with:
-          enable-cache: true
-      - run: uv sync --all-extras
+          # hatch-vcs derives the version from git tags/history.
+          fetch-depth: 0
 
-      # ESA SNAP is not installed here: provisioning `gpt` (a multi-GB install
-      # plus one-time auxdata download) is environment-specific. Add a setup step
-      # that installs SNAP and exports `SNAP_GPT_PATH` to also exercise the
-      # processing paths; until then the SNAP-dependent tests skip themselves.
+      - name: Trust the checkout
+        # The container runs as root while the checkout is owned by the runner
+        # user, so git refuses to read it until the path is marked safe. Without
+        # this hatch-vcs cannot derive a version and `uv sync` fails.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # uv ships in the image, so there is no setup-uv step. Only the resolved
+      # wheels are cached, keyed on the lockfile.
+      - name: Cache uv downloads
+        uses: actions/cache@v4
+        with:
+          path: /root/.cache/uv
+          key: uv-integration-${{ matrix.leg.snap }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-integration-${{ matrix.leg.snap }}-
+
+      - run: uv sync
 
       - name: Record tool versions
+        # Keeps a run attributable to a specific toolchain, which is the point
+        # of pinning the image in the first place.
         run: |
           uv run python -c "import sys; print('python', sys.version)"
           uv run python -c "import rasterio; print('rasterio', rasterio.__version__)"
-          uv run python -c "import s1bursts; print('s1bursts', s1bursts.__version__ if hasattr(s1bursts, '__version__') else 'n/a')"
+          uv run python -c "import s1bursts; print('s1bursts', s1bursts.__version__)"
+          echo "snap $(cat "$SNAP_DIR/VERSION.txt" 2>/dev/null || echo unknown) at $SNAP_DIR"
+          "$SNAP_DIR/jre/bin/java" -version 2>&1 | head -1
+
+      - name: Verify SNAP is usable before running the suite
+        # Separates "SNAP is broken in this image" from "a test failed", which
+        # otherwise look the same in the pytest output.
+        env:
+          EXPECTED_SNAP: ${{ matrix.leg.snap }}
+        run: |
+          test -x "$SNAP_BIN/gpt" || { echo "SNAP gpt missing from the image"; exit 1; }
+          "$SNAP_BIN/gpt" -h > /dev/null || { echo "SNAP gpt failed to start"; exit 1; }
+          # The tag is the only thing asserting which SNAP ran; check it.
+          installed="$(cat "$SNAP_DIR/VERSION.txt" 2>/dev/null || echo unknown)"
+          if [ "${EXPECTED_SNAP}" != "dispatch" ] && [ "${installed}" != "${EXPECTED_SNAP}" ]; then
+            echo "image carries SNAP ${installed}, leg claims ${EXPECTED_SNAP}"
+            exit 1
+          fi
 
       - name: Run live integration tests
         env:
@@ -49,4 +131,9 @@ jobs:
           CDSE_PASSWORD: ${{ secrets.CDSE_PASSWORD }}
           CDSE_S3_ACCESS_KEY_ID: ${{ secrets.CDSE_S3_ACCESS_KEY_ID }}
           CDSE_S3_SECRET_ACCESS_KEY: ${{ secrets.CDSE_S3_SECRET_ACCESS_KEY }}
-        run: uv run pytest -q -m integration
+          SNAP_MAX_WORKERS: "1"
+          SNAP_MAX_RAM_GB: "6"
+          # Fail on a skipped integration test rather than passing over it;
+          # see tests/conftest.py.
+          S1BURSTS_REQUIRE_INTEGRATION: "1"
+        run: uv run pytest -v -m "${{ matrix.leg.select }}"

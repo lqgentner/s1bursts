@@ -11,8 +11,20 @@ from pandas import Timestamp
 type Polarization = Literal["VV", "VH", "HH", "HV"]
 type Mode = Literal["IW", "EW"]
 type SubSwath = Literal["IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"]
-type OrbitDirection = Literal["ASCENDING", "DESCENDING"]
+type PassDirection = Literal["Ascending", "Descending"]
 type PlatformSerialID = Literal["A", "B", "C", "D"]
+
+# The static types above are erased at runtime, so the accepted values are
+# repeated here to reject a typo when the query is built rather than letting
+# the CDSE API return an empty result set for it.
+_POLARIZATIONS = ("VV", "VH", "HH", "HV")
+_MODES = ("IW", "EW")
+_SUB_SWATHS = ("IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5")
+_PASS_DIRECTIONS = ("Ascending", "Descending")
+_PLATFORM_SERIAL_IDS = ("A", "B", "C", "D")
+
+# Sentinel-1's repeat cycle covers 175 relative orbits, numbered from 1.
+_MAX_REL_ORBIT_NUMBER = 175
 
 
 @runtime_checkable
@@ -37,21 +49,27 @@ class SearchQuery:
     intersects : HasWkt | None, optional
         Spatial filter; bursts must intersect this geometry.
     burst_id : int | None, optional
-        Sentinel-1 relative burst ID, unique within each sub-swath.
+        Sentinel-1 relative burst ID, unique within each sub-swath. Must be positive.
     abs_burst_id : int | None, optional
         Sentinel-1 absolute burst ID, globally unique across all sub-swaths and orbits.
+        Must be positive.
     polarization : {"VV", "VH", "HH", "HV"} | None, optional
         Polarization channel.
     mode : {"IW", "EW"} | None, optional
         Acquisition mode.
     sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"} | None, optional
         Sub-swath identifier.
-    orbit_direction : {"ASCENDING", "DESCENDING"} | None, optional
-        Orbit direction.
+    pass_direction : {"Ascending", "Descending"} | None, optional
+        Pass direction.
     platform_serial_id : {"A", "B", "C", "D"} | None, optional
         Sentinel-1 platform serial identifier.
     rel_orbit_number : int | None, optional
         Relative orbit number (1-175).
+
+    Raises
+    ------
+    ValueError
+        If any value falls outside its accepted range or set of identifiers.
     """
 
     def __init__(
@@ -63,20 +81,65 @@ class SearchQuery:
         polarization: Polarization | None = None,
         mode: Mode | None = None,
         sub_swath: SubSwath | None = None,
-        orbit_direction: OrbitDirection | None = None,
+        pass_direction: PassDirection | None = None,
         platform_serial_id: PlatformSerialID | None = None,
         rel_orbit_number: int | None = None,
     ) -> None:
         self.time_range = self._convert_to_timestamp_range(time_range)
         self.intersects = self._validate_geometry(intersects)
-        self.burst_id = self._validate_positive_int(burst_id, "burst_id")
-        self.abs_burst_id = self._validate_positive_int(abs_burst_id, "abs_burst_id")
-        self.polarization = polarization
-        self.sub_swath = sub_swath
-        self.mode = mode
-        self.orbit_direction = orbit_direction
-        self.platform_serial_id = platform_serial_id
-        self.rel_orbit_number = self._validate_positive_int(rel_orbit_number, "rel_orbit_number")
+        self.burst_id = self._validate_int_range(burst_id, "burst_id", minimum=1)
+        self.abs_burst_id = self._validate_int_range(abs_burst_id, "abs_burst_id", minimum=1)
+        self.polarization = self._validate_choice(polarization, "polarization", _POLARIZATIONS)
+        self.sub_swath = self._validate_choice(sub_swath, "sub_swath", _SUB_SWATHS)
+        self.mode = self._validate_choice(mode, "mode", _MODES)
+        self.pass_direction = self._validate_choice(
+            pass_direction,
+            "pass_direction",
+            _PASS_DIRECTIONS,
+        )
+        self.platform_serial_id = self._validate_choice(
+            platform_serial_id,
+            "platform_serial_id",
+            _PLATFORM_SERIAL_IDS,
+        )
+        self.rel_orbit_number = self._validate_int_range(
+            rel_orbit_number,
+            "rel_orbit_number",
+            minimum=1,
+            maximum=_MAX_REL_ORBIT_NUMBER,
+        )
+
+    @staticmethod
+    def _validate_choice[T: str](
+        value: T | None,
+        field_name: str,
+        allowed: tuple[str, ...],
+    ) -> T | None:
+        """Validate that a value is one of the accepted identifiers.
+
+        Parameters
+        ----------
+        value : str | None
+            Value to validate.
+        field_name : str
+            Name of the field, used in the error message.
+        allowed : tuple of str
+            Accepted values.
+
+        Returns
+        -------
+        str | None
+            The validated value.
+
+        Raises
+        ------
+        ValueError
+            If value is not one of ``allowed``.
+        """
+        if value is not None and value not in allowed:
+            msg = f"{field_name} must be one of {', '.join(allowed)}; received '{value}'"
+            raise ValueError(msg)
+        return value
 
     @staticmethod
     def _validate_geometry(geometry: HasWkt | None) -> HasWkt | None:
@@ -147,8 +210,14 @@ class SearchQuery:
         return (start, end)
 
     @staticmethod
-    def _validate_positive_int(value: int | None, field_name: str) -> int | None:
-        """Validate that an integer value is non-negative.
+    def _validate_int_range(
+        value: int | None,
+        field_name: str,
+        *,
+        minimum: int,
+        maximum: int | None = None,
+    ) -> int | None:
+        """Validate that an integer falls inside an inclusive range.
 
         Parameters
         ----------
@@ -156,6 +225,10 @@ class SearchQuery:
             Value to validate.
         field_name : str
             Name of the field, used in the error message.
+        minimum : int
+            Smallest accepted value.
+        maximum : int, optional
+            Largest accepted value; unbounded above if omitted.
 
         Returns
         -------
@@ -165,10 +238,13 @@ class SearchQuery:
         Raises
         ------
         ValueError
-            If value is negative.
+            If value falls outside the range.
         """
-        if value is not None and value < 0:
-            msg = f"{field_name} must be non-negative"
+        if value is None:
+            return None
+        if value < minimum or (maximum is not None and value > maximum):
+            bound = f"{minimum}-{maximum}" if maximum is not None else f"at least {minimum}"
+            msg = f"{field_name} must be {bound}; received {value}"
             raise ValueError(msg)
         return value
 
@@ -188,7 +264,7 @@ class SearchQuery:
             "polarization",
             "mode",
             "sub_swath",
-            "orbit_direction",
+            "pass_direction",
             "platform_serial_id",
             "rel_orbit_number",
         ]

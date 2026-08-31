@@ -31,7 +31,7 @@
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <demName>External DEM</demName>
       <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>
-      <externalDEMFile>/mnt/deep-glacier-mapping/data/dem/swissalti3d/interim/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
+      <externalDEMFile>/data/dem/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
       <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
       <resamplingType>BILINEAR_INTERPOLATION</resamplingType>
       <maskOutAreaWithoutElevation>true</maskOutAreaWithoutElevation>
@@ -55,7 +55,7 @@
       <squarePixel>false</squarePixel>
       <subtractTopographicPhase>true</subtractTopographicPhase>
       <demName>External DEM</demName>
-      <externalDEMFile>/mnt/deep-glacier-mapping/data/dem/swissalti3d/interim/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
+      <externalDEMFile>/data/dem/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
       <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
       <externalDEMApplyEGM>false</externalDEMApplyEGM>
       <tileExtensionPercent>100</tileExtensionPercent>
@@ -71,7 +71,7 @@
       <selectedPolarisations/>
     </parameters>
   </node>
-  <node id="ReplaceZerosWithNaNs">
+  <node id="ReplaceZerosWithNoData">
     <operator>BandMaths</operator>
     <sources>
       <sourceProduct refid="TOPSAR-Deburst"/>
@@ -81,8 +81,8 @@
         <targetBand>
           <name>coh</name>
           <type>float32</type>
-          <expression>coh_${swath}_${polarization}_${date1}_${date2} &gt; 0 ? coh_${swath}_${polarization}_${date1}_${date2} : NaN</expression>
-          <noDataValue>NaN</noDataValue>
+          <expression>coh_${swath}_${polarization}_${date1}_${date2} &gt; 0 ? coh_${swath}_${polarization}_${date1}_${date2} : -1099511627776.0</expression>
+          <noDataValue>-1099511627776.0</noDataValue>
         </targetBand>
       </targetBands>
       <variables/>
@@ -91,12 +91,12 @@
   <node id="Terrain-Correction">
     <operator>Terrain-Correction</operator>
     <sources>
-      <sourceProduct refid="ReplaceZerosWithNaNs"/>
+      <sourceProduct refid="ReplaceZerosWithNoData"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceBands/>
       <demName>External DEM</demName>
-      <externalDEMFile>/mnt/deep-glacier-mapping/data/dem/swissalti3d/interim/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
+      <externalDEMFile>/data/dem/swissalti3d-4326-ellipsoid.tif</externalDEMFile>
       <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
       <externalDEMApplyEGM>false</externalDEMApplyEGM>
       <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>

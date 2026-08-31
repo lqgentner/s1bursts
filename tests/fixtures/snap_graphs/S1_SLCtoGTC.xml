@@ -64,7 +64,7 @@
       <grSquarePixel>false</grSquarePixel>
     </parameters>
   </node>
-  <node id="ReplaceZerosWithNaNs">
+  <node id="ReplaceZerosWithNoData">
   <operator>BandMaths</operator>
     <sources>
       <sourceProduct refid="Multilook"/>
@@ -74,8 +74,8 @@
         <targetBand>
           <name>Beta0</name>
           <type>float32</type>
-          <expression>Beta0_${swath}_${polarization} &gt; 0 ? Beta0_${swath}_${polarization} : NaN</expression>
-          <noDataValue>NaN</noDataValue>
+          <expression>Beta0_${swath}_${polarization} &gt; 0 ? Beta0_${swath}_${polarization} : -1099511627776.0</expression>
+          <noDataValue>-1099511627776.0</noDataValue>
         </targetBand>
       </targetBands>
       <variables/>
@@ -84,7 +84,7 @@
   <node id="Terrain-Correction">
     <operator>Terrain-Correction</operator>
     <sources>
-      <sourceProduct refid="ReplaceZerosWithNaNs"/>
+      <sourceProduct refid="ReplaceZerosWithNoData"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceBands/>
