@@ -12,12 +12,12 @@ import time
 from typing import Any
 import warnings
 
+from affine import Affine
 import numpy as np
 from pyproj import CRS, Transformer, datadir, proj_version_str
 from pyproj.transformer import TransformerGroup
 import rasterio
 from rasterio.errors import RasterioError
-from rasterio.transform import Affine
 
 from s1bursts.config import get_settings
 
@@ -369,7 +369,7 @@ def _prepare(dem: Path, dest: Path, transformer: Transformer | None) -> None:
             )
             profile = src.profile.copy()
             profile.update(
-                transform=src.transform * Affine.translation(0.5, 0.5),
+                transform=src.transform @ Affine.translation(0.5, 0.5),
                 dtype=output_dtype.name,
                 driver="GTiff",
                 tiled=True,

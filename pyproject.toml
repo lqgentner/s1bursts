@@ -36,6 +36,8 @@ dynamic = ["version"]
 # Lower bounds reflect the oldest release that supports the required Python
 # (>=3.12) and works with this code.
 dependencies = [
+    # `@` on an Affine, used to offset the DEM grid, needs affine 3.
+    "affine>=3",
     "freezebase[s3]>=0.6.1,<0.7",
     "geopandas>=1.1",
     "lxml>=5",
@@ -208,6 +210,10 @@ filterwarnings = [
     # reading GeoTIFF products; only a future rasterio release (>1.5.0) can
     # fix it at the source.
     "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
+    # rasterio still multiplies transforms with `*` (`transform.from_origin`,
+    # `windows.window_transform`), which affine >=3.0.1 flags. Drop once a
+    # rasterio release uses `@` and the floor above moves to it.
+    "ignore:Use `@` matmul instead of:PendingDeprecationWarning",
 ]
 
 [tool.mypy]
