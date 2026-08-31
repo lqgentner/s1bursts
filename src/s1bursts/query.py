@@ -11,7 +11,7 @@ from pandas import Timestamp
 type Polarization = Literal["VV", "VH", "HH", "HV"]
 type Mode = Literal["IW", "EW"]
 type SubSwath = Literal["IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"]
-type OrbitDirection = Literal["ASCENDING", "DESCENDING"]
+type PassDirection = Literal["Ascending", "Descending"]
 type PlatformSerialID = Literal["A", "B", "C", "D"]
 
 # The static types above are erased at runtime, so the accepted values are
@@ -20,7 +20,7 @@ type PlatformSerialID = Literal["A", "B", "C", "D"]
 _POLARIZATIONS = ("VV", "VH", "HH", "HV")
 _MODES = ("IW", "EW")
 _SUB_SWATHS = ("IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5")
-_ORBIT_DIRECTIONS = ("ASCENDING", "DESCENDING")
+_PASS_DIRECTIONS = ("Ascending", "Descending")
 _PLATFORM_SERIAL_IDS = ("A", "B", "C", "D")
 
 # Sentinel-1's repeat cycle covers 175 relative orbits, numbered from 1.
@@ -59,8 +59,8 @@ class SearchQuery:
         Acquisition mode.
     sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"} | None, optional
         Sub-swath identifier.
-    orbit_direction : {"ASCENDING", "DESCENDING"} | None, optional
-        Orbit direction.
+    pass_direction : {"Ascending", "Descending"} | None, optional
+        Pass direction.
     platform_serial_id : {"A", "B", "C", "D"} | None, optional
         Sentinel-1 platform serial identifier.
     rel_orbit_number : int | None, optional
@@ -81,7 +81,7 @@ class SearchQuery:
         polarization: Polarization | None = None,
         mode: Mode | None = None,
         sub_swath: SubSwath | None = None,
-        orbit_direction: OrbitDirection | None = None,
+        pass_direction: PassDirection | None = None,
         platform_serial_id: PlatformSerialID | None = None,
         rel_orbit_number: int | None = None,
     ) -> None:
@@ -92,10 +92,10 @@ class SearchQuery:
         self.polarization = self._validate_choice(polarization, "polarization", _POLARIZATIONS)
         self.sub_swath = self._validate_choice(sub_swath, "sub_swath", _SUB_SWATHS)
         self.mode = self._validate_choice(mode, "mode", _MODES)
-        self.orbit_direction = self._validate_choice(
-            orbit_direction,
-            "orbit_direction",
-            _ORBIT_DIRECTIONS,
+        self.pass_direction = self._validate_choice(
+            pass_direction,
+            "pass_direction",
+            _PASS_DIRECTIONS,
         )
         self.platform_serial_id = self._validate_choice(
             platform_serial_id,
@@ -264,7 +264,7 @@ class SearchQuery:
             "polarization",
             "mode",
             "sub_swath",
-            "orbit_direction",
+            "pass_direction",
             "platform_serial_id",
             "rel_orbit_number",
         ]

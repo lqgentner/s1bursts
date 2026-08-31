@@ -403,13 +403,15 @@ class BurstDatabase:
         list[str]
             List of OData filter expressions to pass to the CDSE API.
         """
+        # CDSE spells the pass direction upper case and calls it OrbitDirection.
+        pass_direction = query.pass_direction.upper() if query.pass_direction else None
         simple_filters: list[tuple[str | int | None, str]] = [
             (query.burst_id, f"BurstId eq {query.burst_id}"),
             (query.abs_burst_id, f"AbsoluteBurstId eq {query.abs_burst_id}"),
             (query.polarization, f"PolarisationChannels eq '{query.polarization}'"),
             (query.mode, f"OperationalMode eq '{query.mode}'"),
             (query.sub_swath, f"SwathIdentifier eq '{query.sub_swath}'"),
-            (query.orbit_direction, f"OrbitDirection eq '{query.orbit_direction}'"),
+            (pass_direction, f"OrbitDirection eq '{pass_direction}'"),
             (
                 query.platform_serial_id,
                 f"PlatformSerialIdentifier eq '{query.platform_serial_id}'",

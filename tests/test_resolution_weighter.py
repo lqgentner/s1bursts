@@ -742,13 +742,13 @@ class TestCalcCqm:
 # ---------------------------------------------------------------------------
 
 
-def _rtc_stub(orbit: int, day: int, direction: str = "ASCENDING") -> SimpleNamespace:
+def _rtc_stub(orbit: int, day: int, direction: str = "Ascending") -> SimpleNamespace:
     """Minimal RTCProduct-like stub consumed by the compose orchestration."""
     return SimpleNamespace(
         polarization="VV",
         date=Timestamp(f"2020-01-{day:02d}"),
         rel_orbit_number=orbit,
-        orbit_direction=direction,
+        pass_direction=direction,
     )
 
 
@@ -829,7 +829,7 @@ class TestComposeReturns:
     def test_rtc_pass_without_qa_returns_dict_of_composites(self, tmp_path: Path) -> None:
         """``write_qa=False`` returns a dict of bare composites per direction (unchanged)."""
         _fm, weighter, geobox = self._setup(tmp_path)
-        asc, desc = _rtc_stub(10, 1, "ASCENDING"), _rtc_stub(11, 2, "DESCENDING")
+        asc, desc = _rtc_stub(10, 1, "Ascending"), _rtc_stub(11, 2, "Descending")
         power = {
             id(asc): np.full((2, 2), 1.0, np.float32),
             id(desc): np.full((2, 2), 2.0, np.float32),
@@ -837,13 +837,13 @@ class TestComposeReturns:
         self._patch_load(weighter, power)
 
         result = weighter.compose_rtc_by_pass([asc, desc], geobox)
-        assert set(result) == {"ASCENDING", "DESCENDING"}
+        assert set(result) == {"Ascending", "Descending"}
         assert all(isinstance(v, RTCPassComposite) for v in result.values())
 
     def test_rtc_pass_with_qa_returns_dict_of_tuples(self, tmp_path: Path) -> None:
         """``write_qa=True`` returns ``dict[dir, (composite, qa_num)]`` and writes the files."""
         fm, weighter, geobox = self._setup(tmp_path)
-        asc, desc = _rtc_stub(10, 1, "ASCENDING"), _rtc_stub(11, 2, "DESCENDING")
+        asc, desc = _rtc_stub(10, 1, "Ascending"), _rtc_stub(11, 2, "Descending")
         power = {
             id(asc): np.full((2, 2), 1.0, np.float32),
             id(desc): np.full((2, 2), 2.0, np.float32),
@@ -851,10 +851,10 @@ class TestComposeReturns:
         self._patch_load(weighter, power)
 
         result = weighter.compose_rtc_by_pass([asc, desc], geobox, write_qa=True)
-        composite, qa_num = result["ASCENDING"]
+        composite, qa_num = result["Ascending"]
         assert isinstance(composite, RTCPassComposite)
         assert isinstance(qa_num, RTCPassQA)
-        assert qa_num.orbit_direction == "ASCENDING"
+        assert qa_num.pass_direction == "Ascending"
         assert fm.get_product_path(qa_num).exists()
 
 
@@ -935,21 +935,21 @@ class _Scene(NamedTuple):
     geobox: MGRSGeoBox
 
 
-# Burst IDs used by the composite tests, and the orbit direction each stands for.
-# Products resolve `orbit_direction` through the burst-map LUT, so the table is
+# Burst IDs used by the composite tests, and the pass direction each stands for.
+# Products resolve `pass_direction` through the burst-map LUT, so the table is
 # stubbed to keep these tests offline and independent of the cached map.
 _ASCENDING_BURST = 30346
 _DESCENDING_BURST = 30347
 _DIRECTION_LUT = {
-    (_ASCENDING_BURST, "IW1"): "ASCENDING",
-    (_DESCENDING_BURST, "IW1"): "DESCENDING",
+    (_ASCENDING_BURST, "IW1"): "Ascending",
+    (_DESCENDING_BURST, "IW1"): "Descending",
 }
 
 
 @pytest.fixture
 def scene(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Scene:
     monkeypatch.setattr(
-        "s1bursts.burst.create_s1_orbit_direction_lut",
+        "s1bursts.burst.create_s1_pass_direction_lut",
         lambda mode="IW": _DIRECTION_LUT,  # noqa: ARG005
     )
     manager = FileManager(base_dir=tmp_path)
@@ -1134,7 +1134,7 @@ class TestComposeCohLrw:
 
 
 class TestComposeByPass:
-    def test_rtc_composites_are_split_by_orbit_direction(self, scene: _Scene) -> None:
+    def test_rtc_composites_are_split_by_pass_direction(self, scene: _Scene) -> None:
         """Ascending and descending passes must never be averaged together."""
         ascending = _rtc("2022-08-13", orbit=15, burst_id=_ASCENDING_BURST)
         descending = _rtc("2022-08-25", orbit=88, burst_id=_DESCENDING_BURST)
@@ -1143,17 +1143,17 @@ class TestComposeByPass:
 
         result = scene.weighter.compose_rtc_by_pass([ascending, descending], scene.geobox)
 
-        assert set(result) == {"ASCENDING", "DESCENDING"}
+        assert set(result) == {"Ascending", "Descending"}
         with rasterio.open(
-            scene.manager.get_product_path(result[ascending.orbit_direction]),
+            scene.manager.get_product_path(result[ascending.pass_direction]),
         ) as src:
             assert src.read(1) == pytest.approx(_full(1.0))
         with rasterio.open(
-            scene.manager.get_product_path(result[descending.orbit_direction]),
+            scene.manager.get_product_path(result[descending.pass_direction]),
         ) as src:
             assert src.read(1) == pytest.approx(_full(5.0))
 
-    def test_coherence_composites_are_split_by_orbit_direction(self, scene: _Scene) -> None:
+    def test_coherence_composites_are_split_by_pass_direction(self, scene: _Scene) -> None:
         first = _coh("2022-08-01", "2022-08-13", orbit=15, burst_id=_ASCENDING_BURST)
         second = _coh("2022-08-01", "2022-08-13", orbit=88, burst_id=_DESCENDING_BURST)
         _write_raster(scene.manager.get_product_path(first), [_full(0.3)])
@@ -1161,7 +1161,7 @@ class TestComposeByPass:
 
         result = scene.weighter.compose_coherence_by_pass([first, second], scene.geobox)
 
-        assert set(result) == {"ASCENDING", "DESCENDING"}
+        assert set(result) == {"Ascending", "Descending"}
 
     def test_empty_input_yields_no_composites(self, scene: _Scene) -> None:
         assert scene.weighter.compose_coherence_by_pass([], scene.geobox) == {}
@@ -1173,7 +1173,7 @@ class TestComposeByPass:
 
         result = scene.weighter.compose_coherence_by_pass([product], scene.geobox, write_qa=True)
 
-        composite, num_obs = result[product.orbit_direction]
+        composite, num_obs = result[product.pass_direction]
         assert scene.manager.get_product_path(composite).exists()
         with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
             assert (src.read(1) == 1).all()
@@ -1182,7 +1182,7 @@ class TestComposeByPass:
         product = _rtc("2022-08-13")
         _write_raster(scene.manager.get_product_path(product), [_full(7.0), _full(1.0)])
         first = scene.weighter.compose_rtc_by_pass([product], scene.geobox)
-        path = scene.manager.get_product_path(first[product.orbit_direction])
+        path = scene.manager.get_product_path(first[product.pass_direction])
         path.write_bytes(b"kept")
 
         scene.weighter.compose_rtc_by_pass([product], scene.geobox)
@@ -1359,11 +1359,11 @@ class TestCompositeTags:
         _write_raster(scene.manager.get_product_path(ascending), [_full(1.0), _full(1.0)])
 
         result = scene.weighter.compose_rtc_by_pass([ascending], scene.geobox, write_qa=True)
-        composite, num_obs = result["ASCENDING"]
+        composite, num_obs = result["Ascending"]
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             tags = src.tags()
-            assert tags["ORBIT_DIRECTION"] == "ASCENDING"
+            assert tags["PASS_DIRECTION"] == "Ascending"
             assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
             assert "COMPOSITING_METHOD_REFERENCE" not in tags
         with rasterio.open(scene.manager.get_product_path(num_obs)) as src:

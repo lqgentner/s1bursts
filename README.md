@@ -32,7 +32,7 @@ practical.
   - Geometrically terrain corrected (GTC) beta-nought backscatter
   - Coherence and interferograms
 - **Composite** bursts into 110 km MGRS tiles with locally resolution weighted
-  (LRW) or per-orbit-pass aggregation (`ResolutionWeighter`)
+  (LRW) or per-pass aggregation (`ResolutionWeighter`)
 - Local filesystem or S3 storage for all products (`FileManager` + UPath)
 
 ## Quick start
@@ -81,7 +81,7 @@ module it belongs to:
 | `s1bursts.product` | RTC/GTC, coherence, interferogram, and composite product types |
 | `s1bursts.summary` | `OperationSummary`, `OkResult`, `ErrorResult` |
 | `s1bursts.errors` | exception hierarchy, rooted at `S1BurstsError` |
-| `s1bursts.query` | `Polarization`, `Mode`, `SubSwath`, `OrbitDirection` literal aliases |
+| `s1bursts.query` | `Polarization`, `Mode`, `SubSwath`, `PassDirection` literal aliases |
 
 ## Configuration
 
@@ -127,7 +127,7 @@ leave `external_dem_apply_egm=False`.
 
 ### Burst-ID map (optional)
 
-Relative orbit number, orbit direction, and footprint geometry are propagated
+Relative orbit number, pass direction, and footprint geometry are propagated
 directly from the CDSE search response and from SLC filenames, so the normal
 search → download → process → composite workflow needs no extra data.
 

@@ -90,7 +90,7 @@ class TestChoiceValidation:
             ("polarization", "VVV"),
             ("mode", "SM"),
             ("sub_swath", "IW4"),
-            ("orbit_direction", "UP"),
+            ("pass_direction", "UP"),
             ("platform_serial_id", "Z"),
         ],
     )
@@ -105,7 +105,7 @@ class TestChoiceValidation:
             ("polarization", "HV"),
             ("mode", "EW"),
             ("sub_swath", "EW5"),
-            ("orbit_direction", "DESCENDING"),
+            ("pass_direction", "Descending"),
             ("platform_serial_id", "C"),
         ],
     )

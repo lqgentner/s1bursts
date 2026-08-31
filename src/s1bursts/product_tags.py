@@ -430,7 +430,7 @@ def rtc_pass_metadata(
     decibel: bool,
     source_tags: Mapping[str, str] | None = None,
 ) -> RasterMetadata:
-    """Metadata for an unweighted RTC composite of a single orbit-pass direction.
+    """Metadata for an unweighted RTC composite of a single pass direction.
 
     Parameters
     ----------
@@ -454,11 +454,11 @@ def rtc_pass_metadata(
         **_tile(product, family="Composite Backscatter"),
         **_backscatter(gamma0=True, decibel=decibel),
         **_unweighted(aggregation),
-        "ORBIT_DIRECTION": product.orbit_direction,
+        "PASS_DIRECTION": product.pass_direction,
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "gamma0",
         "LAYER_DESCRIPTION": (
-            "Unweighted gamma-0 backscatter composite of a single orbit-pass direction."
+            "Unweighted gamma-0 backscatter composite of a single pass direction."
         ),
         **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
     }
@@ -477,7 +477,7 @@ def coh_pass_metadata(
     statistics: Mapping[str, str] | None = None,
     source_tags: Mapping[str, str] | None = None,
 ) -> RasterMetadata:
-    """Metadata for an unweighted coherence composite of a single orbit-pass direction.
+    """Metadata for an unweighted coherence composite of a single pass direction.
 
     Parameters
     ----------
@@ -502,12 +502,12 @@ def coh_pass_metadata(
         "MEASUREMENT_TYPE": "Coherence",
         "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
         **_unweighted(aggregation),
-        "ORBIT_DIRECTION": product.orbit_direction,
+        "PASS_DIRECTION": product.pass_direction,
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "coherence",
         "LAYER_DESCRIPTION": (
             "Unweighted repeat-pass interferometric coherence composite of a single "
-            "orbit-pass direction."
+            "pass direction."
         ),
         **dict(statistics or {}),
         **_inherited(
@@ -570,7 +570,7 @@ def qa_metadata(
         **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
     }
     if isinstance(product, RTCPassQA | CohPassQA):
-        tags["ORBIT_DIRECTION"] = product.orbit_direction
+        tags["PASS_DIRECTION"] = product.pass_direction
 
     if metric is QaMetric.NUM:
         counted = "carrying a non-zero resolution weight" if weighted else "holding a finite value"
@@ -625,6 +625,7 @@ def _burst(
         "SOURCE_DATA_PRODUCT_LEVEL": _LEVEL_SLC,
         "BURST_ID": str(product.burst_id),
         "SUB_SWATH": product.sub_swath,
+        "RELATIVE_ORBIT_NUMBER": str(product.rel_orbit_number),
         "PIXEL_COORDINATE_CONVENTION": _PIXEL_CONVENTION,
         "PROCESSING_SOFTWARE": "ESA SNAP",
         "GRID_SPACING": f"{config.grid_spacing:g} m",

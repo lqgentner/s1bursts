@@ -68,6 +68,10 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Changed
 
+- **Breaking:** `orbit_direction` is renamed to `pass_direction` throughout, and
+  its values are now `"Ascending"` and `"Descending"` (instead of `"ASCENDING"`
+  and `"DESCENDING"`). This aligns the wording with the
+  [CEOS-ARD SAR metadata specification](https://ceos.org/ard/) v1.3.
 - **Breaking:** The `QA-NUM` layer of an LRW composite now counts the
   observations that carry a non-zero resolution weight, rather than those
   holding a finite value. This makes the layer identical to the *Contributing Observations Image* of the [CEOS-ARD SAR product family specification](https://ceos.org/ard/files/PFS/SAR/v1.3.1/CEOS-ARD_PFS_SAR_v1.3.1.pdf) (v1.3.1, item 2.21). RTC composites are unaffected, because SNAP masks the

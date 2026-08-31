@@ -40,8 +40,8 @@ def _patched_luts() -> Iterator[None]:
             return_value={key: 15},
         ),
         patch(
-            "s1bursts.burst.create_s1_orbit_direction_lut",
-            return_value={key: "ASCENDING"},
+            "s1bursts.burst.create_s1_pass_direction_lut",
+            return_value={key: "Ascending"},
         ),
     ):
         yield
@@ -68,7 +68,7 @@ class TestBurst:
         burst = make_burst()
 
         assert burst.rel_orbit_number == 15
-        assert burst.orbit_direction == "ASCENDING"
+        assert burst.pass_direction == "Ascending"
         assert burst.geometry is GEOMETRY
 
     def test_full_burst_id(self) -> None:
@@ -93,16 +93,16 @@ class TestBurst:
         with (
             patch("s1bursts.burst.create_s1_geometry_lut") as geom_lut,
             patch("s1bursts.burst.create_s1_orbit_number_lut") as orbit_num_lut,
-            patch("s1bursts.burst.create_s1_orbit_direction_lut") as orbit_dir_lut,
+            patch("s1bursts.burst.create_s1_pass_direction_lut") as orbit_dir_lut,
         ):
             geom_lut.return_value = {ew_key: ew_geometry}
             orbit_num_lut.return_value = {ew_key: 42}
-            orbit_dir_lut.return_value = {ew_key: "DESCENDING"}
+            orbit_dir_lut.return_value = {ew_key: "Descending"}
             burst = make_burst(burst_id=12345, sub_swath="EW2")
 
             assert burst.geometry is ew_geometry
             assert burst.rel_orbit_number == 42
-            assert burst.orbit_direction == "DESCENDING"
+            assert burst.pass_direction == "Descending"
             assert burst.full_burst_id == "042_012345_EW2"
 
         geom_lut.assert_called_once_with(mode="EW")
@@ -123,16 +123,16 @@ class TestBurst:
             polarization="VV",
             date=Timestamp("2022-01-01"),
             _rel_orbit_number=88,
-            _orbit_direction="DESCENDING",
+            _pass_direction="Descending",
             _geometry=GEOMETRY,
         )
         with (
             patch("s1bursts.burst.create_s1_orbit_number_lut", side_effect=AssertionError),
-            patch("s1bursts.burst.create_s1_orbit_direction_lut", side_effect=AssertionError),
+            patch("s1bursts.burst.create_s1_pass_direction_lut", side_effect=AssertionError),
             patch("s1bursts.burst.create_s1_geometry_lut", side_effect=AssertionError),
         ):
             assert burst.rel_orbit_number == 88
-            assert burst.orbit_direction == "DESCENDING"
+            assert burst.pass_direction == "Descending"
             assert burst.geometry is GEOMETRY
             assert burst.full_burst_id == "088_030346_IW1"
 
@@ -215,16 +215,16 @@ class TestFromCdseResponse:
         return CDSEResponse(context="$metadata#Bursts", value=[value], count=1)
 
     def test_propagates_cdse_metadata_without_lut(self) -> None:
-        """Orbit/direction/geometry from a CDSE search never hit the burst-map LUT."""
+        """Orbit, pass direction and geometry from a CDSE search never hit the burst-map LUT."""
         collection = BurstCollection.from_cdse_response(self._response())
         (burst,) = list(collection)
         with (
             patch("s1bursts.burst.create_s1_orbit_number_lut", side_effect=AssertionError),
-            patch("s1bursts.burst.create_s1_orbit_direction_lut", side_effect=AssertionError),
+            patch("s1bursts.burst.create_s1_pass_direction_lut", side_effect=AssertionError),
             patch("s1bursts.burst.create_s1_geometry_lut", side_effect=AssertionError),
         ):
             assert burst.rel_orbit_number == 88
-            assert burst.orbit_direction == "DESCENDING"
+            assert burst.pass_direction == "Descending"
             assert burst.geometry.bounds == (7.0, 46.0, 8.0, 47.0)
 
 
@@ -237,7 +237,7 @@ class TestBurstPair:
         assert pair.sub_swath == SUB_SWATH
         assert pair.polarization == "VV"
         assert pair.rel_orbit_number == 15
-        assert pair.orbit_direction == "ASCENDING"
+        assert pair.pass_direction == "Ascending"
         assert pair.geometry is GEOMETRY
         assert pair.full_burst_id == "015_030346_IW1"
 

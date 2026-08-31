@@ -14,8 +14,8 @@ from pandas import DataFrame, Series, Timedelta, Timestamp
 from s1bursts import ui
 from s1bursts.burstmap import (
     create_s1_geometry_lut,
-    create_s1_orbit_direction_lut,
     create_s1_orbit_number_lut,
+    create_s1_pass_direction_lut,
 )
 
 if TYPE_CHECKING:
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from s1bursts.burstmap import Mode
     from s1bursts.cdse import CDSEResponse
-    from s1bursts.query import OrbitDirection, Polarization, SubSwath
+    from s1bursts.query import PassDirection, Polarization, SubSwath
 
 
 class BurstFootprintMixin:
@@ -46,7 +46,7 @@ class BurstFootprintMixin:
     # Authoritative overrides; None here so subclasses without their own field
     # (e.g. product.GeocodedBurst) inherit the LUT-fallback behaviour.
     _rel_orbit_number: int | None = None
-    _orbit_direction: OrbitDirection | None = None
+    _pass_direction: PassDirection | None = None
     _geometry: Polygon | MultiPolygon | None = None
 
     @property
@@ -110,13 +110,13 @@ class BurstFootprintMixin:
         return self._lut_lookup(create_s1_orbit_number_lut(mode=self.mode))
 
     @property
-    def orbit_direction(self) -> OrbitDirection:
-        """Orbit pass direction looked up from the Sentinel-1 burst map.
+    def pass_direction(self) -> PassDirection:
+        """Pass direction looked up from the Sentinel-1 burst map.
 
         Returns
         -------
-        OrbitDirection
-            ``"ASCENDING"`` or ``"DESCENDING"``.
+        PassDirection
+            ``"Ascending"`` or ``"Descending"``.
 
         Raises
         ------
@@ -126,9 +126,9 @@ class BurstFootprintMixin:
         KeyError
             If the burst is not found in the map.
         """
-        if self._orbit_direction is not None:
-            return self._orbit_direction
-        return self._lut_lookup(create_s1_orbit_direction_lut(mode=self.mode))
+        if self._pass_direction is not None:
+            return self._pass_direction
+        return self._lut_lookup(create_s1_pass_direction_lut(mode=self.mode))
 
     @property
     def geometry(self) -> Polygon | MultiPolygon:
@@ -186,7 +186,7 @@ def _scalar_or_none[T](value: T) -> T | None:
 # ``Burst.from_dict`` accepts parsed-filename/response dicts.
 _FOOTPRINT_ALIASES = {
     "rel_orbit_number": "_rel_orbit_number",
-    "orbit_direction": "_orbit_direction",
+    "pass_direction": "_pass_direction",
     "geometry": "_geometry",
 }
 
@@ -215,7 +215,7 @@ class Burst(BurstFootprintMixin):
     parent_product_name: str | None = field(default=None, compare=False, hash=False)
     # Footprint values propagated from CDSE or an SLC filename; None falls back to the LUT.
     _rel_orbit_number: int | None = field(default=None, compare=False, hash=False, repr=False)
-    _orbit_direction: OrbitDirection | None = field(
+    _pass_direction: PassDirection | None = field(
         default=None,
         compare=False,
         hash=False,
@@ -256,7 +256,7 @@ class Burst(BurstFootprintMixin):
     def from_dict(cls, data: dict[str, Any]) -> Self:
         """Instantiate from a mapping, silently dropping unknown and non-init fields.
 
-        Public footprint keys (``rel_orbit_number``, ``orbit_direction``,
+        Public footprint keys (``rel_orbit_number``, ``pass_direction``,
         ``geometry``) are mapped onto the private override fields, so a burst
         reconstructed from a parsed SLC filename keeps its relative orbit number
         instead of re-deriving it from the LUT.
@@ -387,20 +387,20 @@ class BurstPair:
         return self.primary.rel_orbit_number
 
     @property
-    def orbit_direction(self) -> OrbitDirection:
-        """Orbit pass direction, looked up via the primary burst.
+    def pass_direction(self) -> PassDirection:
+        """Pass direction, looked up via the primary burst.
 
         Returns
         -------
-        OrbitDirection
-            ``"ASCENDING"`` or ``"DESCENDING"``.
+        PassDirection
+            ``"Ascending"`` or ``"Descending"``.
 
         Raises
         ------
         KeyError
             If the burst is not found in the burst map.
         """
-        return self.primary.orbit_direction
+        return self.primary.pass_direction
 
     @property
     def geometry(self) -> Polygon | MultiPolygon:
@@ -714,13 +714,13 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         "parent_product_name",
         "geometry",
         "_rel_orbit_number",
-        "_orbit_direction",
+        "_pass_direction",
         "_lines_per_burst",
         "_samples_per_burst",
     ]
     _OPTIONAL_COLUMNS: ClassVar[list[str]] = [
         "_rel_orbit_number",
-        "_orbit_direction",
+        "_pass_direction",
         # Burst pixel dimensions, propagated from CDSE and used only to pick the
         # most complete of near-identical-timestamp duplicates.
         "_lines_per_burst",
@@ -858,9 +858,9 @@ class BurstCollection(_BaseBurstCollection[Burst]):
                 _scalar_or_none(row.get("parent_product_name")),
             ),
             _rel_orbit_number=None if rel_orbit is None else int(rel_orbit),
-            _orbit_direction=cast(
-                "OrbitDirection | None",
-                _scalar_or_none(row.get("_orbit_direction")),
+            _pass_direction=cast(
+                "PassDirection | None",
+                _scalar_or_none(row.get("_pass_direction")),
             ),
             _geometry=cast("Polygon | MultiPolygon | None", _scalar_or_none(row.get("geometry"))),
         )
@@ -918,7 +918,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
                 "geometry": cdse_df["geometry"],
                 # Propagated from CDSE so footprint properties need no LUT lookup.
                 "_rel_orbit_number": cdse_df["relative_orbit_number"],
-                "_orbit_direction": cdse_df["orbit_direction"],
+                "_pass_direction": cdse_df["orbit_direction"].str.capitalize(),
                 # Used only to resolve near-identical-timestamp duplicates.
                 "_lines_per_burst": cdse_df["lines_per_burst"],
                 "_samples_per_burst": cdse_df["samples_per_burst"],
@@ -957,7 +957,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
                 # Stored overrides, not the LUT-backed properties, to avoid a burst-map load.
                 "geometry": burst._geometry,  # noqa: SLF001
                 "_rel_orbit_number": burst._rel_orbit_number,  # noqa: SLF001
-                "_orbit_direction": burst._orbit_direction,  # noqa: SLF001
+                "_pass_direction": burst._pass_direction,  # noqa: SLF001
             }
             for burst in bursts
         ]
@@ -1059,11 +1059,11 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         "parent_product_name_2",
         "geometry",
         "_rel_orbit_number",
-        "_orbit_direction",
+        "_pass_direction",
     ]
     # Footprint overrides propagated from CDSE (shared by both bursts of a pair);
     # optional so raw-dataframe callers need not supply them.
-    _OPTIONAL_COLUMNS: ClassVar[list[str]] = ["_rel_orbit_number", "_orbit_direction"]
+    _OPTIONAL_COLUMNS: ClassVar[list[str]] = ["_rel_orbit_number", "_pass_direction"]
     # Entry names for display
     _ENTRY_NAME_SINGULAR: ClassVar[str] = "Burst pair"
     _ENTRY_NAME_PLURAL: ClassVar[str] = "Burst pairs"
@@ -1075,9 +1075,9 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         rel_orbit = _scalar_or_none(row.get("_rel_orbit_number"))
         overrides: dict[str, Any] = {
             "_rel_orbit_number": None if rel_orbit is None else int(rel_orbit),
-            "_orbit_direction": cast(
-                "OrbitDirection | None",
-                _scalar_or_none(row.get("_orbit_direction")),
+            "_pass_direction": cast(
+                "PassDirection | None",
+                _scalar_or_none(row.get("_pass_direction")),
             ),
             "_geometry": cast(
                 "Polygon | MultiPolygon | None",
@@ -1165,7 +1165,7 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
                 # Stored overrides from the primary burst (not the LUT properties).
                 "geometry": pair.primary._geometry,  # noqa: SLF001
                 "_rel_orbit_number": pair.primary._rel_orbit_number,  # noqa: SLF001
-                "_orbit_direction": pair.primary._orbit_direction,  # noqa: SLF001
+                "_pass_direction": pair.primary._pass_direction,  # noqa: SLF001
             }
             for pair in pairs
         ]

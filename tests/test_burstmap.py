@@ -51,7 +51,7 @@ class TestOptInLoading:
     def _clear_lut_caches(self) -> None:
         for factory in (
             burstmap.create_s1_orbit_number_lut,
-            burstmap.create_s1_orbit_direction_lut,
+            burstmap.create_s1_pass_direction_lut,
             burstmap.create_s1_geometry_lut,
         ):
             factory.cache_clear()
@@ -74,6 +74,14 @@ class TestOptInLoading:
             burstmap.create_s1_orbit_number_lut(cache_dir=tmp_path, mode="IW")
 
         get_data.assert_called_once_with(download=False)
+
+    def test_pass_direction_is_title_case(self, tmp_path: Path) -> None:
+        """The map spells the directions upper case; the package title case."""
+        with patch.object(burstmap.Sentinel1Bursts, "get_data") as get_data:
+            get_data.return_value = _fake_indexed_map()
+            lut = burstmap.create_s1_pass_direction_lut(cache_dir=tmp_path, mode="IW")
+
+        assert lut == {(30346, "IW1"): "Ascending"}
 
 
 class TestDownloadBurstMap:

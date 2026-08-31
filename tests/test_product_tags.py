@@ -84,7 +84,7 @@ def _rtc_pass() -> RTCPassComposite:
         start_date=_START,
         end_date=_END,
         polarization="VV",
-        orbit_direction="ASCENDING",
+        pass_direction="Ascending",
     )
 
 
@@ -94,7 +94,7 @@ def _coh_pass() -> CohPassComposite:
         start_date=_START,
         end_date=_END,
         polarization="VV",
-        orbit_direction="DESCENDING",
+        pass_direction="Descending",
         baseline_days=12,
     )
 
@@ -281,7 +281,7 @@ class TestCompositingParameters:
         assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
         assert "COMPOSITING_METHOD_REFERENCE" not in tags
         assert "clip_max_resolution" not in tags["COMPOSITING_PARAMETERS"]
-        assert tags["ORBIT_DIRECTION"] == "ASCENDING"
+        assert tags["PASS_DIRECTION"] == "Ascending"
 
 
 class TestTileIdentity:
@@ -362,7 +362,7 @@ class TestCoherenceComposite:
             aggregation="mean",
             n_observations=3,
         ).tags
-        assert tags["ORBIT_DIRECTION"] == "DESCENDING"
+        assert tags["PASS_DIRECTION"] == "Descending"
         assert tags["TEMPORAL_BASELINE_DAYS"] == "12"
         assert tags["PRODUCT_FAMILY"] == "Composite Coherence"
 
@@ -443,7 +443,7 @@ class TestQaLayers:
                 start_date=_START,
                 end_date=_END,
                 polarization="VV",
-                orbit_direction="ASCENDING",
+                pass_direction="Ascending",
             ),
             aggregation="mean",
             n_observations=2,
@@ -451,7 +451,7 @@ class TestQaLayers:
         assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
         assert tags["QA_LAYER"] == "Contributing Observations Image"
         assert "holding a finite value" in tags["LAYER_DESCRIPTION"]
-        assert tags["ORBIT_DIRECTION"] == "ASCENDING"
+        assert tags["PASS_DIRECTION"] == "Ascending"
 
     def test_lrw_qa_counts_weighted_contributions(self) -> None:
         assert "non-zero resolution weight" in self._num()["LAYER_DESCRIPTION"]
@@ -471,13 +471,13 @@ class TestQaLayers:
                 start_date=_START,
                 end_date=_END,
                 polarization="VV",
-                orbit_direction="DESCENDING",
+                pass_direction="Descending",
                 baseline_days=12,
             ),
             aggregation="mean",
             n_observations=2,
         ).tags
-        assert tags["ORBIT_DIRECTION"] == "DESCENDING"
+        assert tags["PASS_DIRECTION"] == "Descending"
         assert tags["PRODUCT_FAMILY"] == "Composite Coherence"
 
 
@@ -516,9 +516,20 @@ class TestBurstProducts:
         tags = product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags
         assert tags["BURST_ID"] == "30346"
         assert tags["SUB_SWATH"] == "IW1"
+        assert tags["RELATIVE_ORBIT_NUMBER"] == "15"
         assert tags["ACQUISITION_DATE"] == "2020-02-05"
         assert tags["GRID_SPACING"] == "10 m"
         assert tags["PROCESSING_SOFTWARE"] == "ESA SNAP"
+
+    def test_every_burst_product_carries_the_track_number(self) -> None:
+        # The acquisition geometry a user needs when handed one burst file on
+        # its own. A composite mixes tracks, so it carries none.
+        for metadata in (
+            product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()),
+            product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()),
+            product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig()),
+        ):
+            assert metadata.tags["RELATIVE_ORBIT_NUMBER"] == "15"
 
     def test_a_builtin_dem_is_identified_by_its_snap_name(self) -> None:
         config = BackscatterConfig(

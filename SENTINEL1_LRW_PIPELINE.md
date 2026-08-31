@@ -7,7 +7,7 @@
 This pipeline processes Sentinel-1 SLC bursts to create composites over MGRS grid cells. Two composite types are produced:
 
 - **LRW composites**: Locally resolution weighted (LRW) combination of multiple burst footprints; weights = inverse of simulated area (1/A)
-- **Pass composites**: Unweighted temporal mean per orbit-pass direction (ascending / descending)
+- **Pass composites**: Unweighted temporal mean per pass direction (ascending / descending)
 
 ## Architecture
 
@@ -72,6 +72,8 @@ Where a tag maps onto a parameter of the [CEOS-ARD SAR Metadata Specification](h
 | `COMPOSITING_METHOD` | `<CBMethod>` | 1.7.24 |
 | `COMPOSITING_METHOD_REFERENCE` | `<CBReference>` | 1.7.24 |
 | `PIXEL_COORDINATE_CONVENTION` | `<PixelCoordinateConvention>` | 1.7.10 |
+| `RELATIVE_ORBIT_NUMBER` | `<RelativeOrbitNumber>` | 1.6.5 |
+| `PASS_DIRECTION` | `<PassDirection>` | 1.6.5 |
 | `MEASUREMENT_TYPE` | `<Measurements type=…>` | [InSAR] 3.8 |
 | `COHERENCE_AVERAGE` / `COHERENCE_STD` | `<CoherenceAverage>` / `<CoherenceStd>` | [InSAR] 3.8 |
 | `PHASE_QUALITY_METHOD` | `<InSARPhaseQualityMethod>` | [InSAR] 1.7.18 |
@@ -80,7 +82,7 @@ Where a tag maps onto a parameter of the [CEOS-ARD SAR Metadata Specification](h
 | `COHERENCE_WEIGHTING_SHAPE` | `<CoherenceWeightingShape>` | [InSAR] 1.7.18 |
 | `TEMPORAL_BASELINE_DAYS` | `<TemporalBaseline>` | [InSAR] 1.7.16 |
 
-The rest have **no spec counterpart** and are simply descriptive: `METADATA_VOCABULARY`, `PRODUCT_TYPE` (the `s1bursts` identifier, matching `product.product_type`), `PRODUCT_FAMILY` (which reuses the specification's own product names, `Composite Backscatter` / `Composite Coherence`, so a user recognises what they have — a category, not a certification), `MGRS_TILE`, `COMPOSITE_START_DATE` / `COMPOSITE_END_DATE`, `POLARIZATION`, `ORBIT_DIRECTION`, `LAYER_NAME`, `LAYER_DESCRIPTION`, `QA_LAYER`, `COMPOSITING_PARAMETERS`, `TERRAIN_CORRECTION`, `MULTILOOK_RANGE` / `MULTILOOK_AZIMUTH`, `BURST_ID`, `SUB_SWATH`, `ACQUISITION_DATE`, `DATE_PRIMARY` / `DATE_SECONDARY`, `GRID_SPACING`, `FLAT_EARTH_PHASE_REMOVED` / `TOPOGRAPHIC_PHASE_REMOVED`, the provenance tags below, and the decibel tags after them. The metadata spec defines no element for the "specific input parameters used" that item 1.7.24 asks for in prose, so `COMPOSITING_PARAMETERS` is this package's own — hence a descriptive name rather than a CEOS-looking one. It is built from the arguments actually passed to the `compose_*` call, never from a configuration object, so it cannot describe a run that did not happen.
+The rest have **no spec counterpart** and are simply descriptive: `METADATA_VOCABULARY`, `PRODUCT_TYPE` (the `s1bursts` identifier, matching `product.product_type`), `PRODUCT_FAMILY` (which reuses the specification's own product names, `Composite Backscatter` / `Composite Coherence`, so a user recognises what they have — a category, not a certification), `MGRS_TILE`, `COMPOSITE_START_DATE` / `COMPOSITE_END_DATE`, `POLARIZATION`, `LAYER_NAME`, `LAYER_DESCRIPTION`, `QA_LAYER`, `COMPOSITING_PARAMETERS`, `TERRAIN_CORRECTION`, `MULTILOOK_RANGE` / `MULTILOOK_AZIMUTH`, `BURST_ID`, `SUB_SWATH`, `ACQUISITION_DATE`, `DATE_PRIMARY` / `DATE_SECONDARY`, `GRID_SPACING`, `FLAT_EARTH_PHASE_REMOVED` / `TOPOGRAPHIC_PHASE_REMOVED`, the provenance tags below, and the decibel tags after them. The metadata spec defines no element for the "specific input parameters used" that item 1.7.24 asks for in prose, so `COMPOSITING_PARAMETERS` is this package's own — hence a descriptive name rather than a CEOS-looking one. It is built from the arguments actually passed to the `compose_*` call, never from a configuration object, so it cannot describe a run that did not happen.
 
 ##### Provenance
 
@@ -296,7 +298,7 @@ where $p$ is `self_weight_power` (0 = pure resolution weighting; $p > 0$ promote
 │    ├→ LRW composites                                        │
 │    │   ├→ RTCLRWComposite (multi-footprint, RTC only)       │
 │    │   └→ CohLRWComposite (multi-footprint)                 │
-│    └→ Pass composites (unweighted mean per orbit direction) │
+│    └→ Pass composites (unweighted mean per pass direction) │
 │        ├→ RTCPassComposite                                  │
 │        └→ CohPassComposite                                  │
 └─────────────────────────────────────────────────────────────┘
@@ -337,7 +339,7 @@ See the benchmarking notes in project memory for recommended settings.
 
 6. **Deterministic SLC filenames**: SLC zips are written under `FileManager.get_slc_path(burst)`, derived solely from `(rel_orbit_number, burst_id, sub_swath, polarization, date)`. `rel_orbit_number` is looked up via `create_s1_orbit_number_lut()` from `deepfreezer.datasets.copernicus`, which maps `(burst_id, sub_swath)` → `rel_orbit_number` using the static ESA Sentinel-1 burst ID map. Determinism lets existence checks be a single `.exists()` call instead of a glob.
 
-7. **Cached LUT functions**: `create_s1_orbit_number_lut` and `create_s1_orbit_direction_lut` are decorated with `@lru_cache(maxsize=None)` — the parquet-backed burst map is parsed only once per process.
+7. **Cached LUT functions**: `create_s1_orbit_number_lut` and `create_s1_pass_direction_lut` are decorated with `@lru_cache(maxsize=None)` — the parquet-backed burst map is parsed only once per process.
 
 8. **Terrain flattening in SNAP**: RTC terrain flattening is handled entirely by SNAP's `S1_SLCtoRTC.xml` graph. There is no separate post-processing step.
 
@@ -415,5 +417,5 @@ filtered = [
 
 # Query composites
 lrw = file_manager.find_rtc_lrw_products(mgrs_code="32TMT64", polarization="VV")
-pass_asc = file_manager.find_rtc_pass_composites(mgrs_code="32TMT64", orbit_direction="ASCENDING")
+pass_asc = file_manager.find_rtc_pass_composites(mgrs_code="32TMT64", pass_direction="Ascending")
 ```

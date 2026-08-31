@@ -140,26 +140,26 @@ class TestMGRSTileProducts:
         assert RTCLRWComposite(**self.KWARGS).product_type == "RTC_LRW"
         assert CohLRWComposite(**self.KWARGS, baseline_days=12).product_type == "COH_LRW"
         assert (
-            RTCPassComposite(**self.KWARGS, orbit_direction="ASCENDING").product_type
+            RTCPassComposite(**self.KWARGS, pass_direction="Ascending").product_type
             == "RTC_COMP_A"
         )
         assert (
             CohPassComposite(
                 **self.KWARGS,
-                orbit_direction="DESCENDING",
+                pass_direction="Descending",
                 baseline_days=12,
             ).product_type
             == "COH_COMP_D"
         )
         assert RTCLRWQA(**self.KWARGS, qa_metric=QaMetric.NUM).product_type == "RTC_LRW_QA-NUM"
         assert (
-            RTCPassQA(**self.KWARGS, orbit_direction="ASCENDING").product_type
+            RTCPassQA(**self.KWARGS, pass_direction="Ascending").product_type
             == "RTC_COMP_A_QA-NUM"
         )
         assert (
             CohPassQA(
                 **self.KWARGS,
-                orbit_direction="ASCENDING",
+                pass_direction="Ascending",
                 baseline_days=12,
             ).product_type
             == "COH_COMP_A_QA-NUM"

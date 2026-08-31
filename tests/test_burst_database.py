@@ -38,7 +38,7 @@ class TestQueryToFilters:
             polarization="VV",
             mode="IW",
             sub_swath="IW1",
-            orbit_direction="ASCENDING",
+            pass_direction="Ascending",
             platform_serial_id="A",
             rel_orbit_number=15,
         )
@@ -49,6 +49,7 @@ class TestQueryToFilters:
         assert "PolarisationChannels eq 'VV'" in filters
         assert "OperationalMode eq 'IW'" in filters
         assert "SwathIdentifier eq 'IW1'" in filters
+        # CDSE's own spelling of the field and its value, not the package's.
         assert "OrbitDirection eq 'ASCENDING'" in filters
         assert "PlatformSerialIdentifier eq 'A'" in filters
         assert "RelativeOrbitNumber eq 15" in filters

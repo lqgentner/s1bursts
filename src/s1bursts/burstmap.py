@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 type Mode = Literal["IW", "EW"]
 type SubSwath = Literal["IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"]
-type OrbitDirection = Literal["ASCENDING", "DESCENDING"]
+type PassDirection = Literal["Ascending", "Descending"]
 
 S1_MODE_DESC = {
     "IW": "Interferometric Wide Swath",
@@ -153,7 +153,7 @@ def download_burst_map(cache_dir: str | Path | None = None, *, mode: Mode = "IW"
     """Download and prepare the Sentinel-1 burst-ID map for a given acquisition mode.
 
     The map is a large (~500 MB per mode) static dataset from SAR-MPC. It is only
-    needed to look up the relative orbit number, orbit direction, or footprint
+    needed to look up the relative orbit number, pass direction, or footprint
     geometry of a burst that was **not** obtained from a CDSE search or an SLC
     filename (e.g. a manually constructed burst). It is not downloaded
     automatically; call this once to opt in. The raw download is verified against
@@ -196,18 +196,18 @@ def _load_indexed_burst_map(cache_dir: str | Path | None, mode: Mode) -> gpd.Geo
 
 
 @functools.cache
-def create_s1_orbit_direction_lut(
+def create_s1_pass_direction_lut(
     cache_dir: str | Path | None = None,
     mode: Mode = "IW",
-) -> dict[tuple[int, SubSwath], OrbitDirection]:
-    """Build a lookup table mapping burst footprints to their orbit pass direction.
+) -> dict[tuple[int, SubSwath], PassDirection]:
+    """Build a lookup table mapping burst footprints to their pass direction.
 
     Loads the Sentinel-1 burst ID map and returns a dictionary keyed by
     ``(burst_id, subswath_name)`` tuples whose values are the corresponding
-    orbit pass direction (``"ASCENDING"`` or ``"DESCENDING"``).
+    pass direction (``"Ascending"`` or ``"Descending"``).
 
     Because the burst footprints are stationary over the lifetime of the mission,
-    the orbit direction is fixed per footprint and does not depend on the
+    the pass direction is fixed per footprint and does not depend on the
     acquisition date.
 
     Results are cached in memory after the first call.
@@ -223,11 +223,14 @@ def create_s1_orbit_direction_lut(
     Returns
     -------
     dict[tuple[int, SubSwath], str]
-        Mapping of ``(burst_id, subswath_name)`` → orbit direction string.
+        Mapping of ``(burst_id, subswath_name)`` → pass direction string.
 
     """
     df = _load_indexed_burst_map(cache_dir, mode)
-    return cast("dict[tuple[int, SubSwath], OrbitDirection]", df["orbit_pass"].to_dict())
+    # The burst map spells the directions upper case; the package uses the
+    # CEOS-ARD <PassDirection> enumeration, which is title case.
+    directions = df["orbit_pass"].str.capitalize()
+    return cast("dict[tuple[int, SubSwath], PassDirection]", directions.to_dict())
 
 
 @functools.cache

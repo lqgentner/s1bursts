@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
     from s1bursts.filemanager import FileManager
     from s1bursts.product_tags import RasterMetadata
-    from s1bursts.query import OrbitDirection, Polarization
+    from s1bursts.query import PassDirection, Polarization
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ _LoadedEntry = tuple[ComposableProduct, NDArray[np.float32]]
 
 
 class ResolutionWeighter:
-    """Compute LRW and per-orbit-pass composites for Sentinel-1 products.
+    """Compute LRW and per-pass composites for Sentinel-1 products.
 
     The class is stateless with respect to the MGRS grid cell: the ``geobox``
     that defines the spatial extent, CRS, and pixel grid is passed to each
@@ -490,7 +490,7 @@ class ResolutionWeighter:
         decibel: bool = ...,
         write_qa: Literal[False] = False,
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, RTCPassComposite]: ...
+    ) -> dict[PassDirection, RTCPassComposite]: ...
     @overload
     def compose_rtc_by_pass(
         self,
@@ -501,7 +501,7 @@ class ResolutionWeighter:
         decibel: bool = ...,
         write_qa: Literal[True],
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, RTCPassResult]: ...
+    ) -> dict[PassDirection, RTCPassResult]: ...
     @overload
     def compose_rtc_by_pass(
         self,
@@ -512,7 +512,7 @@ class ResolutionWeighter:
         decibel: bool = ...,
         write_qa: bool,
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, RTCPassComposite | RTCPassResult]: ...
+    ) -> dict[PassDirection, RTCPassComposite | RTCPassResult]: ...
     def compose_rtc_by_pass(
         self,
         rtc_products: Collection[RTCProduct],
@@ -522,18 +522,18 @@ class ResolutionWeighter:
         decibel: bool = False,
         write_qa: bool = False,
         overwrite: bool = False,
-    ) -> Mapping[OrbitDirection, RTCPassComposite | RTCPassResult]:
-        """Compute unweighted RTC composites stratified by orbit direction.
+    ) -> Mapping[PassDirection, RTCPassComposite | RTCPassResult]:
+        """Compute unweighted RTC composites stratified by pass direction.
 
         Bursts from the same orbit and acquisition date are mosaicked using the
         first non-NaN pixel strategy.  The resulting orbit-date observations are
-        then aggregated temporally (mean or median) per orbit direction
+        then aggregated temporally (mean or median) per pass direction
         (ascending / descending).
 
         Parameters
         ----------
         rtc_products : Collection[RTCProduct]
-            RTC products to composite.  Products from both orbit directions may
+            RTC products to composite.  Products from both pass directions may
             be mixed; they are split automatically via the ESA burst map.
         geobox : MGRSGeoBox
             Target MGRS grid cell.
@@ -547,14 +547,14 @@ class ResolutionWeighter:
             become NaN.  Aggregation always happens in the linear domain.
         write_qa : bool, default False
             If ``True``, also write a contributing-observations QA product
-            (``QA-NUM``) per orbit direction.
+            (``QA-NUM``) per pass direction.
         overwrite : bool, default False
             Skip writing if the output file already exists.
 
         Returns
         -------
-        dict[OrbitDirection, RTCPassComposite or tuple[RTCPassComposite, RTCPassQA]]
-            One entry per orbit direction.  Each value is the composite, or
+        dict[PassDirection, RTCPassComposite or tuple[RTCPassComposite, RTCPassQA]]
+            One entry per pass direction.  Each value is the composite, or
             ``(composite, qa_num)`` when ``write_qa=True``.
         """
         rtc_products = list(rtc_products)
@@ -567,18 +567,18 @@ class ResolutionWeighter:
 
         loaded = self._load_band(rtc_products, geobox, band=1)
 
-        subsets: defaultdict[OrbitDirection, list[_LoadedEntry]] = defaultdict(list)
+        subsets: defaultdict[PassDirection, list[_LoadedEntry]] = defaultdict(list)
         for prod, data in loaded:
-            subsets[prod.orbit_direction].append((prod, data))
+            subsets[prod.pass_direction].append((prod, data))
 
-        result: dict[OrbitDirection, RTCPassComposite | RTCPassResult] = {}
+        result: dict[PassDirection, RTCPassComposite | RTCPassResult] = {}
         for direction, subset in subsets.items():
             product = RTCPassComposite(
                 mgrs_code=geobox.mgrs_code,
                 start_date=start_date,
                 end_date=end_date,
                 polarization=polarization,
-                orbit_direction=direction,
+                pass_direction=direction,
             )
             qa_num: list[RTCPassQA] = (
                 [
@@ -587,7 +587,7 @@ class ResolutionWeighter:
                         start_date=start_date,
                         end_date=end_date,
                         polarization=polarization,
-                        orbit_direction=direction,
+                        pass_direction=direction,
                     ),
                 ]
                 if write_qa
@@ -645,7 +645,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         write_qa: Literal[False] = False,
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, CohPassComposite]: ...
+    ) -> dict[PassDirection, CohPassComposite]: ...
     @overload
     def compose_coherence_by_pass(
         self,
@@ -655,7 +655,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         write_qa: Literal[True],
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, CohPassResult]: ...
+    ) -> dict[PassDirection, CohPassResult]: ...
     @overload
     def compose_coherence_by_pass(
         self,
@@ -665,7 +665,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         write_qa: bool,
         overwrite: bool = ...,
-    ) -> dict[OrbitDirection, CohPassComposite | CohPassResult]: ...
+    ) -> dict[PassDirection, CohPassComposite | CohPassResult]: ...
     def compose_coherence_by_pass(
         self,
         coh_products: Collection[CoherenceProduct],
@@ -674,8 +674,8 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = "median",
         write_qa: bool = False,
         overwrite: bool = False,
-    ) -> Mapping[OrbitDirection, CohPassComposite | CohPassResult]:
-        """Compute unweighted coherence composites stratified by orbit direction.
+    ) -> Mapping[PassDirection, CohPassComposite | CohPassResult]:
+        """Compute unweighted coherence composites stratified by pass direction.
 
         Bursts from the same orbit and primary acquisition date are mosaicked
         using the first non-NaN pixel strategy.  The resulting orbit-date
@@ -695,14 +695,14 @@ class ResolutionWeighter:
             interpolated quantile at that level.
         write_qa : bool, default False
             If ``True``, also write a contributing-observations QA product
-            (``QA-NUM``) per orbit direction.
+            (``QA-NUM``) per pass direction.
         overwrite : bool, default False
             Skip writing if the output file already exists.
 
         Returns
         -------
-        dict[OrbitDirection, CohPassComposite or tuple[CohPassComposite, CohPassQA]]
-            One entry per orbit direction.  Each value is the composite, or
+        dict[PassDirection, CohPassComposite or tuple[CohPassComposite, CohPassQA]]
+            One entry per pass direction.  Each value is the composite, or
             ``(composite, qa_num)`` when ``write_qa=True``.
         """
         coh_products = list(coh_products)
@@ -716,18 +716,18 @@ class ResolutionWeighter:
 
         loaded = self._load_band(coh_products, geobox, band=1)
 
-        subsets: defaultdict[OrbitDirection, list[_LoadedEntry]] = defaultdict(list)
+        subsets: defaultdict[PassDirection, list[_LoadedEntry]] = defaultdict(list)
         for prod, data in loaded:
-            subsets[prod.orbit_direction].append((prod, data))
+            subsets[prod.pass_direction].append((prod, data))
 
-        result: dict[OrbitDirection, CohPassComposite | CohPassResult] = {}
+        result: dict[PassDirection, CohPassComposite | CohPassResult] = {}
         for direction, subset in subsets.items():
             product = CohPassComposite(
                 mgrs_code=geobox.mgrs_code,
                 start_date=start_date,
                 end_date=end_date,
                 polarization=polarization,
-                orbit_direction=direction,
+                pass_direction=direction,
                 baseline_days=baseline_days,
             )
             qa_num: list[CohPassQA] = (
@@ -737,7 +737,7 @@ class ResolutionWeighter:
                         start_date=start_date,
                         end_date=end_date,
                         polarization=polarization,
-                        orbit_direction=direction,
+                        pass_direction=direction,
                         baseline_days=baseline_days,
                     ),
                 ]

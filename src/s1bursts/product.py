@@ -15,7 +15,7 @@ from s1bursts.burst import BurstFootprintMixin
 
 if TYPE_CHECKING:
     from s1bursts.burst import Burst, BurstPair
-    from s1bursts.query import OrbitDirection, Polarization, SubSwath
+    from s1bursts.query import PassDirection, Polarization, SubSwath
 
 
 class CRSLike(Protocol):
@@ -435,7 +435,7 @@ class CohLRWComposite(MGRSTileProduct):
 
 @dataclass(repr=False, frozen=True)
 class RTCPassComposite(MGRSTileProduct):
-    """Unweighted temporal mean composite for a single orbit-pass direction.
+    """Unweighted temporal mean composite for a single pass direction.
 
     Parameters
     ----------
@@ -447,21 +447,21 @@ class RTCPassComposite(MGRSTileProduct):
         End of the compositing period (inclusive).
     polarization : {"VV", "VH", "HH", "HV"}
         The polarization.
-    orbit_direction : {"ASCENDING", "DESCENDING"}
-        Orbit pass direction.
+    pass_direction : {"Ascending", "Descending"}
+        Pass direction.
     """
 
-    orbit_direction: OrbitDirection
+    pass_direction: PassDirection
 
     @property
     def product_type(self) -> str:
         """Get product type identifier."""
-        return f"RTC_COMP_{self.orbit_direction[0]}"
+        return f"RTC_COMP_{self.pass_direction[0]}"
 
 
 @dataclass(repr=False, frozen=True)
 class CohPassComposite(MGRSTileProduct):
-    """Unweighted temporal mean coherence composite for a single orbit-pass direction.
+    """Unweighted temporal mean coherence composite for a single pass direction.
 
     Parameters
     ----------
@@ -473,19 +473,19 @@ class CohPassComposite(MGRSTileProduct):
         End of the compositing period (inclusive).
     polarization : {"VV", "VH", "HH", "HV"}
         The polarization.
-    orbit_direction : {"ASCENDING", "DESCENDING"}
-        Orbit pass direction.
+    pass_direction : {"Ascending", "Descending"}
+        Pass direction.
     baseline_days : int
         Temporal baseline in days.
     """
 
-    orbit_direction: OrbitDirection
+    pass_direction: PassDirection
     baseline_days: int
 
     @property
     def product_type(self) -> str:
         """Get product type identifier."""
-        return f"COH_COMP_{self.orbit_direction[0]}"
+        return f"COH_COMP_{self.pass_direction[0]}"
 
 
 @dataclass(repr=False, frozen=True)
@@ -557,16 +557,16 @@ class RTCPassQA(MGRSTileProduct):
         End of the compositing period (inclusive).
     polarization : {"VV", "VH", "HH", "HV"}
         The polarization.
-    orbit_direction : {"ASCENDING", "DESCENDING"}
-        Orbit pass direction.
+    pass_direction : {"Ascending", "Descending"}
+        Pass direction.
     """
 
-    orbit_direction: OrbitDirection
+    pass_direction: PassDirection
 
     @property
     def product_type(self) -> str:
         """Get product type identifier."""
-        return f"RTC_COMP_{self.orbit_direction[0]}_QA-NUM"
+        return f"RTC_COMP_{self.pass_direction[0]}_QA-NUM"
 
 
 @dataclass(repr=False, frozen=True)
@@ -583,16 +583,16 @@ class CohPassQA(MGRSTileProduct):
         End of the compositing period (inclusive).
     polarization : {"VV", "VH", "HH", "HV"}
         The polarization.
-    orbit_direction : {"ASCENDING", "DESCENDING"}
-        Orbit pass direction.
+    pass_direction : {"Ascending", "Descending"}
+        Pass direction.
     baseline_days : int
         Temporal baseline in days.
     """
 
-    orbit_direction: OrbitDirection
+    pass_direction: PassDirection
     baseline_days: int
 
     @property
     def product_type(self) -> str:
         """Get product type identifier."""
-        return f"COH_COMP_{self.orbit_direction[0]}_QA-NUM"
+        return f"COH_COMP_{self.pass_direction[0]}_QA-NUM"
