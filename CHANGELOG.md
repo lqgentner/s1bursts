@@ -30,6 +30,17 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - Per-product composite codec profiles through
   `ResolutionWeighter.rasterio_profile`, with an optional `"default"` profile.
   Flat profiles retain their previous behavior.
+- **Every composite and QA layer now carries exact band statistics**
+  (`STATISTICS_MINIMUM`, `_MAXIMUM`, `_MEAN`, `_STDDEV`, `_VALID_PERCENT`),
+  computed over the whole array and written at creation, so a downstream
+  catalogue can read them without opening the raster. New
+  `product_tags.band_statistics()`.
+- `ResolutionWeighter(checksum=True)` records a SHA-256 multihash of every
+  written file's exact bytes in the new `ResolutionWeighter.checksums`
+  attribute, keyed by output path. The digest is multihash-encoded (`1220`
+  followed by the hex) and taken at write time, where the encoded bytes are
+  already in hand; computing it later means reading every object back.
+  Defaults to `False`, so existing calls are unchanged.
 
 ### Fixed
 
@@ -69,8 +80,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   shift and vertical datum conversion of an external DEM for SNAP.
 - The area SNAP writes as `simulatedImage` is now called the *local
   contributing area*, following CEOS-ARD terminology.
-- Requires `freezebase[s3]>=0.6.1,<0.7` for product metadata, composite codec
-  profiles, and context handling of burst downloadss.
+- Requires `freezebase[s3]>=0.7,<0.8` for product metadata, composite codec
+  profiles, `write_cog(checksum=...)`, and context handling of burst downloads.
 - **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
   remains the base for shared Terrain-Correction parameters; concrete configs
   implement `to_xml()`.

@@ -38,7 +38,7 @@ dynamic = ["version"]
 dependencies = [
     # `@` on an Affine, used to offset the DEM grid, needs affine 3.
     "affine>=3",
-    "freezebase[s3]>=0.6.1,<0.7",
+    "freezebase[s3]>=0.7,<0.8",
     "geopandas>=1.1",
     "lxml>=5",
     "numpy>=2.0",

@@ -259,6 +259,45 @@ def _inherited(
     return inherited
 
 
+def band_statistics(data: NDArray[Any], nodata: float) -> dict[str, str]:
+    """Exact per-band statistics, as the GDAL ``STATISTICS_*`` band-tag items.
+
+    Computed over every pixel rather than sampled, so ``STATISTICS_APPROXIMATE``
+    is never set. Returns an empty mapping when no pixel is valid, so an empty
+    tile carries no statistics rather than NaNs.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        Band values.
+    nodata : float
+        The band's nodata value, e.g. NaN for a float composite or ``0`` for
+        a uint16 count band. A pixel is valid when it is finite *and* differs
+        from ``nodata``, so a stray NaN or infinity in a band with a finite
+        nodata marker is excluded rather than poisoning the statistics.
+
+    Returns
+    -------
+    dict[str, str]
+        ``STATISTICS_MINIMUM``, ``STATISTICS_MAXIMUM``, ``STATISTICS_MEAN``,
+        ``STATISTICS_STDDEV`` and ``STATISTICS_VALID_PERCENT``, or empty.
+    """
+    # `data != nodata` is always True when nodata is NaN (IEEE comparison),
+    # so this reduces to plain finiteness in that case and adds the nodata
+    # exclusion only when the marker itself is a finite value.
+    valid_mask = np.isfinite(data) & (data != nodata)
+    valid = data[valid_mask]
+    if valid.size == 0:
+        return {}
+    return {
+        "STATISTICS_MINIMUM": repr(float(valid.min())),
+        "STATISTICS_MAXIMUM": repr(float(valid.max())),
+        "STATISTICS_MEAN": repr(float(valid.mean())),
+        "STATISTICS_STDDEV": repr(float(valid.std())),
+        "STATISTICS_VALID_PERCENT": repr(100.0 * valid.size / data.size),
+    }
+
+
 def coherence_statistics(values: NDArray[np.floating[Any]]) -> dict[str, str]:
     """Mean and standard deviation of a coherence raster ([InSAR] item 3.8).
 
@@ -840,6 +879,7 @@ __all__ = [
     "UNKNOWN",
     "RasterMetadata",
     "backscatter_metadata",
+    "band_statistics",
     "burst_metadata",
     "coh_lrw_metadata",
     "coh_pass_metadata",

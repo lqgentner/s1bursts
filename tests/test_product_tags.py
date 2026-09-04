@@ -367,6 +367,41 @@ class TestCoherenceComposite:
         assert tags["PRODUCT_FAMILY"] == "Composite Coherence"
 
 
+class TestBandStatistics:
+    def test_reports_exact_min_max_mean_stddev(self) -> None:
+        data = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+        stats = product_tags.band_statistics(data, np.nan)
+        assert float(stats["STATISTICS_MINIMUM"]) == pytest.approx(1.0)
+        assert float(stats["STATISTICS_MAXIMUM"]) == pytest.approx(4.0)
+        assert float(stats["STATISTICS_MEAN"]) == pytest.approx(2.5)
+        assert float(stats["STATISTICS_STDDEV"]) == pytest.approx(np.std([1.0, 2.0, 3.0, 4.0]))
+
+    def test_never_sets_approximate(self) -> None:
+        stats = product_tags.band_statistics(np.array([1.0, 2.0], dtype=np.float32), np.nan)
+        assert "STATISTICS_APPROXIMATE" not in stats
+
+    def test_nan_nodata_excludes_non_finite_pixels_from_valid_percent(self) -> None:
+        data = np.array([1.0, np.nan, np.nan, np.nan], dtype=np.float32)
+        stats = product_tags.band_statistics(data, np.nan)
+        assert float(stats["STATISTICS_VALID_PERCENT"]) == pytest.approx(25.0)
+        assert float(stats["STATISTICS_MEAN"]) == pytest.approx(1.0)
+
+    def test_zero_nodata_excludes_zeros_not_finite_check(self) -> None:
+        # uint16 QA-NUM: every value is finite, so zero (the declared nodata)
+        # is what has to be excluded, not non-finiteness.
+        data = np.array([0, 0, 5, 7], dtype=np.uint16)
+        stats = product_tags.band_statistics(data, 0)
+        assert float(stats["STATISTICS_VALID_PERCENT"]) == pytest.approx(50.0)
+        assert float(stats["STATISTICS_MINIMUM"]) == pytest.approx(5.0)
+        assert float(stats["STATISTICS_MAXIMUM"]) == pytest.approx(7.0)
+
+    def test_an_empty_tile_carries_no_statistics_rather_than_a_nan(self) -> None:
+        assert product_tags.band_statistics(np.full((2, 2), np.nan, np.float32), np.nan) == {}
+
+    def test_an_all_nodata_uint16_tile_carries_no_statistics(self) -> None:
+        assert product_tags.band_statistics(np.zeros((2, 2), dtype=np.uint16), 0) == {}
+
+
 class TestCoherenceStatistics:
     def test_reports_mean_and_standard_deviation(self) -> None:
         stats = product_tags.coherence_statistics(np.array([0.2, 0.4, 0.6], dtype=np.float32))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, NamedTuple
@@ -857,6 +858,91 @@ class TestComposeReturns:
         assert isinstance(qa_num, RTCPassQA)
         assert qa_num.pass_direction == "Ascending"
         assert fm.get_product_path(qa_num).exists()
+
+
+class TestSaveStatisticsAndChecksum:
+    """``_save`` embeds exact band statistics, and can record a checksum."""
+
+    def test_composite_carries_exact_band_statistics(self, tmp_path: Path) -> None:
+        fm, weighter, geobox = TestComposeReturns._setup(tmp_path)
+        p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.full((2, 2), 3.0, np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+
+        result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
+
+        with rasterio.open(fm.get_product_path(result)) as ds:
+            tags = ds.tags(1)
+        minimum, maximum = float(tags["STATISTICS_MINIMUM"]), float(tags["STATISTICS_MAXIMUM"])
+        assert minimum == pytest.approx(maximum)
+        assert float(tags["STATISTICS_VALID_PERCENT"]) == pytest.approx(100.0)
+        assert "STATISTICS_APPROXIMATE" not in tags
+
+    def test_qa_num_statistics_treat_zero_as_nodata_not_finite(self, tmp_path: Path) -> None:
+        fm, weighter, geobox = TestComposeReturns._setup(tmp_path)
+        p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.array([[2.0, np.nan], [2.0, np.nan]], np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+
+        _composite, (qa_num, _qa_cqm) = weighter.compose_rtc_lrw(
+            [p1, p2],
+            geobox,
+            aggregation="mean",
+            write_qa=True,
+        )
+
+        with rasterio.open(fm.get_product_path(qa_num)) as ds:
+            tags = ds.tags(1)
+        # Every pixel has p1's contribution, so num_obs is never the uint16
+        # nodata sentinel 0 — every one of the 4 pixels is "valid".
+        assert float(tags["STATISTICS_VALID_PERCENT"]) == pytest.approx(100.0)
+
+    def test_checksum_defaults_to_off_and_records_nothing(self, tmp_path: Path) -> None:
+        _fm, weighter, geobox = TestComposeReturns._setup(tmp_path)
+        p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.full((2, 2), 2.0, np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+
+        weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
+
+        assert weighter.checksums == {}
+
+    def test_checksum_true_records_a_multihash_matching_the_file(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        weighter = ResolutionWeighter(fm, n_workers=1, checksum=True)
+        geobox = SimpleNamespace(
+            mgrs_code="32TMS03",
+            crs=CRS.from_epsg(32632),
+            transform=Affine(10.0, 0.0, 500000.0, 0.0, -10.0, 5100000.0),
+            height=2,
+            width=2,
+        )
+        p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.full((2, 2), 2.0, np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+
+        result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
+
+        path = fm.get_product_path(result)
+        digest = weighter.checksums[str(path)]
+        assert digest.startswith("1220")
+        assert digest == "1220" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 # ---------------------------------------------------------------------------

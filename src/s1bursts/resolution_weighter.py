@@ -97,6 +97,16 @@ class ResolutionWeighter:
         type with an optional ``"default"`` entry. Product-specific settings
         override the default. If omitted, uses the library defaults with
         float32 data and NaN no-data.
+    checksum : bool, default False
+        Compute a SHA-256 multihash of every written file's exact bytes and
+        record it in :attr:`checksums`, keyed by output path. Costs holding
+        the encoded COG in memory a second time per write.
+
+    Attributes
+    ----------
+    checksums : dict[str, str]
+        SHA-256 multihash of every file written so far, keyed by output path
+        as a string. Populated only when ``checksum=True``.
 
     References
     ----------
@@ -115,10 +125,13 @@ class ResolutionWeighter:
         *,
         rasterio_profile: dict[str, Any] | None = None,
         n_workers: int = 8,
+        checksum: bool = False,
     ) -> None:
         self._fm = file_manager
         self._n_workers = n_workers
         self._profiles = _split_profiles(rasterio_profile)
+        self._checksum = checksum
+        self.checksums: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -874,15 +887,27 @@ class ResolutionWeighter:
             height=geobox.height,
             width=geobox.width,
         )
-        write_cog(
+        # Every product _save writes is single-band (count=1 above), so exact
+        # statistics for that one band merge into whatever band_tags the
+        # product's own metadata already carries.
+        band_tags = [
+            {
+                **(metadata.band_tags[0] if metadata.band_tags else {}),
+                **product_tags.band_statistics(data, nodata),
+            },
+        ]
+        digest = write_cog(
             data,
             path,
             profile,
             band_names=metadata.band_names,
             tags=metadata.tags,
-            band_tags=metadata.band_tags or None,
+            band_tags=band_tags if band_tags[0] else None,
             units=metadata.units,
+            checksum=self._checksum,
         )
+        if digest is not None:
+            self.checksums[str(path)] = digest
         logger.debug("saved %s", path.name)
 
     def _input_tags(
