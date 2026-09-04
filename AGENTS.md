@@ -4,39 +4,34 @@ s1bursts is a Sentinel-1 SLC burst download and InSAR processing package, built 
 
 Shared geo/IO helpers (MGRS grid, rasterio/S3 raster access, HTTP download tooling) come from the sibling [freezebase](https://github.com/lqgentner/freezebase) package — the only first-party dependency, so that s1bursts can be released on PyPI with a wheel-only dependency set (no GDAL, no scipy).
 
+Treat signatures, return types, exceptions, import paths, and documented behavior as public
+API. Preserve compatibility unless a change is explicitly breaking.
+
 ## Environment
 
-The project uses the uv package manager. The virtual environment is located at `.venv/`. The dependencies are stored in the `pyproject.toml`. freezebase is resolved from PyPI like any other dependency.
-
-To synchronize the environment:
+The project uses uv and supports Python 3.12–3.14. Dependencies are declared in
+`pyproject.toml`, and the virtual environment is located at `.venv/`. freezebase is resolved
+from PyPI like any other dependency.
 
 ```bash
 uv sync
 ```
 
-To run Python:
+## Required checks
 
 ```bash
-uv run python3 -c "print('helloworld')"
-```
-
-## Linting & type checking
-
-```bash
-# Auto-format code
+uv run pytest
 uv run ruff format
-# Apply automatable fixes
 uv run ruff check --fix
-# After fixing, run format again
 uv run ruff format
-# Run mypy
-uv run dmypy run src/s1bursts
+uv run mypy src/s1bursts
 ```
 
-## Testing
+After every code change, run tests, Ruff formatting and linting, and mypy. Rerun affected
+checks after fixes. Add or update tests for behavior changes; bug fixes should include a
+regression test.
 
 ```bash
-uv run pytest                  # offline unit tests (default)
 uv run pytest -m integration   # network/SNAP integration tests
 uv run pytest -m "integration and snap"  # only the tests that invoke SNAP gpt
 uv run pytest -m validation    # scientific cross-validation against OPERA RTC-S1
@@ -47,6 +42,27 @@ Unit tests are fully offline: network, CDSE credentials, the burst-map lookup ta
 Set `S1BURSTS_REQUIRE_INTEGRATION=1` to turn those skips into failures. CI sets it, because every prerequisite is provided there and a run that silently skipped everything would look the same as a passing one.
 
 Unexpected warnings fail the suite (`filterwarnings = ["error", ...]` in `pyproject.toml`). Add a narrow `ignore` with its reason and removal condition rather than widening the filter.
+
+### Coverage
+
+PR patch coverage and the project-wide coverage must both be at least 90%. Check before
+opening a PR:
+
+```bash
+uv run pytest -q --cov=s1bursts --cov-branch --cov-report=term-missing
+```
+
+### Dependency lower bounds
+
+Every dependency's lower bound is the oldest release that installs and works on Python 3.12.
+When using a newer dependency API, raise its lower bound with a justification and run:
+
+```bash
+uv sync --resolution lowest-direct --python 3.12
+uv run --no-sync pytest -q
+```
+
+Keep `--no-sync`; otherwise `uv run` re-resolves the environment at the latest versions.
 
 ### Scientific validation
 
@@ -136,13 +152,26 @@ docker run --rm -v "$PWD:/w" -w /w --env-file .env \
 
 `SNAP_BIN` is overridden because `.env` points at a host install, and `UV_PROJECT_ENVIRONMENT` keeps the container from overwriting the host `.venv` on the bind mount.
 
+## Releasing
+
+Versions come from git tags via `hatch-vcs`, so there is no version string to edit. Record
+changes in [`CHANGELOG.md`](CHANGELOG.md) under `## Unreleased` as you go, following
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+The project is pre-1.0, so minor releases may contain breaking changes, but they must be
+labelled. Mark behavior changes with **Breaking:** and show the before/after so downstream
+call sites can be updated from the entry alone.
+
+New backward-compatible functionality is a **minor** bump; a pure bug fix with no new public
+API is a **patch**.
+
 ## Code Style Guidelines
 
 ### Docstrings
 
-- Use NumPy-style docstrings for all public functions, classes, and methods
-- Do not add `Examples` or `Notes` sections
-- Keep descriptions concise; do not add implementation details irrelevant to the end user
+- Use NumPy-style docstrings for all public functions, classes, and methods.
+- Avoid `Examples` and `Notes` sections; omit implementation details callers do not need.
+- Private helpers, fixtures, and test doubles need only a one-line summary.
 
 Docstrings are the source for the [Great Docs](https://posit-dev.github.io/great-docs/)
 API reference, which renders them with `parser: numpy`. That parser passes
@@ -160,17 +189,19 @@ bibliography in each one.
 
 ### Comments
 
-- Be clear and concise, avoid unnecessary jargon
-- Keep comments to a single line wherever one suffices, use more lines only where the reasoning genuinely needs it
-- Comment on the "why", not what the code already states
-- Comment on the current, not the previous behavior
+- Keep comments brief and explain why, not what.
+- Describe current behavior; only regression-test comments may reference the former bug, e.g.
+  `# Previously raised IndexError for a scalar geometry query.`
 
 ### Type checking
 
-- Use Python 3.13+ type annotations (`type` instead of `TypeVar`, collection imports from `collections.abc` instead of `typing`, etc.)
-- Keep ignores and casts to a minimum
-- Only annotate variables that cannot be automatically inferred by mypy (such as function arguments, return values, and empty collections)
+- Python 3.12+ annotations: `type X = ...` instead of `TypeVar`, `collections.abc` instead of
+  `typing` for collection types, `X | None` instead of `Optional[X]`.
+- Keep ignores and casts to a minimum.
+- Only annotate what mypy cannot infer on its own (function arguments, return values, empty
+  collections).
 
 ### Imports
 
-- Place imports at the top of the file in the standard import section
+- Place imports at the top of the file in the standard import section.
+- Every module starts with `from __future__ import annotations`.
