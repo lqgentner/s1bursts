@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import logging
+from operator import itemgetter
 from pathlib import Path
 import shutil
 import tempfile
@@ -388,14 +389,12 @@ def _build_footprint(root: etree._Element) -> str:
     (``7.628802608148144e+00``) without losing precision.
     """
     pts = root.findall("geolocationGrid/geolocationGridPointList/geolocationGridPoint")
-    top = sorted(
-        (
-            (p.findtext("longitude"), p.findtext("latitude"), float(p.findtext("pixel")))
-            for p in pts
-            if int(p.findtext("line")) == 0
-        ),
-        key=lambda t: t[2],
-    )
+    top_row: list[tuple[str, str, float]] = [
+        (p.findtext("longitude"), p.findtext("latitude"), float(p.findtext("pixel")))
+        for p in pts
+        if int(p.findtext("line")) == 0
+    ]
+    top = sorted(top_row, key=itemgetter(2))
     nontop = [
         (p.findtext("longitude"), p.findtext("latitude"))
         for p in pts

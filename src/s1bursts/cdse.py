@@ -179,7 +179,7 @@ class CDSEAuth(AuthBase):
         response.raise_for_status()
         self._update_tokens(response.json())
 
-    def _update_tokens(self, token_data: dict) -> None:
+    def _update_tokens(self, token_data: dict[str, Any]) -> None:
         """Update tokens properties from token response."""
         self.access_token = str(token_data["access_token"])
         self.refresh_token = str(token_data["refresh_token"])
@@ -379,10 +379,10 @@ class CDSEBurstClient:
         if filters is not None:
             params["$filter"] = " and ".join(filters)
         if top is not None:
-            params["$top"] = int(top)
+            params["$top"] = top
         params["$orderby"] = "ContentDate/Start" if ascending else "ContentDate/Start desc"
         if count is not None:
-            params["$count"] = bool(count)
+            params["$count"] = count
         return params
 
     # Search has no fallback endpoint, so retry its intermittent HTTP 500 responses.

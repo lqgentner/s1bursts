@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 import logging
 import time
 from typing import TYPE_CHECKING, Any, overload
@@ -109,8 +110,8 @@ class BurstProcessor:
         cfg = config or BackscatterConfig()
         return self._process_collection(
             bursts,
-            lambda burst: self.snap_client.create_backscatter(
-                burst,
+            partial(
+                self.snap_client.create_backscatter,
                 crs=crs,
                 config=cfg,
                 overwrite=overwrite,
@@ -148,8 +149,8 @@ class BurstProcessor:
         cfg = config or CoherenceConfig()
         return self._process_collection(
             pairs,
-            lambda pair: self.snap_client.create_coherence(
-                pair,
+            partial(
+                self.snap_client.create_coherence,
                 crs=crs,
                 config=cfg,
                 overwrite=overwrite,
@@ -186,8 +187,8 @@ class BurstProcessor:
         cfg = config or InterferogramConfig()
         return self._process_collection(
             pairs,
-            lambda pair: self.snap_client.create_interferogram(
-                pair,
+            partial(
+                self.snap_client.create_interferogram,
                 crs=crs,
                 config=cfg,
                 overwrite=overwrite,
@@ -246,17 +247,14 @@ class BurstProcessor:
         with progress:
             if n_workers <= 1:
                 for item in items:
-                    result = process_fn(item)  # type: ignore[arg-type]
+                    result = process_fn(item)
                     if isinstance(result, ErrorResult) and not self.continue_on_error:
                         raise result.error
                     results.append(result)
                     progress.advance(task_id)
             else:
                 with ThreadPoolExecutor(max_workers=n_workers) as executor:
-                    future_to_item = {
-                        executor.submit(process_fn, item): item  # type: ignore[arg-type]
-                        for item in items
-                    }
+                    future_to_item = {executor.submit(process_fn, item): item for item in items}
                     for future in as_completed(future_to_item):
                         result = future.result()
                         if isinstance(result, ErrorResult) and not self.continue_on_error:

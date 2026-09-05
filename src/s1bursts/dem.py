@@ -18,6 +18,7 @@ from pyproj import CRS, Transformer, datadir, proj_version_str
 from pyproj.transformer import TransformerGroup
 import rasterio
 from rasterio.errors import RasterioError
+import rasterio.windows
 
 from s1bursts.config import get_settings
 

@@ -76,7 +76,7 @@ def _split_profiles(
     if not rasterio_profile:
         return {}
     if all(isinstance(value, Mapping) for value in rasterio_profile.values()):
-        return {str(key): dict(value) for key, value in rasterio_profile.items()}
+        return {key: dict(value) for key, value in rasterio_profile.items()}
     return {_DEFAULT_PROFILE_KEY: dict(rasterio_profile)}
 
 
@@ -824,7 +824,7 @@ class ResolutionWeighter:
         windowed read aligned to ``geobox``.  Out-of-bounds pixels are filled
         with NaN.
         """
-        bounds = tuple(geobox.boundingbox)
+        left, bottom, right, top = geobox.boundingbox
 
         def _load_one(prod: ComposableProduct) -> _LoadedEntry:
             path = self._fm.get_product_path(prod)
@@ -844,7 +844,8 @@ class ResolutionWeighter:
                         f"{geobox.resolution.x} m; all inputs must share the output grid."
                     )
                     raise ValueError(msg)
-                win = from_bounds(*bounds, src.transform).round_lengths().round_offsets()
+                win = from_bounds(left, bottom, right, top, transform=src.transform)
+                win = win.round_lengths().round_offsets()
                 data = src.read(band, window=win, boundless=True, fill_value=np.nan)
             return prod, data.astype(np.float32)
 
@@ -862,7 +863,7 @@ class ResolutionWeighter:
 
     def _save(
         self,
-        data: NDArray,
+        data: NDArray[np.number[Any]],
         product: CompositeProduct | QAProduct,
         geobox: MGRSGeoBox,
         metadata: RasterMetadata,
@@ -1032,7 +1033,7 @@ class ResolutionWeighter:
     def _stitch_by_orbit_date(
         self,
         loaded: Sequence[_LoadedEntry],
-    ) -> dict[_OrbitDateKey, NDArray]:
+    ) -> dict[_OrbitDateKey, NDArray[np.floating[Any]]]:
         """Group loaded arrays by orbit/date and mosaic within each group.
 
         The grouping key is ``(rel_orbit_number, acquisition_date)``, where
@@ -1041,7 +1042,7 @@ class ResolutionWeighter:
         using pixel-wise first non-NaN selection, which avoids averaging along
         burst seams.
         """
-        groups: defaultdict[_OrbitDateKey, list[NDArray]] = defaultdict(list)
+        groups: defaultdict[_OrbitDateKey, list[NDArray[np.floating[Any]]]] = defaultdict(list)
         for prod, data in loaded:
             key: _OrbitDateKey = (
                 prod.rel_orbit_number,
@@ -1071,8 +1072,8 @@ class ResolutionWeighter:
 
     @staticmethod
     def _check_sim_coverage(
-        obs_groups: dict[_OrbitDateKey, NDArray],
-        sim_groups: dict[_OrbitDateKey, NDArray],
+        obs_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
+        sim_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
     ) -> None:
         """Verify every observation group has a matching simulated-area group.
 

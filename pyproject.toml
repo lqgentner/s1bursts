@@ -62,11 +62,11 @@ Changelog = "https://github.com/lqgentner/s1bursts/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 # Tighter floors for development dependencies: They track the toolchain CI actually runs.
-# That matters most for `ruff` and `mypy`, whose output is version-dependent.
+# That matters most for `ruff` and `pyrefly`, whose output is version-dependent.
 dev = [
     "debugpy>=1.8",
-    "mypy>=2.3",
     "pandas-stubs>=3.0",
+    "pyrefly>=1.2.0",
     "pytest>=9.1",
     "pytest-cov>=7.1",
     "ruff>=0.16",
@@ -216,10 +216,6 @@ filterwarnings = [
     "ignore:Use `@` matmul instead of:PendingDeprecationWarning",
 ]
 
-[tool.mypy]
-ignore_missing_imports = true
-files = ["src/s1bursts"]
-
 [tool.coverage.run]
 branch = true
 source = ["s1bursts"]
@@ -227,3 +223,9 @@ source = ["s1bursts"]
 [tool.coverage.report]
 fail_under = 90
 show_missing = true
+
+# The geo/scientific stack ships no stubs, but Pyrefly infers from the installed
+# sources, so no import needs to be ignored.
+[tool.pyrefly]
+project-includes = ["src/s1bursts"]
+preset = "strict"

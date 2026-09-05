@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self, override
 
 from freezebase.mgrs import mgrs_to_crs
 from pandas import Timestamp
@@ -113,6 +113,9 @@ class GeocodedBurst(BurstFootprintMixin, BaseProduct, ABC):
     sub_swath: SubSwath
     crs: CRSLike
     # None delegates to the mixin's burst-map lookup.
+    # `BurstFootprintMixin` defaults these to None for subclasses that do not declare
+    # them; as fields of a frozen dataclass they become read-only, which is intended.
+    # pyrefly: ignore [bad-override]
     _rel_orbit_number: int | None = field(default=None, repr=False, kw_only=True)
     # Include the resolved value in asdict()-based filenames.
     rel_orbit_number: int = field(init=False, repr=False)
@@ -196,11 +199,13 @@ class RTCProduct(BackscatterProduct):
     """
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return "RTC"
 
     @property
+    @override
     def is_terrain_flattened(self) -> bool:
         """Whether the product has been radiometrically terrain corrected."""
         return True
@@ -227,11 +232,13 @@ class GTCProduct(BackscatterProduct):
     """
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return "GTC"
 
     @property
+    @override
     def is_terrain_flattened(self) -> bool:
         """Whether the product has been radiometrically terrain corrected."""
         return False
@@ -320,6 +327,7 @@ class CoherenceProduct(CoregisteredProduct):
     """
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return "COH"
@@ -346,6 +354,7 @@ class InterferogramProduct(CoregisteredProduct):
     """
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return "IFG"
@@ -399,6 +408,7 @@ class RTCLRWComposite(MGRSTileProduct):
     """
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return "RTC_LRW"
@@ -425,6 +435,7 @@ class CohLRWComposite(MGRSTileProduct):
     baseline_days: int
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return "COH_LRW"
@@ -451,6 +462,7 @@ class RTCPassComposite(MGRSTileProduct):
     pass_direction: PassDirection
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return f"RTC_COMP_{self.pass_direction[0]}"
@@ -480,6 +492,7 @@ class CohPassComposite(MGRSTileProduct):
     baseline_days: int
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return f"COH_COMP_{self.pass_direction[0]}"
@@ -506,6 +519,7 @@ class RTCLRWQA(MGRSTileProduct):
     qa_metric: QaMetric
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return f"RTC_LRW_QA-{self.qa_metric.value}"
@@ -535,6 +549,7 @@ class CohLRWQA(MGRSTileProduct):
     qa_metric: QaMetric
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return f"COH_LRW_QA-{self.qa_metric.value}"
@@ -561,6 +576,7 @@ class RTCPassQA(MGRSTileProduct):
     pass_direction: PassDirection
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return f"RTC_COMP_{self.pass_direction[0]}_QA-NUM"
@@ -590,6 +606,7 @@ class CohPassQA(MGRSTileProduct):
     baseline_days: int
 
     @property
+    @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return f"COH_COMP_{self.pass_direction[0]}_QA-NUM"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass, field, fields
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload, override
 import warnings
 
 import geopandas as gpd
@@ -41,8 +41,19 @@ class BurstFootprintMixin:
     """
 
     __slots__ = ()
-    burst_id: int
-    sub_swath: SubSwath
+
+    # Declared read-only, because subclasses supply them as frozen dataclass fields.
+    # Type-only: the mixin never owns these at runtime.
+    if TYPE_CHECKING:
+
+        @property
+        def burst_id(self) -> int:
+            """Burst identifier."""
+
+        @property
+        def sub_swath(self) -> SubSwath:
+            """Sub-swath identifier."""
+
     # Authoritative overrides; None here so subclasses without their own field
     # (e.g. product.GeocodedBurst) inherit the LUT-fallback behaviour.
     _rel_orbit_number: int | None = None
@@ -214,13 +225,18 @@ class Burst(BurstFootprintMixin):
     cdse_id: str | None = field(default=None, compare=False, hash=False)
     parent_product_name: str | None = field(default=None, compare=False, hash=False)
     # Footprint values propagated from CDSE or an SLC filename; None falls back to the LUT.
+    # `BurstFootprintMixin` defaults these to None for subclasses that do not declare
+    # them; as fields of a frozen dataclass they become read-only, which is intended.
+    # pyrefly: ignore [bad-override]
     _rel_orbit_number: int | None = field(default=None, compare=False, hash=False, repr=False)
+    # pyrefly: ignore [bad-override]
     _pass_direction: PassDirection | None = field(
         default=None,
         compare=False,
         hash=False,
         repr=False,
     )
+    # pyrefly: ignore [bad-override]
     _geometry: Polygon | MultiPolygon | None = field(
         default=None,
         compare=False,
@@ -547,7 +563,9 @@ class _BaseBurstCollection[TEntry]:
 
         map_svg = ui.create_footprint_svg(unique_footprints)
         world_map_svg = ui.create_world_map_with_target(unique_footprints)
-        df_html = self.df[self._UNIQUE_COLUMNS]._repr_html_()  # type: ignore[operator]
+        # pandas-stubs omits `_repr_html_`, so the lookup falls through to `__getattr__`.
+        # pyrefly: ignore [not-callable]
+        df_html = self.df[self._UNIQUE_COLUMNS]._repr_html_()
         css = ui.get_burstinfo_css()
         col_name = type(self).__name__
         entry_name = self._ENTRY_NAME_SINGULAR if n_bursts == 1 else self._ENTRY_NAME_PLURAL
@@ -736,6 +754,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         return BurstPairCollection(df_pairs)
 
     @staticmethod
+    @override
     def _row_to_entry(row: Series) -> Burst:
         """Convert a DataFrame row to a Burst instance."""
         rel_orbit = _scalar_or_none(row.get("_rel_orbit_number"))
@@ -962,6 +981,7 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
     _ENTRY_NAME_PLURAL: ClassVar[str] = "Burst pairs"
 
     @staticmethod
+    @override
     def _row_to_entry(row: Series) -> BurstPair:
         """Convert a DataFrame row to a BurstPair instance."""
         # Footprint overrides are shared by both bursts of the pair.
@@ -1090,8 +1110,8 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         df_common = df_pairs[list(common_cols)]
 
         # Add common columns to both dataframes
-        df_primary = pd.concat([df_primary, df_common], axis=1)  # type: ignore[assignment]
-        df_secondary = pd.concat([df_secondary, df_common], axis=1)  # type: ignore[assignment]
+        df_primary = pd.concat([df_primary, df_common], axis=1)
+        df_secondary = pd.concat([df_secondary, df_common], axis=1)
 
         # Combine primary and secondary bursts
         df_all = gpd.GeoDataFrame(

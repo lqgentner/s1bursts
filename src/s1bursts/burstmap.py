@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 from io import BytesIO
 import logging
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast, override
 from zipfile import ZipFile
 
 from freezebase.utils import format_valid_options
@@ -88,6 +88,7 @@ class Sentinel1Bursts(GeoVectorData):
         self.mode = mode
 
     @property
+    @override
     def metadata(self) -> DatasetMetadata:
         """Metadata container for dataset attribution and licensing."""
         return DatasetMetadata(
@@ -105,11 +106,13 @@ class Sentinel1Bursts(GeoVectorData):
         )
 
     @property
+    @override
     def raw_path(self) -> Path:
         """Path to the raw downloaded data."""
         return self.cache_dir / f"raw/sar/s1-burstid-map-{_BURSTMAP_VERSION}.zip"
 
     @property
+    @override
     def processed_path(self) -> Path:
         """Path to the processed data."""
         return (
@@ -117,6 +120,7 @@ class Sentinel1Bursts(GeoVectorData):
             / f"processed/sar/s1-{self.mode.lower()}-burstid-map-{_BURSTMAP_VERSION}.parquet"
         )
 
+    @override
     def _prepare(self) -> None:
         """Extract the ZIP, select most important columns and save as GeoParquet."""
         logger.info(

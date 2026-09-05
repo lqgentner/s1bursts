@@ -40,7 +40,7 @@ from s1bursts.snap_graph import NODATA_SENTINEL
 from s1bursts.summary import ErrorResult, OkResult, OperationResult
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
     from upath import UPath
 
@@ -893,7 +893,7 @@ def _publish_new_files(worker_userdir: Path, shared_cache: Path) -> None:
 
 
 @contextmanager
-def snap_worker_userdir(shared_cache: Path, worker_root: Path) -> Iterator[Path]:
+def snap_worker_userdir(shared_cache: Path, worker_root: Path) -> Generator[Path]:
     """Context manager that provides an isolated SNAP userdir for one job.
 
     Symlinks known auxdata subdirs from *shared_cache* into a fresh per-PID

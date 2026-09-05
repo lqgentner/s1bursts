@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Final, Literal
+from typing import Annotated, Any, ClassVar, Final, Literal, override
 from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
 from lxml import etree
@@ -988,7 +988,7 @@ class GeocodingConfig(BaseModel):
     external_dem_nodata: float = 0.0
     external_dem_apply_egm: bool = False
 
-    @computed_field  # type: ignore[prop-decorator]
+    @computed_field
     @property
     def standard_grid_origin(self) -> tuple[float, float]:
         """Origin of standard grid: At pixel centers."""
@@ -1067,7 +1067,8 @@ class BackscatterConfig(GeocodingConfig):
             return ["Gamma0", "simulatedImage"]
         return ["Beta0"]
 
-    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:  # noqa: ARG002
+    @override
+    def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
         """Build the backscatter graph XML for this config.
 
         Takes ``snap_version`` for a uniform signature; this graph names no
@@ -1129,6 +1130,7 @@ class CoherenceConfig(GeocodingConfig):
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
         return ["coh"]
 
+    @override
     def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
         """Build the coherence graph XML for this config.
 
@@ -1169,6 +1171,7 @@ class InterferogramConfig(GeocodingConfig):
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
         return ["ifg_i", "ifg_q", "intensity_1", "intensity_2"]
 
+    @override
     def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
         """Build the interferogram graph XML for this config."""
         return build_interferogram_graph(self, snap_version=snap_version)
