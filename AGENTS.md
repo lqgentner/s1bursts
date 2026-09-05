@@ -197,7 +197,7 @@ bibliography in each one.
 
 - Python 3.12+ annotations: `type X = ...` instead of `TypeVar`, `collections.abc` instead of
   `typing` for collection types, `X | None` instead of `Optional[X]`.
-- Pyrefly runs under the `strict` preset on `src/s1bursts`. Keep casts and
+- Pyrefly runs under the `strict` preset on `src/s1bursts` and `tests`. Keep casts and
   `# pyrefly: ignore[code]` suppressions to a minimum, and give each one a comment
   saying why.
 - Only annotate what Pyrefly cannot infer on its own (function arguments, return values, empty

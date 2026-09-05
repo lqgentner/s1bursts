@@ -1,6 +1,7 @@
 """Tests for ``s1bursts.snap_graph`` — dynamic SNAP graph generation."""
 
 from pathlib import Path
+from typing import Any
 from xml.etree.ElementTree import canonicalize
 
 from lxml.etree import fromstring, tostring
@@ -252,7 +253,7 @@ def test_coherence_options_reach_the_graph_when_enabled() -> None:
 )
 @pytest.mark.parametrize("snap_version", [None, (13, 0, 0)])
 def test_enabled_coherence_options_reject_a_snap_older_than_14(
-    kwargs: dict[str, bool],
+    kwargs: dict[str, Any],
     match: str,
     snap_version: tuple[int, ...] | None,
 ) -> None:
@@ -359,14 +360,16 @@ def test_coherence_window_must_be_positive() -> None:
 def test_config_is_frozen() -> None:
     cfg = BackscatterConfig()
     with pytest.raises(ValueError, match="frozen"):
-        cfg.flatten_terrain = False  # type: ignore[misc]
+        # pyrefly: ignore [read-only]
+        cfg.flatten_terrain = False
 
 
 def test_geocoding_config_is_abstract() -> None:
     # The shared base carries only the Terrain-Correction tail; it emits no
     # graph of its own, so it must not be instantiable.
     with pytest.raises(TypeError, match="abstract"):
-        GeocodingConfig()  # type: ignore[abstract]
+        # pyrefly: ignore [bad-instantiation]
+        GeocodingConfig()
 
 
 # ---------------------------------------------------------------------------
@@ -419,15 +422,18 @@ class TestGeocodingValidation:
 
     def test_rejects_an_unknown_image_resampling_method(self) -> None:
         with pytest.raises(ValidationError, match="img_resampling"):
+            # pyrefly: ignore [bad-argument-type]
             BackscatterConfig(img_resampling="LANCZOS")
 
     def test_rejects_an_unknown_dem_resampling_method(self) -> None:
         with pytest.raises(ValidationError, match="dem_resampling"):
+            # pyrefly: ignore [bad-argument-type]
             BackscatterConfig(dem_resampling="MAGIC")
 
     def test_rejects_lower_case_resampling_method(self) -> None:
         """SNAP's parameter values are upper case; a lower-case name is silently ignored."""
         with pytest.raises(ValidationError, match="img_resampling"):
+            # pyrefly: ignore [bad-argument-type]
             BackscatterConfig(img_resampling="bilinear_interpolation")
 
     @pytest.mark.parametrize(
@@ -443,6 +449,8 @@ class TestGeocodingValidation:
         ],
     )
     def test_accepts_every_supported_image_resampling_method(self, method: str) -> None:
+        # `method` is parametrized as a plain str.
+        # pyrefly: ignore [bad-argument-type]
         config = BackscatterConfig(img_resampling=method)
 
         assert f"<imgResamplingMethod>{method}</imgResamplingMethod>" in config.to_xml()
@@ -453,6 +461,7 @@ class TestGeocodingValidation:
 
         assert "DELAUNAY_INTERPOLATION" in config.to_xml()
         with pytest.raises(ValidationError):
+            # pyrefly: ignore [bad-argument-type]
             BackscatterConfig(img_resampling="DELAUNAY_INTERPOLATION")
 
     def test_accepts_a_fine_grid_spacing(self) -> None:

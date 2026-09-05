@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 from pandas import Timestamp
 import pytest
@@ -27,7 +29,8 @@ class TestTimeRange:
 
     def test_rejects_non_sequence(self) -> None:
         with pytest.raises(TypeError, match="must be of type tuple"):
-            SearchQuery(time_range=pd.Timestamp("2022-01-01"))  # type: ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            SearchQuery(time_range=pd.Timestamp("2022-01-01"))
 
     @pytest.mark.parametrize(
         "time_range",
@@ -35,7 +38,8 @@ class TestTimeRange:
     )
     def test_rejects_wrong_length(self, time_range: tuple[str, ...]) -> None:
         with pytest.raises(ValueError, match="exactly 2 elements"):
-            SearchQuery(time_range=time_range)  # type: ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            SearchQuery(time_range=time_range)
 
     def test_rejects_start_after_end(self) -> None:
         with pytest.raises(ValueError, match="must be before end time"):
@@ -55,7 +59,8 @@ class TestGeometry:
 
     def test_rejects_object_without_wkt(self) -> None:
         with pytest.raises(ValueError, match="implements `wkt`"):
-            SearchQuery(intersects="POINT (1 2)")  # type: ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            SearchQuery(intersects="POINT (1 2)")
 
 
 class TestIntValidation:
@@ -63,8 +68,9 @@ class TestIntValidation:
     @pytest.mark.parametrize("value", [-1, 0])
     def test_rejects_non_positive(self, field: str, value: int) -> None:
         """Burst and orbit identifiers are 1-based, so zero is as invalid as a negative."""
+        kwargs: dict[str, Any] = {field: value}
         with pytest.raises(ValueError, match=f"{field} must be"):
-            SearchQuery(**{field: value})
+            SearchQuery(**kwargs)
 
     def test_accepts_the_full_relative_orbit_range(self) -> None:
         assert SearchQuery(rel_orbit_number=1).rel_orbit_number == 1
@@ -96,8 +102,9 @@ class TestChoiceValidation:
     )
     def test_rejects_unknown_identifier(self, field: str, value: str) -> None:
         """A typo must fail here, not silently return an empty result set from CDSE."""
+        kwargs: dict[str, Any] = {field: value}
         with pytest.raises(ValueError, match=f"{field} must be one of"):
-            SearchQuery(**{field: value})
+            SearchQuery(**kwargs)
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -110,11 +117,14 @@ class TestChoiceValidation:
         ],
     )
     def test_accepts_every_documented_identifier(self, field: str, value: str) -> None:
-        assert getattr(SearchQuery(**{field: value}), field) == value
+        kwargs: dict[str, Any] = {field: value}
+        assert getattr(SearchQuery(**kwargs), field) == value
 
     def test_is_case_sensitive(self) -> None:
         """CDSE's OData filters are case-sensitive, so lower case cannot be accepted."""
         with pytest.raises(ValueError, match="polarization must be one of"):
+            # Deliberately lower case.
+            # pyrefly: ignore [bad-argument-type]
             SearchQuery(polarization="vv")
 
 

@@ -38,7 +38,9 @@ def _shifted(offsets: list[float]) -> tuple[BurstSafe, BurstSafe]:
         (col, row + offset, *position)
         for (col, row, *position), offset in zip(ours, offsets, strict=True)
     ]
-    return _safe(ours), _safe(theirs)  # type: ignore[arg-type]
+    # GCP tuples carry the optional height element.
+    # pyrefly: ignore [bad-argument-type]
+    return _safe(ours), _safe(theirs)
 
 
 class TestDiffGcps:

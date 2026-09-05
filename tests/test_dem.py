@@ -657,7 +657,9 @@ class TestTransformationGrids:
         )
         user_dir.mkdir()
 
-        dem_module._download_grids(DownloadGroup())  # type: ignore[arg-type]
+        # Local double with just the attributes `_download_grids` reads.
+        # pyrefly: ignore [bad-argument-type]
+        dem_module._download_grids(DownloadGroup())
 
         assert calls[0][1] is True
         assert (user_dir / "test-grid.tif").read_bytes() == b"complete-grid"
@@ -688,7 +690,8 @@ class TestTransformationGrids:
         user_dir.mkdir()
 
         with pytest.raises(RuntimeError, match=r"No directly downloadable open-license.*manually"):
-            dem_module._download_grids(DownloadGroup())  # type: ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            dem_module._download_grids(DownloadGroup())
 
         assert attempts == []
 

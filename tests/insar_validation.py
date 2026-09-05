@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date as _date
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -214,7 +214,9 @@ def _paired_samples(
     return blocked_ours[keep], blocked_theirs[keep]
 
 
-def agreement(ours: np.ndarray, theirs: np.ndarray, valid: np.ndarray, k: int = 1) -> dict:
+def agreement(
+    ours: np.ndarray, theirs: np.ndarray, valid: np.ndarray, k: int = 1
+) -> dict[str, Any]:
     """Summarize the agreement between two coherence fields.
 
     Parameters
@@ -235,12 +237,12 @@ def agreement(ours: np.ndarray, theirs: np.ndarray, valid: np.ndarray, k: int = 
     """
     x, y = _paired_samples(ours, theirs, valid, k)
     if x.size < 100:
-        return {"n": int(x.size), "insufficient_samples": True}
+        return {"n": x.size, "insufficient_samples": True}
 
     difference = y - x
     median_difference = float(np.median(difference))
     return {
-        "n": int(x.size),
+        "n": x.size,
         "median_ours": round(float(np.median(x)), 5),
         "median_hyp3": round(float(np.median(y)), 5),
         "median_diff_hyp3_minus_ours": round(median_difference, 5),
@@ -260,7 +262,7 @@ def quantile_map(
     theirs: np.ndarray,
     valid: np.ndarray,
     quantiles: tuple[int, ...] = QUANTILES,
-) -> dict:
+) -> dict[str, Any]:
     """Compare the two coherence distributions by quantile.
 
     Parameters
@@ -328,7 +330,7 @@ def alignment_scan(
     theirs: np.ndarray,
     valid: np.ndarray,
     max_shift: int = MAX_SHIFT_PX,
-) -> dict:
+) -> dict[str, Any]:
     """Locate the two products against each other on the ground.
 
     Parameters

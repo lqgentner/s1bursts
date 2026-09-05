@@ -97,10 +97,13 @@ class TestModeValidation:
     @pytest.mark.parametrize("mode", ["SM", "iw", "", "IW1"])
     def test_rejects_an_unsupported_mode(self, tmp_path: Path, mode: str) -> None:
         with pytest.raises(ValueError, match="Invalid product"):
+            # pyrefly: ignore [bad-argument-type]
             burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode=mode)
 
     @pytest.mark.parametrize("mode", ["IW", "EW"])
     def test_accepts_both_acquisition_modes(self, tmp_path: Path, mode: str) -> None:
+        # `mode` is parametrized as a plain str.
+        # pyrefly: ignore [bad-argument-type]
         dataset = burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode=mode)
 
         assert dataset.mode == mode

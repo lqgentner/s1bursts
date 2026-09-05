@@ -40,7 +40,11 @@ def main() -> int:
         tmp_dir = Path(tmp)
         product = build_product(tmp_dir, SPEC)
 
+        # Stubs stand in for the S3 lookups this offline regeneration cannot make.
+        # pyrefly: ignore [bad-assignment]
         extractor._lookup_s3_path = lambda _name: str(product.root)
+        # Stubs stand in for the S3 lookups this offline regeneration cannot make.
+        # pyrefly: ignore [bad-assignment]
         extractor._make_s3_upath = lambda path, _settings: UPath(path)
 
         zip_path = extractor.extract_burst_from_s3(
@@ -51,14 +55,16 @@ def main() -> int:
             burst_id=SPEC.burst_ids[BURST_INDEX],
         )
 
-        violations = check_burst_safe(Path(zip_path), sub_swath=SPEC.sub_swath)
+        violations = check_burst_safe(Path(str(zip_path)), sub_swath=SPEC.sub_swath)
         if violations:
             print("Refusing to pin a non-conformant extraction:")
             for violation in violations:
                 print(f"  - {violation}")
             return 1
 
-        GOLDEN_PATH.write_text(json.dumps(digest(Path(zip_path)), indent=2, sort_keys=True) + "\n")
+        GOLDEN_PATH.write_text(
+            json.dumps(digest(Path(str(zip_path))), indent=2, sort_keys=True) + "\n"
+        )
 
     print(f"Wrote {GOLDEN_PATH}")
     return 0

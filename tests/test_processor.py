@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -105,7 +105,9 @@ class TestProcessCollection:
         items = ["a", "b", "c"]
         process_fn = MagicMock(side_effect=lambda i: OkResult(source=i, result=i.upper()))
 
-        summary = processor._process_collection(items, process_fn, "Test")  # type: ignore[arg-type]
+        # Plain strings exercise the generic machinery without building a collection.
+        # pyrefly: ignore [no-matching-overload]
+        summary = processor._process_collection(items, process_fn, "Test")
 
         assert isinstance(summary, OperationSummary)
         assert summary.n_total == 3
@@ -121,7 +123,9 @@ class TestProcessCollection:
         ]
         process_fn = MagicMock(side_effect=results)
 
-        summary = processor._process_collection(["a", "b", "c"], process_fn, "Test")  # type: ignore[arg-type]
+        # Plain strings exercise the generic machinery without building a collection.
+        # pyrefly: ignore [no-matching-overload]
+        summary = processor._process_collection(["a", "b", "c"], process_fn, "Test")
 
         assert summary.n_processed == 2
         assert summary.n_failed == 1
@@ -137,13 +141,16 @@ class TestProcessCollection:
         )
 
         with pytest.raises(SnapProcessingError, match="boom"):
-            processor._process_collection(["a"], process_fn, "Test")  # type: ignore[arg-type]
+            # pyrefly: ignore [no-matching-overload]
+            processor._process_collection(["a"], process_fn, "Test")
 
     def test_parallel_collects_results(self, processor: BurstProcessor) -> None:
         processor.config.resolved_max_workers = 3
         process_fn = MagicMock(side_effect=lambda i: OkResult(source=i, result=i.upper()))
 
-        summary = processor._process_collection(["a", "b", "c"], process_fn, "Test")  # type: ignore[arg-type]
+        # Plain strings exercise the generic machinery without building a collection.
+        # pyrefly: ignore [no-matching-overload]
+        summary = processor._process_collection(["a", "b", "c"], process_fn, "Test")
 
         assert summary.n_processed == 3
         assert sorted(summary.products) == ["A", "B", "C"]
@@ -159,7 +166,8 @@ class TestProcessCollection:
         )
 
         with pytest.raises(SnapProcessingError, match="boom"):
-            processor._process_collection(["a", "b"], process_fn, "Test")  # type: ignore[arg-type]
+            # pyrefly: ignore [no-matching-overload]
+            processor._process_collection(["a", "b"], process_fn, "Test")
 
 
 class TestDispatch:
@@ -167,33 +175,42 @@ class TestDispatch:
 
     def test_create_backscatter(self, processor: BurstProcessor) -> None:
         burst = MagicMock()
-        processor.snap_client.create_backscatter.return_value = OkResult(
+        cast("MagicMock", processor.snap_client).create_backscatter.return_value = OkResult(
             source=burst,
             result="rtc",
         )
 
-        summary = processor.create_backscatter([burst], crs=MagicMock())  # type: ignore[arg-type]
+        # A MagicMock burst is enough to assert the dispatch.
+        # pyrefly: ignore [bad-argument-type]
+        summary = processor.create_backscatter([burst], crs=MagicMock())
 
-        processor.snap_client.create_backscatter.assert_called_once()
+        cast("MagicMock", processor.snap_client).create_backscatter.assert_called_once()
         assert summary.products == ["rtc"]
 
     def test_create_coherences(self, processor: BurstProcessor) -> None:
         pair = MagicMock()
-        processor.snap_client.create_coherence.return_value = OkResult(source=pair, result="coh")
+        cast("MagicMock", processor.snap_client).create_coherence.return_value = OkResult(
+            source=pair,
+            result="coh",
+        )
 
-        summary = processor.create_coherences([pair], crs=MagicMock())  # type: ignore[arg-type]
+        # A MagicMock pair is enough to assert the dispatch.
+        # pyrefly: ignore [bad-argument-type]
+        summary = processor.create_coherences([pair], crs=MagicMock())
 
-        processor.snap_client.create_coherence.assert_called_once()
+        cast("MagicMock", processor.snap_client).create_coherence.assert_called_once()
         assert summary.products == ["coh"]
 
     def test_create_interferograms(self, processor: BurstProcessor) -> None:
         pair = MagicMock()
-        processor.snap_client.create_interferogram.return_value = OkResult(
+        cast("MagicMock", processor.snap_client).create_interferogram.return_value = OkResult(
             source=pair,
             result="ifg",
         )
 
-        summary = processor.create_interferograms([pair], crs=MagicMock())  # type: ignore[arg-type]
+        # A MagicMock pair is enough to assert the dispatch.
+        # pyrefly: ignore [bad-argument-type]
+        summary = processor.create_interferograms([pair], crs=MagicMock())
 
-        processor.snap_client.create_interferogram.assert_called_once()
+        cast("MagicMock", processor.snap_client).create_interferogram.assert_called_once()
         assert summary.products == ["ifg"]

@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date as _date
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -97,7 +97,9 @@ SCENES: tuple[Scene, ...] = (
 )
 
 
-def agreement(ours: np.ndarray, theirs: np.ndarray, valid: np.ndarray, k: int = 1) -> dict:
+def agreement(
+    ours: np.ndarray, theirs: np.ndarray, valid: np.ndarray, k: int = 1
+) -> dict[str, Any]:
     """Summarize the agreement between two rasters as bias and scatter.
 
     Block averaging is performed in power, so ``ours`` and ``theirs`` must be

@@ -7,6 +7,7 @@ mapping, so nothing here touches a file or the burst-map LUT.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from pandas import Timestamp
@@ -145,28 +146,32 @@ def _ifg_burst() -> InterferogramProduct:
     )
 
 
-def _lrw(**kwargs: object) -> dict[str, str]:
-    defaults: dict = {
+def _lrw(**kwargs: Any) -> dict[str, str]:
+    defaults: dict[str, Any] = {
         "aggregation": "median",
         "clip_max_resolution": None,
         "n_observations": 7,
         "decibel": False,
     }
-    return product_tags.rtc_lrw_metadata(_rtc_lrw(), **(defaults | kwargs)).tags  # type: ignore[arg-type]
+    return product_tags.rtc_lrw_metadata(_rtc_lrw(), **(defaults | kwargs)).tags
 
 
 def _every_builder() -> dict[str, dict[str, str]]:
     """Tags from one product of every kind this module builds metadata for."""
-    composite = {"aggregation": "median", "clip_max_resolution": None, "n_observations": 3}
-    unweighted = {"aggregation": "median", "n_observations": 3}
+    composite: dict[str, Any] = {
+        "aggregation": "median",
+        "clip_max_resolution": None,
+        "n_observations": 3,
+    }
+    unweighted: dict[str, Any] = {"aggregation": "median", "n_observations": 3}
     return {
         "rtc_lrw": _lrw(),
-        "coh_lrw": product_tags.coh_lrw_metadata(_coh_lrw(), **composite).tags,  # type: ignore[arg-type]
-        "rtc_pass": product_tags.rtc_pass_metadata(_rtc_pass(), decibel=False, **unweighted).tags,  # type: ignore[arg-type]
-        "coh_pass": product_tags.coh_pass_metadata(_coh_pass(), **unweighted).tags,  # type: ignore[arg-type]
-        "qa_num": product_tags.qa_metadata(_qa(QaMetric.NUM), **composite).tags,  # type: ignore[arg-type]
-        "qa_cqm": product_tags.qa_metadata(_qa(QaMetric.CQM), **composite).tags,  # type: ignore[arg-type]
-        "coh_qa": product_tags.qa_metadata(_coh_qa(QaMetric.NUM), **composite).tags,  # type: ignore[arg-type]
+        "coh_lrw": product_tags.coh_lrw_metadata(_coh_lrw(), **composite).tags,
+        "rtc_pass": product_tags.rtc_pass_metadata(_rtc_pass(), decibel=False, **unweighted).tags,
+        "coh_pass": product_tags.coh_pass_metadata(_coh_pass(), **unweighted).tags,
+        "qa_num": product_tags.qa_metadata(_qa(QaMetric.NUM), **composite).tags,
+        "qa_cqm": product_tags.qa_metadata(_qa(QaMetric.CQM), **composite).tags,
+        "coh_qa": product_tags.qa_metadata(_coh_qa(QaMetric.NUM), **composite).tags,
         "rtc_burst": product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags,
         "gtc_burst": product_tags.backscatter_metadata(
             _gtc_burst(), BackscatterConfig(flatten_terrain=False)
@@ -221,7 +226,7 @@ class TestBackscatterScaling:
         assert tags["BACKSCATTER_CONVERSION_APPLIED"] == "10*log10(power)"
 
     def test_unit_follows_the_scaling(self) -> None:
-        common: dict = {
+        common: dict[str, Any] = {
             "aggregation": "median",
             "clip_max_resolution": None,
             "n_observations": 1,
@@ -301,13 +306,13 @@ class TestTileIdentity:
 
 
 class TestCoherenceComposite:
-    def _tags(self, **kwargs: object) -> dict[str, str]:
-        defaults: dict = {
+    def _tags(self, **kwargs: Any) -> dict[str, str]:
+        defaults: dict[str, Any] = {
             "aggregation": "median",
             "clip_max_resolution": None,
             "n_observations": 5,
         }
-        return product_tags.coh_lrw_metadata(_coh_lrw(), **(defaults | kwargs)).tags  # type: ignore[arg-type]
+        return product_tags.coh_lrw_metadata(_coh_lrw(), **(defaults | kwargs)).tags
 
     def test_emits_no_backscatter_tags(self) -> None:
         # Coherence is a dimensionless magnitude on [0, 1], not a power
@@ -419,13 +424,13 @@ class TestCoherenceStatistics:
 
 
 class TestQaLayers:
-    def _num(self, **kwargs: object) -> dict[str, str]:
-        defaults: dict = {"aggregation": "median", "n_observations": 6}
-        return product_tags.qa_metadata(_qa(QaMetric.NUM), **(defaults | kwargs)).tags  # type: ignore[arg-type]
+    def _num(self, **kwargs: Any) -> dict[str, str]:
+        defaults: dict[str, Any] = {"aggregation": "median", "n_observations": 6}
+        return product_tags.qa_metadata(_qa(QaMetric.NUM), **(defaults | kwargs)).tags
 
-    def _cqm(self, **kwargs: object) -> dict[str, str]:
-        defaults: dict = {"aggregation": "median", "n_observations": 6}
-        return product_tags.qa_metadata(_qa(QaMetric.CQM), **(defaults | kwargs)).tags  # type: ignore[arg-type]
+    def _cqm(self, **kwargs: Any) -> dict[str, str]:
+        defaults: dict[str, Any] = {"aggregation": "median", "n_observations": 6}
+        return product_tags.qa_metadata(_qa(QaMetric.CQM), **(defaults | kwargs)).tags
 
     def test_num_carries_no_scaling_tags(self) -> None:
         # The PFS prose for 2.21 lists a dB-scaling expression, but the metadata
@@ -626,16 +631,16 @@ class TestBurstDispatch:
     )
     def test_dispatches_on_the_config(
         self,
-        product: object,
-        config: object,
+        product: Any,
+        config: Any,
         product_type: str,
     ) -> None:
-        metadata = product_tags.burst_metadata(product, config)  # type: ignore[arg-type]
+        metadata = product_tags.burst_metadata(product, config)
         assert metadata.tags["PRODUCT_TYPE"] == product_type
 
     def test_a_mismatched_pair_raises(self) -> None:
         with pytest.raises(TypeError, match="cannot build metadata"):
-            product_tags.burst_metadata(_rtc_burst(), CoherenceConfig())  # type: ignore[arg-type]
+            product_tags.burst_metadata(_rtc_burst(), CoherenceConfig())
 
 
 class TestRasterMetadata:
@@ -714,7 +719,7 @@ class TestProvenance:
             (_coh_burst(), CoherenceConfig()),
             (_ifg_burst(), InterferogramConfig()),
         ):
-            tags = product_tags.burst_metadata(product, config, snap_version=(13, 0, 0)).tags  # type: ignore[arg-type]
+            tags = product_tags.burst_metadata(product, config, snap_version=(13, 0, 0)).tags
             assert tags["PROCESSING_SOFTWARE_VERSION"] == "13.0.0"
 
     def test_a_burst_is_level_two_over_an_l1_slc(self) -> None:

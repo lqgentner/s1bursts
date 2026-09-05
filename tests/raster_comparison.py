@@ -9,7 +9,7 @@ comparison and live with the campaign that defines them.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import rasterio
@@ -56,7 +56,7 @@ def read_aligned(
     path_b: Path,
     band_name: str,
     companions: Sequence[Path] = (),
-) -> tuple[np.ndarray, np.ndarray, list[np.ndarray], dict]:
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray], dict[str, Any]]:
     """Read a band from two rasters over their shared geographic extent.
 
     Products of the same burst from different processors have different extents

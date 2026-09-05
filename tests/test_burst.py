@@ -21,8 +21,12 @@ from s1bursts.cdse import CDSEResponse
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from shapely.geometry import MultiPolygon, Polygon
+
+    from s1bursts.query import Polarization, SubSwath
+
 BURST_ID = 30346
-SUB_SWATH = "IW1"
+SUB_SWATH: SubSwath = "IW1"
 GEOMETRY = box(7.0, 46.0, 8.0, 47.0)
 
 
@@ -50,16 +54,16 @@ def _patched_luts() -> Iterator[None]:
 def make_burst(
     date: str = "2022-01-01",
     burst_id: int = BURST_ID,
-    sub_swath: str = SUB_SWATH,
-    polarization: str = "VV",
-    geometry: object | None = None,
+    sub_swath: SubSwath = SUB_SWATH,
+    polarization: Polarization = "VV",
+    geometry: Polygon | MultiPolygon | None = None,
 ) -> Burst:
     return Burst(
         burst_id=burst_id,
-        sub_swath=sub_swath,  # type: ignore[arg-type]
-        polarization=polarization,  # type: ignore[arg-type]
+        sub_swath=sub_swath,
+        polarization=polarization,
         date=Timestamp(date),
-        _geometry=geometry,  # type: ignore[arg-type]
+        _geometry=geometry,
     )
 
 
@@ -83,7 +87,7 @@ class TestBurst:
             ("EW5", "EW"),
         ],
     )
-    def test_mode_derived_from_subswath(self, sub_swath: str, expected_mode: str) -> None:
+    def test_mode_derived_from_subswath(self, sub_swath: SubSwath, expected_mode: str) -> None:
         assert make_burst(sub_swath=sub_swath).mode == expected_mode
 
     def test_ew_burst_queries_ew_lut(self) -> None:
@@ -250,7 +254,7 @@ class TestBurstPair:
             BurstPair(make_burst("2022-01-13"), make_burst("2022-01-01"))
 
 
-def make_collection(dates: list[str], polarization: str = "VV") -> BurstCollection:
+def make_collection(dates: list[str], polarization: Polarization = "VV") -> BurstCollection:
     return BurstCollection.from_bursts(
         [make_burst(d, polarization=polarization, geometry=GEOMETRY) for d in dates],
     )
@@ -271,7 +275,8 @@ class TestBurstCollection:
 
     def test_rejects_plain_dataframe(self) -> None:
         with pytest.raises(TypeError, match="must be a GeoDataFrame"):
-            BurstCollection(gpd.pd.DataFrame({"burst_id": [1]}))  # type: ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            BurstCollection(gpd.pd.DataFrame({"burst_id": [1]}))
 
     def test_rejects_missing_columns(self) -> None:
         df = gpd.GeoDataFrame({"burst_id": [1], "geometry": [GEOMETRY]})
