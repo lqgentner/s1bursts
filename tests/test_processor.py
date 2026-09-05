@@ -105,7 +105,7 @@ class TestProcessCollection:
         items = ["a", "b", "c"]
         process_fn = MagicMock(side_effect=lambda i: OkResult(source=i, result=i.upper()))
 
-        # Plain strings exercise the generic machinery without building a collection.
+        # Plain strings stand in for a collection.
         # pyrefly: ignore [no-matching-overload]
         summary = processor._process_collection(items, process_fn, "Test")
 
@@ -123,7 +123,7 @@ class TestProcessCollection:
         ]
         process_fn = MagicMock(side_effect=results)
 
-        # Plain strings exercise the generic machinery without building a collection.
+        # Plain strings stand in for a collection.
         # pyrefly: ignore [no-matching-overload]
         summary = processor._process_collection(["a", "b", "c"], process_fn, "Test")
 
@@ -148,7 +148,7 @@ class TestProcessCollection:
         processor.config.resolved_max_workers = 3
         process_fn = MagicMock(side_effect=lambda i: OkResult(source=i, result=i.upper()))
 
-        # Plain strings exercise the generic machinery without building a collection.
+        # Plain strings stand in for a collection.
         # pyrefly: ignore [no-matching-overload]
         summary = processor._process_collection(["a", "b", "c"], process_fn, "Test")
 
@@ -180,7 +180,7 @@ class TestDispatch:
             result="rtc",
         )
 
-        # A MagicMock burst is enough to assert the dispatch.
+        # A mock burst suffices to assert dispatch.
         # pyrefly: ignore [bad-argument-type]
         summary = processor.create_backscatter([burst], crs=MagicMock())
 
@@ -194,7 +194,7 @@ class TestDispatch:
             result="coh",
         )
 
-        # A MagicMock pair is enough to assert the dispatch.
+        # A mock pair suffices to assert dispatch.
         # pyrefly: ignore [bad-argument-type]
         summary = processor.create_coherences([pair], crs=MagicMock())
 
@@ -208,7 +208,7 @@ class TestDispatch:
             result="ifg",
         )
 
-        # A MagicMock pair is enough to assert the dispatch.
+        # A mock pair suffices to assert dispatch.
         # pyrefly: ignore [bad-argument-type]
         summary = processor.create_interferograms([pair], crs=MagicMock())
 

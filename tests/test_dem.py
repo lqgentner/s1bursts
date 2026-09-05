@@ -657,7 +657,7 @@ class TestTransformationGrids:
         )
         user_dir.mkdir()
 
-        # Local double with just the attributes `_download_grids` reads.
+        # Local double with just the attributes read here.
         # pyrefly: ignore [bad-argument-type]
         dem_module._download_grids(DownloadGroup())
 

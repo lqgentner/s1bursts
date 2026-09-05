@@ -113,8 +113,7 @@ class GeocodedBurst(BurstFootprintMixin, BaseProduct, ABC):
     sub_swath: SubSwath
     crs: CRSLike
     # None delegates to the mixin's burst-map lookup.
-    # `BurstFootprintMixin` defaults these to None for subclasses that do not declare
-    # them; as fields of a frozen dataclass they become read-only, which is intended.
+    # Read-only here because the dataclass is frozen; the mixin declares them read-write.
     # pyrefly: ignore [bad-override]
     _rel_orbit_number: int | None = field(default=None, repr=False, kw_only=True)
     # Include the resolved value in asdict()-based filenames.

@@ -42,8 +42,7 @@ class BurstFootprintMixin:
 
     __slots__ = ()
 
-    # Declared read-only, because subclasses supply them as frozen dataclass fields.
-    # Type-only: the mixin never owns these at runtime.
+    # Type-only and read-only: subclasses supply them as frozen dataclass fields.
     if TYPE_CHECKING:
 
         @property
@@ -225,8 +224,7 @@ class Burst(BurstFootprintMixin):
     cdse_id: str | None = field(default=None, compare=False, hash=False)
     parent_product_name: str | None = field(default=None, compare=False, hash=False)
     # Footprint values propagated from CDSE or an SLC filename; None falls back to the LUT.
-    # `BurstFootprintMixin` defaults these to None for subclasses that do not declare
-    # them; as fields of a frozen dataclass they become read-only, which is intended.
+    # Read-only here because the dataclass is frozen; the mixin declares them read-write.
     # pyrefly: ignore [bad-override]
     _rel_orbit_number: int | None = field(default=None, compare=False, hash=False, repr=False)
     # pyrefly: ignore [bad-override]

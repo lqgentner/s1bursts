@@ -40,10 +40,10 @@ def main() -> int:
         tmp_dir = Path(tmp)
         product = build_product(tmp_dir, SPEC)
 
-        # Stubs stand in for the S3 lookups this offline regeneration cannot make.
+        # Stubs replace the S3 lookups.
         # pyrefly: ignore [bad-assignment]
         extractor._lookup_s3_path = lambda _name: str(product.root)
-        # Stubs stand in for the S3 lookups this offline regeneration cannot make.
+        # Stubs replace the S3 lookups.
         # pyrefly: ignore [bad-assignment]
         extractor._make_s3_upath = lambda path, _settings: UPath(path)
 

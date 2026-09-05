@@ -404,7 +404,7 @@ class TestStitchByOrbitDate:
         arr2 = np.array([[9.0, 5.0]])
         loaded = [(p1, arr1), (p2, arr2)]
 
-        # `_RTCStub` carries only the fields `_stitch_by_orbit_date` reads.
+        # Stub carries only the fields read here.
         # pyrefly: ignore [bad-argument-type]
         result = self._weighter()._stitch_by_orbit_date(loaded)
 
@@ -422,7 +422,7 @@ class TestStitchByOrbitDate:
         arr2 = np.array([[2.0]])
         loaded = [(p1, arr1), (p2, arr2)]
 
-        # `_RTCStub` carries only the fields `_stitch_by_orbit_date` reads.
+        # Stub carries only the fields read here.
         # pyrefly: ignore [bad-argument-type]
         result = self._weighter()._stitch_by_orbit_date(loaded)
 
@@ -436,7 +436,7 @@ class TestStitchByOrbitDate:
         arr2 = np.array([[2.0]])
         loaded = [(p1, arr1), (p2, arr2)]
 
-        # `_RTCStub` carries only the fields `_stitch_by_orbit_date` reads.
+        # Stub carries only the fields read here.
         # pyrefly: ignore [bad-argument-type]
         result = self._weighter()._stitch_by_orbit_date(loaded)
 
@@ -449,7 +449,7 @@ class TestStitchByOrbitDate:
         arr = np.array([[1.0]])
         loaded = [(p_late, arr), (p_early, arr)]
 
-        # `_RTCStub` carries only the fields `_stitch_by_orbit_date` reads.
+        # Stub carries only the fields read here.
         # pyrefly: ignore [bad-argument-type]
         result = self._weighter()._stitch_by_orbit_date(loaded)
 
@@ -473,7 +473,7 @@ class TestStitchByOrbitDate:
         class _CohNoLUT(CoherenceProduct):
             @property
             @override
-            # Frozen dataclass fields are read-only; the base declares this read-write.
+            # Frozen fields are read-only; the base declares it read-write.
             # pyrefly: ignore [bad-override]
             def rel_orbit_number(self) -> int:
                 return 99
@@ -518,7 +518,7 @@ class TestAcquisitionDate:
         class _FakeRTC:
             date = Timestamp("2023-06-15")
 
-        # `_FakeRTC` carries only the date field under test.
+        # Stub carries only the date.
         # pyrefly: ignore [bad-argument-type]
         result = ResolutionWeighter._acquisition_date(_FakeRTC())
         assert result == Timestamp("2023-06-15")
@@ -553,7 +553,7 @@ class TestCheckPolarization:
         """Returns the common polarization when all products agree."""
         p1 = _RTCStub(rel_orbit_number=1, date=Timestamp("2023-01-01"), polarization="VV")
         p2 = _RTCStub(rel_orbit_number=2, date=Timestamp("2023-01-12"), polarization="VV")
-        # `_RTCStub` carries only the polarization field under test.
+        # Stub carries only the polarization.
         # pyrefly: ignore [bad-argument-type]
         result = ResolutionWeighter._check_polarization([p1, p2])
         assert result == "VV"
@@ -561,7 +561,7 @@ class TestCheckPolarization:
     def test_single_product_returns_its_polarization(self) -> None:
         """A list with one product must return that product's polarization."""
         p = _RTCStub(rel_orbit_number=1, date=Timestamp("2023-01-01"), polarization="HH")
-        # `_RTCStub` carries only the polarization field under test.
+        # Stub carries only the polarization.
         # pyrefly: ignore [bad-argument-type]
         result = ResolutionWeighter._check_polarization([p])
         assert result == "HH"
@@ -911,7 +911,7 @@ class TestComposeReturns:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         self._patch_load(weighter, power, area)
 
-        # `SimpleNamespace` products stand in for real RTC products.
+        # Stubs stand in for real RTC products.
         # pyrefly: ignore [no-matching-overload]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
         assert isinstance(result, RTCLRWComposite)
@@ -928,7 +928,7 @@ class TestComposeReturns:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         self._patch_load(weighter, power, area)
 
-        # `SimpleNamespace` products stand in for real RTC products.
+        # Stubs stand in for real RTC products.
         # pyrefly: ignore [no-matching-overload]
         composite, (qa_num, qa_cqm) = weighter.compose_rtc_lrw(
             [p1, p2],
@@ -952,7 +952,7 @@ class TestComposeReturns:
         }
         self._patch_load(weighter, power)
 
-        # `SimpleNamespace` products stand in for real RTC products.
+        # Stubs stand in for real RTC products.
         # pyrefly: ignore [bad-argument-type]
         result = weighter.compose_rtc_by_pass([asc, desc], geobox)
         assert set(result) == {"Ascending", "Descending"}
@@ -968,7 +968,7 @@ class TestComposeReturns:
         }
         self._patch_load(weighter, power)
 
-        # `SimpleNamespace` products stand in for real RTC products.
+        # Stubs stand in for real RTC products.
         # pyrefly: ignore [no-matching-overload]
         result = weighter.compose_rtc_by_pass([asc, desc], geobox, write_qa=True)
         composite, qa_num = result["Ascending"]
@@ -991,7 +991,7 @@ class TestSaveStatisticsAndChecksum:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
 
-        # `SimpleNamespace` products stand in for real RTC products.
+        # Stubs stand in for real RTC products.
         # pyrefly: ignore [no-matching-overload]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
 
@@ -1012,7 +1012,7 @@ class TestSaveStatisticsAndChecksum:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
 
-        # `SimpleNamespace` products stand in for real RTC products.
+        # Stubs stand in for real RTC products.
         # pyrefly: ignore [no-matching-overload]
         _composite, (qa_num, _qa_cqm) = weighter.compose_rtc_lrw(
             [p1, p2],
@@ -1037,7 +1037,7 @@ class TestSaveStatisticsAndChecksum:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
 
-        # `SimpleNamespace` products stand in for real RTC products.
+        # Stubs stand in for real RTC products.
         # pyrefly: ignore [no-matching-overload]
         weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
 
@@ -1061,7 +1061,7 @@ class TestSaveStatisticsAndChecksum:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
 
-        # `SimpleNamespace` products stand in for real RTC products.
+        # Stubs stand in for real RTC products.
         # pyrefly: ignore [no-matching-overload]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
 
