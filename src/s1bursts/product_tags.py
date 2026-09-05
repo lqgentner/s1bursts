@@ -367,8 +367,7 @@ def rtc_lrw_metadata(
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "gamma0",
         "LAYER_DESCRIPTION": (
-            "Locally resolution weighted gamma-0 backscatter composite, "
-            "weighted by the inverse local contributing area."
+            "Gamma-0 backscatter composite, weighted by the inverse local contributing area."
         ),
         **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
     }
@@ -436,8 +435,8 @@ def coh_lrw_metadata(
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "coherence",
         "LAYER_DESCRIPTION": (
-            "Locally resolution weighted repeat-pass interferometric coherence "
-            "composite, weighted by the inverse local contributing area."
+            "Repeat-pass interferometric coherence composite, "
+            "weighted by the inverse local contributing area."
         ),
         **dict(statistics or {}),
         **_inherited(
@@ -616,10 +615,7 @@ def qa_metadata(
     tags |= {
         "QA_LAYER": "Composite Quality Map Image",
         "LAYER_NAME": "cqm",
-        "LAYER_DESCRIPTION": (
-            "Achieved local resolution of the composite, 1/sum(W_i * A_i); "
-            "dimensionless, 1.0 = flat reference facet."
-        ),
+        "LAYER_DESCRIPTION": "Composite local resolution, 1/sum(W_i * A_i); dimensionless.",
     }
     if cqm_decibel:
         tags["CQM_SCALING"] = "decibel"
@@ -732,8 +728,7 @@ def backscatter_metadata(
             {
                 "LAYER_NAME": "scatteringArea",
                 "LAYER_DESCRIPTION": (
-                    "Local contributing area relative to a flat reference facet; "
-                    "1.0 = flat. The inverse is the local resolution weight."
+                    "Local contributing area relative to a flat reference facet."
                 ),
             },
         ],

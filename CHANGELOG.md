@@ -30,17 +30,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - Per-product composite codec profiles through
   `ResolutionWeighter.rasterio_profile`, with an optional `"default"` profile.
   Flat profiles retain their previous behavior.
-- **Every composite and QA layer now carries exact band statistics**
-  (`STATISTICS_MINIMUM`, `_MAXIMUM`, `_MEAN`, `_STDDEV`, `_VALID_PERCENT`),
-  computed over the whole array and written at creation, so a downstream
-  catalogue can read them without opening the raster. New
+- Exact band statistics (`STATISTICS_MINIMUM`, `_MAXIMUM`, `_MEAN`, `_STDDEV`,
+  `_VALID_PERCENT`) on every composite and QA layer, written at creation. New
   `product_tags.band_statistics()`.
-- `ResolutionWeighter(checksum=True)` records a SHA-256 multihash of every
-  written file's exact bytes in the new `ResolutionWeighter.checksums`
-  attribute, keyed by output path. The digest is multihash-encoded (`1220`
-  followed by the hex) and taken at write time, where the encoded bytes are
-  already in hand; computing it later means reading every object back.
-  Defaults to `False`, so existing calls are unchanged.
+- `ResolutionWeighter(checksum=True)` records a multihash-encoded SHA-256 of
+  every written file in `ResolutionWeighter.checksums`, keyed by output path.
 
 ### Fixed
 
@@ -70,6 +64,14 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   its values are now `"Ascending"` and `"Descending"` (instead of `"ASCENDING"`
   and `"DESCENDING"`). This aligns the wording with the
   [CEOS-ARD SAR metadata specification](https://ceos.org/ard/) v1.3.
+- **Breaking:** `median` and quantile aggregation now exclude observations
+  carrying zero resolution weight, which were previously interpolated into the
+  result. `mean` is unaffected. Regenerate composites built with `median` (the
+  default) or a quantile.
+- **Breaking:** `QA-CQM` now applies the composite's own aggregation to the
+  contributing area instead of always the weighted mean, and ignores
+  observations that did not enter the composite. `mean` is unchanged.
+  Regenerate `QA-CQM` products built with `median` or a quantile.
 - **Breaking:** The `QA-NUM` layer of an LRW composite now counts the
   observations that carry a non-zero resolution weight, rather than those
   holding a finite value, matching the CEOS-ARD *Contributing Observations
