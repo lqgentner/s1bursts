@@ -259,6 +259,45 @@ def _inherited(
     return inherited
 
 
+def band_statistics(data: NDArray[Any], nodata: float) -> dict[str, str]:
+    """Exact per-band statistics, as the GDAL ``STATISTICS_*`` band-tag items.
+
+    Computed over every pixel rather than sampled, so ``STATISTICS_APPROXIMATE``
+    is never set. Returns an empty mapping when no pixel is valid, so an empty
+    tile carries no statistics rather than NaNs.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        Band values.
+    nodata : float
+        The band's nodata value, e.g. NaN for a float composite or ``0`` for
+        a uint16 count band. A pixel is valid when it is finite *and* differs
+        from ``nodata``, so a stray NaN or infinity in a band with a finite
+        nodata marker is excluded rather than poisoning the statistics.
+
+    Returns
+    -------
+    dict[str, str]
+        ``STATISTICS_MINIMUM``, ``STATISTICS_MAXIMUM``, ``STATISTICS_MEAN``,
+        ``STATISTICS_STDDEV`` and ``STATISTICS_VALID_PERCENT``, or empty.
+    """
+    # `data != nodata` is always True when nodata is NaN (IEEE comparison),
+    # so this reduces to plain finiteness in that case and adds the nodata
+    # exclusion only when the marker itself is a finite value.
+    valid_mask = np.isfinite(data) & (data != nodata)
+    valid = data[valid_mask]
+    if valid.size == 0:
+        return {}
+    return {
+        "STATISTICS_MINIMUM": repr(float(valid.min())),
+        "STATISTICS_MAXIMUM": repr(float(valid.max())),
+        "STATISTICS_MEAN": repr(float(valid.mean())),
+        "STATISTICS_STDDEV": repr(float(valid.std())),
+        "STATISTICS_VALID_PERCENT": repr(100.0 * valid.size / data.size),
+    }
+
+
 def coherence_statistics(values: NDArray[np.floating[Any]]) -> dict[str, str]:
     """Mean and standard deviation of a coherence raster ([InSAR] item 3.8).
 
@@ -328,8 +367,7 @@ def rtc_lrw_metadata(
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "gamma0",
         "LAYER_DESCRIPTION": (
-            "Locally resolution weighted gamma-0 backscatter composite, "
-            "weighted by the inverse local contributing area."
+            "Gamma-0 backscatter composite, weighted by the inverse local contributing area."
         ),
         **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
     }
@@ -397,8 +435,8 @@ def coh_lrw_metadata(
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "coherence",
         "LAYER_DESCRIPTION": (
-            "Locally resolution weighted repeat-pass interferometric coherence "
-            "composite, weighted by the inverse local contributing area."
+            "Repeat-pass interferometric coherence composite, "
+            "weighted by the inverse local contributing area."
         ),
         **dict(statistics or {}),
         **_inherited(
@@ -577,10 +615,7 @@ def qa_metadata(
     tags |= {
         "QA_LAYER": "Composite Quality Map Image",
         "LAYER_NAME": "cqm",
-        "LAYER_DESCRIPTION": (
-            "Achieved local resolution of the composite, 1/sum(W_i * A_i); "
-            "dimensionless, 1.0 = flat reference facet."
-        ),
+        "LAYER_DESCRIPTION": "Composite local resolution, 1/sum(W_i * A_i); dimensionless.",
     }
     if cqm_decibel:
         tags["CQM_SCALING"] = "decibel"
@@ -693,8 +728,7 @@ def backscatter_metadata(
             {
                 "LAYER_NAME": "scatteringArea",
                 "LAYER_DESCRIPTION": (
-                    "Local contributing area relative to a flat reference facet; "
-                    "1.0 = flat. The inverse is the local resolution weight."
+                    "Local contributing area relative to a flat reference facet."
                 ),
             },
         ],
@@ -840,6 +874,7 @@ __all__ = [
     "UNKNOWN",
     "RasterMetadata",
     "backscatter_metadata",
+    "band_statistics",
     "burst_metadata",
     "coh_lrw_metadata",
     "coh_pass_metadata",

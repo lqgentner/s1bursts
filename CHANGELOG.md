@@ -30,6 +30,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - Per-product composite codec profiles through
   `ResolutionWeighter.rasterio_profile`, with an optional `"default"` profile.
   Flat profiles retain their previous behavior.
+- Exact band statistics (`STATISTICS_MINIMUM`, `_MAXIMUM`, `_MEAN`, `_STDDEV`,
+  `_VALID_PERCENT`) on every composite and QA layer, written at creation. New
+  `product_tags.band_statistics()`.
+- `ResolutionWeighter(checksum=True)` records a multihash-encoded SHA-256 of
+  every written file in `ResolutionWeighter.checksums`, keyed by output path.
 
 ### Fixed
 
@@ -59,6 +64,14 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   its values are now `"Ascending"` and `"Descending"` (instead of `"ASCENDING"`
   and `"DESCENDING"`). This aligns the wording with the
   [CEOS-ARD SAR metadata specification](https://ceos.org/ard/) v1.3.
+- **Breaking:** `median` and quantile aggregation now exclude observations
+  carrying zero resolution weight, which were previously interpolated into the
+  result. `mean` is unaffected. Regenerate composites built with `median` (the
+  default) or a quantile.
+- **Breaking:** `QA-CQM` now applies the composite's own aggregation to the
+  contributing area instead of always the weighted mean, and ignores
+  observations that did not enter the composite. `mean` is unchanged.
+  Regenerate `QA-CQM` products built with `median` or a quantile.
 - **Breaking:** The `QA-NUM` layer of an LRW composite now counts the
   observations that carry a non-zero resolution weight, rather than those
   holding a finite value, matching the CEOS-ARD *Contributing Observations
@@ -69,8 +82,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   shift and vertical datum conversion of an external DEM for SNAP.
 - The area SNAP writes as `simulatedImage` is now called the *local
   contributing area*, following CEOS-ARD terminology.
-- Requires `freezebase[s3]>=0.6.1,<0.7` for product metadata, composite codec
-  profiles, and context handling of burst downloadss.
+- Requires `freezebase[s3]>=0.7,<0.8` for product metadata, composite codec
+  profiles, `write_cog(checksum=...)`, and context handling of burst downloads.
 - **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
   remains the base for shared Terrain-Correction parameters; concrete configs
   implement `to_xml()`.

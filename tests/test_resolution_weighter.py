@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, NamedTuple
@@ -253,6 +254,27 @@ class TestWeightedQuantile:
         weights = np.ones((3, 1, 1))
         result = ResolutionWeighter._weighted_quantile(values, weights, q=0.95)
         np.testing.assert_allclose(result, [[5.0]])
+
+    def test_zero_weight_observation_is_excluded(self) -> None:
+        """A finite value carrying zero weight must not reach the result.
+
+        Previously it sorted by its own value rather than to the end, so the
+        interpolation blended it in: values=[0, 2] with weights=[0, 0.5] at
+        q=0.25 returned 1.0 instead of 2.0.
+        """
+        values = np.array([[[0.0]], [[2.0]]])
+        weights = np.array([[[0.0]], [[0.5]]])
+        result = ResolutionWeighter._weighted_quantile(values, weights, q=0.25)
+        np.testing.assert_allclose(result, [[2.0]])
+
+    def test_zero_weight_matches_dropping_the_observation(self) -> None:
+        """Zero weight is equivalent to the observation not being there at all."""
+        values = np.array([[[1.0]], [[5.0]], [[9.0]]])
+        weights = np.array([[[0.0]], [[1.0]], [[1.0]]])
+        for q in (0.2, 0.5, 0.8):
+            with_zero = ResolutionWeighter._weighted_quantile(values, weights, q=q)
+            without = ResolutionWeighter._weighted_quantile(values[1:], weights[1:], q=q)
+            np.testing.assert_allclose(with_zero, without, err_msg=f"q={q}")
 
 
 # ---------------------------------------------------------------------------
@@ -685,8 +707,8 @@ class TestCountContributions:
 class TestCalcCqm:
     """Tests for ``ResolutionWeighter._calc_cqm``."""
 
-    def test_linear_cqm_value(self) -> None:
-        """CQM = 1 / sum(normalized_weight * area).
+    def test_mean_matches_the_published_equation(self) -> None:
+        """With ``mean``, CQM is Small et al. eq. (6): 1 / sum(normalized_weight * area).
 
         areas=[2, 4, 10], weights=1/area=[0.5, 0.25, 0.1].  With unclipped
         weights this reduces to ``sum(w) / N`` = (0.5+0.25+0.1)/3.
@@ -694,7 +716,7 @@ class TestCalcCqm:
         contributing_area = np.array([[[2.0]], [[4.0]], [[10.0]]])
         weights = 1.0 / contributing_area
         values = np.ones((3, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights)
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
         np.testing.assert_allclose(result, [[(0.5 + 0.25 + 0.1) / 3.0]], rtol=1e-6)
 
     def test_clipped_weights_change_cqm(self) -> None:
@@ -707,15 +729,72 @@ class TestCalcCqm:
         contributing_area = np.array([[[0.25]], [[10.0]]])
         weights = np.array([[[2.0]], [[0.1]]])  # 1/area=[4, 0.1] clipped at 2
         values = np.ones((2, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights)
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
         np.testing.assert_allclose(result, [[1.4]], rtol=1e-6)
+
+    def test_median_aggregates_the_areas_with_the_same_operator(self) -> None:
+        """``median`` takes the weighted median of the areas, not their weighted mean.
+
+        areas=[1, 2, 10], weights=1/area=[1, 0.5, 0.1].  The weighted median
+        area interpolates to 1.4, so CQM = 1/1.4; the mean would give 1.6/3.
+        """
+        contributing_area = np.array([[[1.0]], [[2.0]], [[10.0]]])
+        weights = 1.0 / contributing_area
+        values = np.ones((3, 1, 1))
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "median")
+        np.testing.assert_allclose(result, [[1.0 / 1.4]], rtol=1e-6)
+
+    def test_quantile_inverts_the_aggregated_area(self) -> None:
+        """A float aggregation takes that weighted quantile of the areas."""
+        contributing_area = np.array([[[1.0]], [[2.0]], [[10.0]]])
+        weights = 1.0 / contributing_area
+        values = np.ones((3, 1, 1))
+        expected = 1.0 / ResolutionWeighter._weighted_quantile(contributing_area, weights, 0.75)
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, 0.75)
+        np.testing.assert_allclose(result, expected, rtol=1e-6)
+
+    def test_aggregation_changes_the_result(self) -> None:
+        """The three aggregations do not collapse onto one value."""
+        contributing_area = np.array([[[1.0]], [[2.0]], [[10.0]]])
+        weights = 1.0 / contributing_area
+        values = np.ones((3, 1, 1))
+        results = [
+            float(ResolutionWeighter._calc_cqm(values, contributing_area, weights, agg)[0, 0])
+            for agg in ("mean", "median", 0.75)
+        ]
+        assert len(set(results)) == 3
+
+    def test_observations_that_do_not_contribute_are_excluded(self) -> None:
+        """An observation with a non-finite value contributes no area either.
+
+        Previously its area entered the CQM even though the composite and the
+        QA-NUM count both excluded it.
+        """
+        contributing_area = np.array([[[1.0]], [[4.0]]])
+        weights = 1.0 / contributing_area
+        values = np.array([[[0.8]], [[np.nan]]])
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        np.testing.assert_allclose(result, [[1.0]], rtol=1e-6)
+
+    def test_exclusion_agrees_with_the_contributing_observation_count(self) -> None:
+        """CQM and QA-NUM describe the same set of observations."""
+        contributing_area = np.array([[[1.0]], [[4.0]]])
+        weights = 1.0 / contributing_area
+        values = np.array([[[0.8]], [[np.nan]]])
+        counted = ResolutionWeighter._count_contributions(values, weights)
+        only_contributor = ResolutionWeighter._calc_cqm(
+            values[:1], contributing_area[:1], weights[:1], "mean"
+        )
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        assert counted[0, 0] == 1
+        np.testing.assert_allclose(result, only_contributor, rtol=1e-6)
 
     def test_zero_total_weight_is_nan(self) -> None:
         """A pixel whose weights are all zero yields NaN."""
         contributing_area = np.array([[[2.0]], [[4.0]]])
         weights = np.zeros((2, 1, 1))
         values = np.ones((2, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights)
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
         assert np.isnan(result[0, 0])
 
     def test_all_nan_observations_is_nan(self) -> None:
@@ -727,7 +806,7 @@ class TestCalcCqm:
         contributing_area = np.array([[[2.0]], [[4.0]]])
         weights = 1.0 / contributing_area  # valid geometry, nonzero weight
         values = np.array([[[np.nan]], [[np.nan]]])  # but no finite observation
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights)
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
         assert np.isnan(result[0, 0])
 
     def test_returns_float32(self) -> None:
@@ -735,7 +814,8 @@ class TestCalcCqm:
         contributing_area = np.array([[[2.0]]])
         weights = np.array([[[0.5]]])
         values = np.ones((1, 1, 1))
-        assert ResolutionWeighter._calc_cqm(values, contributing_area, weights).dtype == np.float32
+        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        assert result.dtype == np.float32
 
 
 # ---------------------------------------------------------------------------
@@ -857,6 +937,91 @@ class TestComposeReturns:
         assert isinstance(qa_num, RTCPassQA)
         assert qa_num.pass_direction == "Ascending"
         assert fm.get_product_path(qa_num).exists()
+
+
+class TestSaveStatisticsAndChecksum:
+    """``_save`` embeds exact band statistics, and can record a checksum."""
+
+    def test_composite_carries_exact_band_statistics(self, tmp_path: Path) -> None:
+        fm, weighter, geobox = TestComposeReturns._setup(tmp_path)
+        p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.full((2, 2), 3.0, np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+
+        result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
+
+        with rasterio.open(fm.get_product_path(result)) as ds:
+            tags = ds.tags(1)
+        minimum, maximum = float(tags["STATISTICS_MINIMUM"]), float(tags["STATISTICS_MAXIMUM"])
+        assert minimum == pytest.approx(maximum)
+        assert float(tags["STATISTICS_VALID_PERCENT"]) == pytest.approx(100.0)
+        assert "STATISTICS_APPROXIMATE" not in tags
+
+    def test_qa_num_statistics_treat_zero_as_nodata_not_finite(self, tmp_path: Path) -> None:
+        fm, weighter, geobox = TestComposeReturns._setup(tmp_path)
+        p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.array([[2.0, np.nan], [2.0, np.nan]], np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+
+        _composite, (qa_num, _qa_cqm) = weighter.compose_rtc_lrw(
+            [p1, p2],
+            geobox,
+            aggregation="mean",
+            write_qa=True,
+        )
+
+        with rasterio.open(fm.get_product_path(qa_num)) as ds:
+            tags = ds.tags(1)
+        # Every pixel has p1's contribution, so num_obs is never the uint16
+        # nodata sentinel 0 — every one of the 4 pixels is "valid".
+        assert float(tags["STATISTICS_VALID_PERCENT"]) == pytest.approx(100.0)
+
+    def test_checksum_defaults_to_off_and_records_nothing(self, tmp_path: Path) -> None:
+        _fm, weighter, geobox = TestComposeReturns._setup(tmp_path)
+        p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.full((2, 2), 2.0, np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+
+        weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
+
+        assert weighter.checksums == {}
+
+    def test_checksum_true_records_a_multihash_matching_the_file(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        weighter = ResolutionWeighter(fm, n_workers=1, checksum=True)
+        geobox = SimpleNamespace(
+            mgrs_code="32TMS03",
+            crs=CRS.from_epsg(32632),
+            transform=Affine(10.0, 0.0, 500000.0, 0.0, -10.0, 5100000.0),
+            height=2,
+            width=2,
+        )
+        p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.full((2, 2), 2.0, np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+
+        result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
+
+        path = fm.get_product_path(result)
+        digest = weighter.checksums[str(path)]
+        assert digest.startswith("1220")
+        assert digest == "1220" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 # ---------------------------------------------------------------------------

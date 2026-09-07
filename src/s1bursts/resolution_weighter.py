@@ -97,6 +97,16 @@ class ResolutionWeighter:
         type with an optional ``"default"`` entry. Product-specific settings
         override the default. If omitted, uses the library defaults with
         float32 data and NaN no-data.
+    checksum : bool, default False
+        Compute a SHA-256 multihash of every written file's exact bytes and
+        record it in :attr:`checksums`, keyed by output path. Costs holding
+        the encoded COG in memory a second time per write.
+
+    Attributes
+    ----------
+    checksums : dict[str, str]
+        SHA-256 multihash of every file written so far, keyed by output path
+        as a string. Populated only when ``checksum=True``.
 
     References
     ----------
@@ -115,10 +125,13 @@ class ResolutionWeighter:
         *,
         rasterio_profile: dict[str, Any] | None = None,
         n_workers: int = 8,
+        checksum: bool = False,
     ) -> None:
         self._fm = file_manager
         self._n_workers = n_workers
         self._profiles = _split_profiles(rasterio_profile)
+        self._checksum = checksum
+        self.checksums: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -874,15 +887,27 @@ class ResolutionWeighter:
             height=geobox.height,
             width=geobox.width,
         )
-        write_cog(
+        # Every product _save writes is single-band (count=1 above), so exact
+        # statistics for that one band merge into whatever band_tags the
+        # product's own metadata already carries.
+        band_tags = [
+            {
+                **(metadata.band_tags[0] if metadata.band_tags else {}),
+                **product_tags.band_statistics(data, nodata),
+            },
+        ]
+        digest = write_cog(
             data,
             path,
             profile,
             band_names=metadata.band_names,
             tags=metadata.tags,
-            band_tags=metadata.band_tags or None,
+            band_tags=band_tags if band_tags[0] else None,
             units=metadata.units,
+            checksum=self._checksum,
         )
+        if digest is not None:
+            self.checksums[str(path)] = digest
         logger.debug("saved %s", path.name)
 
     def _input_tags(
@@ -974,7 +999,7 @@ class ResolutionWeighter:
             nodata=0,
             overwrite=overwrite,
         )
-        cqm = self._calc_cqm(values, contributing_area, weights)
+        cqm = self._calc_cqm(values, contributing_area, weights, aggregation)
         self._save(
             self._to_decibel(cqm) if cqm_decibel else cqm,
             qa[QaMetric.CQM],
@@ -1113,25 +1138,33 @@ class ResolutionWeighter:
         contributes = np.isfinite(values) & (weights > 0)
         return np.count_nonzero(contributes, axis=0).astype(np.uint16)
 
-    @staticmethod
+    @classmethod
     def _calc_cqm(
+        cls,
         values: NDArray[np.floating[Any]],
         contributing_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
+        aggregation: Literal["mean", "median"] | float,
     ) -> NDArray[np.float32]:
         """Composite quality map (CQM) over the first (N) axis.
 
-        Computed as ``1 / Σ(Wᵢ · Aᵢ)`` where ``Wᵢ`` are the resolution weights
-        normalized to sum to one (CEOS-ARD SAR v1.3.1, eq. A5.2) and ``Aᵢ`` is
-        the local contributing area.  Uses the same (clipped) weights as the
-        composite, so it describes the composite that was actually written.
+        The reciprocal of the local contributing area ``Aᵢ`` combined under the
+        same weights and the same aggregation as the composite itself, so the
+        map describes the composite that was actually written.  Under ``mean``
+        this is ``1 / Σ(Wᵢ · Aᵢ)`` with ``Wᵢ`` normalized to sum to one, the
+        published form (Small et al. 2022, eq. 6; CEOS-ARD SAR v1.3.1,
+        eq. A5.2).  The area is aggregated and then inverted, rather than the
+        resolutions being aggregated, which is what keeps the ``mean`` case
+        equal to that form.
+
+        An observation whose value is non-finite did not enter the composite,
+        so its weight is zeroed here too and its area does not count.
         """
-        weight_sum = weights.sum(axis=0)  # (H, W)
+        contributing = np.where(np.isfinite(values), weights, 0.0)
         with np.errstate(divide="ignore", invalid="ignore"):
-            norm = np.where(weight_sum[np.newaxis] > 0, weights / weight_sum[np.newaxis], 0.0)
-            weighted_area = 1.0 / np.nansum(contributing_area * norm, axis=0)
-        cqm = weighted_area.astype(np.float32)
-        invalid = (weight_sum == 0) | ~np.isfinite(values).any(axis=0)
+            aggregated_area = cls._aggregate_weighted(contributing_area, contributing, aggregation)
+            cqm = (1.0 / aggregated_area).astype(np.float32)
+        invalid = contributing.sum(axis=0) == 0
         cqm[invalid] = np.nan
         return cqm
 
@@ -1139,8 +1172,9 @@ class ResolutionWeighter:
     # Private helpers — aggregation
     # ------------------------------------------------------------------
 
+    @classmethod
     def _aggregate_weighted(
-        self,
+        cls,
         values: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
         aggregation: Literal["mean", "median"] | float,
@@ -1162,11 +1196,11 @@ class ResolutionWeighter:
             Shape ``(H, W)`` composite.
         """
         if aggregation == "mean":
-            return self._weighted_mean(values, weights)
+            return cls._weighted_mean(values, weights)
         if aggregation == "median":
-            return self._weighted_quantile(values, weights, q=0.5)
+            return cls._weighted_quantile(values, weights, q=0.5)
         if isinstance(aggregation, float):
-            return self._weighted_quantile(values, weights, q=aggregation)
+            return cls._weighted_quantile(values, weights, q=aggregation)
         msg = f"Unknown aggregation: {aggregation!r}"
         raise ValueError(msg)
 
@@ -1194,11 +1228,18 @@ class ResolutionWeighter:
     ) -> NDArray[np.floating[Any]]:
         """Vectorised, linearly interpolated weighted quantile over the first (N) axis.
 
-        NaN values are excluded by zeroing their weights.  Each value is placed
-        at the plotting position ``(cumulative_weight - 0.5 * weight) / total``
-        and the target quantile ``q`` is linearly interpolated between the two
-        bracketing order statistics. Pixels whose total weight is zero return NaN.
+        Each value is placed at the plotting position
+        ``(cumulative_weight - 0.5 * weight) / total`` and the target quantile
+        ``q`` is linearly interpolated between the two bracketing order
+        statistics. Pixels whose total weight is zero return NaN.
+
+        An observation is excluded by being made NaN, which sorts it to the end
+        where the forward-fill below removes it from the interpolation. Zeroing
+        its weight is not enough on its own: a zero-weight observation still
+        sorts by its own value, and interpolating across it blends that value
+        into the result.
         """
+        values = np.where(weights > 0, values, np.nan)
         masked_weights = np.where(np.isfinite(values), weights, 0.0)
 
         sort_idx = np.argsort(values, axis=0)
