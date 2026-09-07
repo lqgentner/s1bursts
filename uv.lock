@@ -596,7 +596,7 @@ wheels = [
 
 [[package]]
 name = "hyp3-sdk"
-version = "7.7.7"
+version = "7.7.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "python-dateutil" },
@@ -604,9 +604,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/06/2bd3210139f1667efd8f426e97609f8c0cca84b208930f79531b750b406b/hyp3_sdk-7.7.7.tar.gz", hash = "sha256:75ebef9c0fc951abd1eccc7bd855ae5c01a1b4cc716d64bcb43ab295689c66f6", size = 42854, upload-time = "2026-06-11T18:42:59.9Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/41/066851ec4f4d6fa72611983d30dc7b528d7382642ee215690acda5a54b6b/hyp3_sdk-7.7.8.tar.gz", hash = "sha256:ccf7f9f9123a12797e7b2f5c1393f97589b0f308f2f5c2845d2adcb2ad9b663c", size = 44202, upload-time = "2026-09-02T23:41:29.715Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/08/989a9eef636aa5024b0366ac4d7f49e73907932dab060a0170d59f2382e0/hyp3_sdk-7.7.7-py3-none-any.whl", hash = "sha256:79205e147ef837c262a5abb26e667f89cbcccc4f6debbcf957817973ad14ecb5", size = 15797, upload-time = "2026-06-11T18:42:58.734Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/11/a4fcb9f59c2a334d7ad4055c42cec44921e88f7aa912f736dc74887fb6bb/hyp3_sdk-7.7.8-py3-none-any.whl", hash = "sha256:697c24aa15d089850237abfea40f80fa54b00ef9f851d72813ca1804f235b42e", size = 16067, upload-time = "2026-09-02T23:41:28.637Z" },
 ]
 
 [[package]]
