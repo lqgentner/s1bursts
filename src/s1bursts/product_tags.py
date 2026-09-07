@@ -676,8 +676,7 @@ def backscatter_metadata(
         Configuration the graph was built from.
     snap_version : tuple of int or None, optional
         Version of the SNAP installation that ran the graph, from
-        :func:`s1bursts.snap_client.snap_version`. Omitted from the tags
-        when unknown.
+        ``s1bursts.snap_client.snap_version``. Written as ``N/A`` when unknown.
 
     Returns
     -------
@@ -754,8 +753,7 @@ def coherence_metadata(
         Configuration the graph was built from.
     snap_version : tuple of int or None, optional
         Version of the SNAP installation that ran the graph, from
-        :func:`s1bursts.snap_client.snap_version`. Omitted from the tags
-        when unknown.
+        ``s1bursts.snap_client.snap_version``. Written as ``N/A`` when unknown.
 
     Returns
     -------
@@ -800,8 +798,7 @@ def interferogram_metadata(
         Configuration the graph was built from.
     snap_version : tuple of int or None, optional
         Version of the SNAP installation that ran the graph, from
-        :func:`s1bursts.snap_client.snap_version`. Omitted from the tags
-        when unknown.
+        ``s1bursts.snap_client.snap_version``. Written as ``N/A`` when unknown.
 
     Returns
     -------
@@ -844,8 +841,7 @@ def burst_metadata(
         Configuration the graph was built from.
     snap_version : tuple of int or None, optional
         Version of the SNAP installation that ran the graph, from
-        :func:`s1bursts.snap_client.snap_version`. Omitted from the tags
-        when unknown.
+        ``s1bursts.snap_client.snap_version``. Written as ``N/A`` when unknown.
 
     Returns
     -------

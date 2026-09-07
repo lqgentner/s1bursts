@@ -1,12 +1,17 @@
 """UI utilities for creating HTML representations of Sentinel-1 data structures."""
 
+from __future__ import annotations
+
 from functools import lru_cache
 from importlib.resources import files
+from typing import TYPE_CHECKING
 
-import geopandas as gpd
 from odc.geo.ui import svg_base_map
 from shapely.geometry import MultiPolygon, Polygon
-from shapely.geometry.base import BaseGeometry
+
+if TYPE_CHECKING:
+    import geopandas as gpd
+    from shapely.geometry.base import BaseGeometry
 
 
 def geometry_to_svg_path(geom: BaseGeometry) -> str:

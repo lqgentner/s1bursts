@@ -1,10 +1,8 @@
-"""Dynamic SNAP GPT graph generation from typed Pydantic configs.
+"""SNAP GPT graph generation from typed Pydantic configs.
 
-This module replaces the hand-maintained XML graphs that used to live under
-``config/snap_graphs/``.  Each product type (backscatter, coherence,
-interferogram) has a frozen Pydantic config that describes the
-graph shape; ``build_*_graph(cfg)`` functions emit the corresponding SNAP
-GPT XML on demand.
+Each product type (backscatter, coherence, interferogram) has a frozen
+Pydantic config that describes the graph shape; ``build_*_graph(cfg)``
+functions emit the corresponding SNAP GPT XML on demand.
 
 Per-burst values such as ``${swath}``, ``${polarization}``, ``${date1}``,
 ``${date2}``, ``${crs}``, ``${primary}``, ``${secondary}``, ``${source}``
@@ -322,7 +320,7 @@ def _interferogram(
 
 def _band_select(graph: Element, node_id: str, source: str, *, pattern: str) -> str:
     node = _new_node(graph, node_id, "BandSelect", [source])
-    # Match the existing static graph: BandSelect's <parameters> has no class.
+    # BandSelect's <parameters> carries no class attribute in SNAP's own graphs.
     p = _new_params(node, class_attr=False)
     _add_param(p, "bandNamePattern", pattern)
     return node_id

@@ -1,4 +1,4 @@
-"""File management for Sentinel-1 products with xarray integration."""
+"""Deterministic paths and discovery for Sentinel-1 products, local or on S3."""
 
 from __future__ import annotations
 

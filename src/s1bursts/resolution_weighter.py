@@ -396,7 +396,8 @@ class ResolutionWeighter:
             Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
             linear units.
         overwrite : bool, default False
-            Skip writing if the output file already exists.
+            If ``False`` and the output file already exists, skip computation
+            and return the existing product metadata.
 
         Returns
         -------
@@ -540,7 +541,7 @@ class ResolutionWeighter:
         ----------
         rtc_products : Collection[RTCProduct]
             RTC products to composite.  Products from both pass directions may
-            be mixed; they are split automatically via the ESA burst map.
+            be mixed; they are split by their ``pass_direction``.
         geobox : MGRSGeoBox
             Target MGRS grid cell.
         aggregation : {"mean", "median"} or float, default "median"
@@ -555,7 +556,8 @@ class ResolutionWeighter:
             If ``True``, also write a contributing-observations QA product
             (``QA-NUM``) per pass direction.
         overwrite : bool, default False
-            Skip writing if the output file already exists.
+            If ``False`` and the output file already exists, skip computation
+            and return the existing product metadata.
 
         Returns
         -------
@@ -686,7 +688,7 @@ class ResolutionWeighter:
 
         Bursts from the same orbit and primary acquisition date are mosaicked
         using the first non-NaN pixel strategy.  The resulting orbit-date
-        observations are then aggregated temporally (mean or median) per orbit
+        observations are then aggregated temporally (mean or median) per pass
         direction (ascending / descending).
 
         Parameters
@@ -704,7 +706,8 @@ class ResolutionWeighter:
             If ``True``, also write a contributing-observations QA product
             (``QA-NUM``) per pass direction.
         overwrite : bool, default False
-            Skip writing if the output file already exists.
+            If ``False`` and the output file already exists, skip computation
+            and return the existing product metadata.
 
         Returns
         -------

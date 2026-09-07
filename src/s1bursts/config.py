@@ -5,6 +5,8 @@ left to the application: Call ``dotenv.load_dotenv()`` before :func:`get_setting
 or export the variables (e.g. ``uv run --env-file .env``).
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from pathlib import Path
@@ -17,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class CDSES3Settings(BaseSettings):
-    """CDSE S3 credentials for the burst extraction script.
+    """CDSE S3 credentials for extracting bursts from parent products.
 
     Loaded from ``CDSE_S3_*`` environment variables. Obtain credentials at
     https://eodata-s3keysmanager.dataspace.copernicus.eu/

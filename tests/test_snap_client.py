@@ -774,19 +774,6 @@ class TestRunGpt:
 
         assert not (tmp_path / "out.tif").exists()
 
-    def test_removes_a_partial_beam_dimap_data_directory(
-        self,
-        gpt_client: Callable[[str], SNAPClient],
-        tmp_path: Path,
-    ) -> None:
-        client = gpt_client('touch "$6"; mkdir -p "${6%.dim}.data"; exit 1')
-
-        with pytest.raises(SnapProcessingError):
-            self._invoke(client, tmp_path, target_name="out.dim")
-
-        assert not (tmp_path / "out.dim").exists()
-        assert not (tmp_path / "out.data").exists()
-
     def test_reports_a_timeout(
         self,
         gpt_client: Callable[[str], SNAPClient],

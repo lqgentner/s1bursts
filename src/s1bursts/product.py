@@ -58,7 +58,7 @@ class BaseProduct(ABC):
     @property
     @abstractmethod
     def product_type(self) -> str:
-        """Get the product type identifier (e.g., 'RTC', 'GTC', 'COH', 'SIM')."""
+        """Get the product type identifier (e.g., ``"RTC"``, ``"GTC"``, ``"COH"``)."""
 
     def __repr__(self) -> str:
         """Return string representation of the product."""

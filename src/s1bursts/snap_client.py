@@ -502,11 +502,6 @@ class SNAPClient:
             logger.debug("SNAP output: %s", result.stdout)
         except Exception as e:
             target_file.unlink(missing_ok=True)
-            if (
-                target_file.suffix == ".dim"
-                and (data_dir := target_file.with_suffix(".data")).exists()
-            ):
-                shutil.rmtree(data_dir)
             if isinstance(e, subprocess.CalledProcessError):
                 logger.exception(
                     "GPT failed (exit %d):\nstdout: %s\nstderr: %s",

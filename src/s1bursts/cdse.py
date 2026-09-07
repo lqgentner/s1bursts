@@ -505,8 +505,8 @@ class CDSEBurstClient:
     ) -> Path | UPath:
         """Download a single Sentinel-1 burst from CDSE S3.
 
-        Uses s3fs and GDAL to extract the burst, writing the result as a
-        ``.zip`` to ``save_path`` (local or remote).
+        Extracts the burst from the parent product with s3fs and rasterio,
+        writing the result as a ``.zip`` to ``save_path`` (local or remote).
 
         Parameters
         ----------
@@ -530,8 +530,11 @@ class CDSEBurstClient:
         Raises
         ------
         ValueError
-            If credentials are missing or the product/burst cannot be found.
-
+            If ``sub_swath`` is not a recognised sub-swath identifier.
+        BurstNotFoundError
+            If the parent product or the requested burst cannot be found.
+        ConfigurationError
+            If the CDSE S3 credentials are not configured.
         """
         return extract_burst_from_s3(
             save_path,

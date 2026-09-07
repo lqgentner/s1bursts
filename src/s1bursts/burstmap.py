@@ -83,7 +83,7 @@ class Sentinel1Bursts(GeoVectorData):
             S1_MODE_DESC[mode]
         except KeyError as e:
             valid_values_bulleted = format_valid_options(S1_MODE_DESC)
-            msg = f"Invalid product: '{mode}'. Use one of: {valid_values_bulleted}"
+            msg = f"Invalid mode: '{mode}'. Use one of: {valid_values_bulleted}"
             raise ValueError(msg) from e
         self.mode = mode
 
@@ -192,7 +192,7 @@ def _load_indexed_burst_map(cache_dir: str | Path | None, mode: Mode) -> gpd.Geo
     except FileNotFoundError as e:
         msg = (
             f"The Sentinel-1 {mode} burst-ID map is required to look up this burst's "
-            "orbit/geometry, but it has not been downloaded. Fetch it once (~500 MB"
+            "orbit/geometry, but it has not been downloaded. Fetch it once (~500 MB "
             f"download) with `s1bursts.download_burst_map(mode='{mode}')`."
         )
         raise FileNotFoundError(msg) from e

@@ -954,7 +954,7 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         "date_1",
         "date_2",
     ]
-    # All valid fields from Burst dataclass
+    # Both bursts' fields, suffixed _1 (primary) and _2 (secondary) where they differ
     _ALL_COLUMNS: ClassVar[list[str]] = [
         "burst_id",
         "sub_swath",
@@ -1031,7 +1031,7 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         Parameters
         ----------
         pairs : Collection[BurstPair]
-            Collection of Burst instances.
+            Collection of BurstPair instances.
 
         Returns
         -------
