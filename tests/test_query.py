@@ -10,6 +10,7 @@ import pytest
 from shapely.geometry import box
 
 from s1bursts.query import SearchQuery
+from s1bursts.time_range import TimeRange
 
 
 class TestTimeRange:
@@ -23,6 +24,11 @@ class TestTimeRange:
         query = SearchQuery(time_range=(start, end))
 
         assert query.time_range == (start, end)
+
+    def test_a_window_becomes_the_half_open_instants_covering_its_days(self) -> None:
+        query = SearchQuery(time_range=TimeRange("2022-01-01", "2022-01-31"))
+
+        assert query.time_range == (Timestamp("2022-01-01"), Timestamp("2022-02-01"))
 
     def test_none_stays_none(self) -> None:
         assert SearchQuery().time_range is None

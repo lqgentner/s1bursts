@@ -40,16 +40,18 @@ practical.
 ```python
 import pandas as pd
 import pyproj
-from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery
+from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery, TimeRange
 
 fm = FileManager(base_dir="data")
 database = BurstDatabase(file_manager=fm)
 processor = BurstProcessor(file_manager=fm)
 
-# Search all 2022 acquisitions of one burst footprint (Aletsch glacier)
+# Search all 2022 acquisitions of one burst footprint (Aletsch glacier).
+# A TimeRange is inclusive calendar days; the same object later names the
+# composites built from this search.
 bursts = database.search(
     SearchQuery(
-        time_range=("2022-01-01", "2023-01-01"),
+        time_range=TimeRange("2022-01-01", "2022-12-31"),
         burst_id=30346,
         sub_swath="IW1",
         polarization="VV",
@@ -68,7 +70,7 @@ processor.create_coherences(pairs, crs=crs)
 
 `s1bursts` exports what a pipeline is *built* from — `FileManager`, the
 `BurstDatabase` / `BurstProcessor` / `ResolutionWeighter` services, and the
-configs they take (`SearchQuery`, `SNAPConfig`, `BackscatterConfig`,
+configs they take (`SearchQuery`, `TimeRange`, `SNAPConfig`, `BackscatterConfig`,
 `CoherenceConfig`, `InterferogramConfig`, `GeocodingConfig`), plus
 `download_burst_map` and `prepare_dem_for_snap`.
 

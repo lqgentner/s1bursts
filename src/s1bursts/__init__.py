@@ -24,6 +24,7 @@ from s1bursts.snap_graph import (
     GeocodingConfig,
     InterferogramConfig,
 )
+from s1bursts.time_range import TimeRange
 
 __version__ = _version("s1bursts")
 
@@ -38,6 +39,7 @@ __all__ = [
     "ResolutionWeighter",
     "SNAPConfig",
     "SearchQuery",
+    "TimeRange",
     "download_burst_map",
     "prepare_dem_for_snap",
 ]
