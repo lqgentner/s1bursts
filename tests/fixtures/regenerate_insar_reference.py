@@ -34,7 +34,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 import zipfile
 
 import pyproj
@@ -218,7 +218,8 @@ def reference_job(
     if job.succeeded():
         return job
 
-    job = hyp3.watch(job, timeout=WATCH_TIMEOUT_S)
+    # `watch` is typed to return a Batch or a Job, whichever it was given.
+    job = cast("Job", hyp3.watch(job, timeout=WATCH_TIMEOUT_S))
     if not job.succeeded():
         msg = f"{scene.name}: HyP3 job {job.job_id} finished as {job.status_code}"
         raise RuntimeError(msg)

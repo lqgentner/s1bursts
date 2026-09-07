@@ -1214,7 +1214,7 @@ class ResolutionWeighter:
             return cls._weighted_mean(values, weights)
         if aggregation == "median":
             return cls._weighted_quantile(values, weights, q=0.5)
-        return cls._weighted_quantile(values, weights, q=float(aggregation))
+        return cls._weighted_quantile(values, weights, q=aggregation)
 
     @staticmethod
     def _weighted_mean(
