@@ -68,6 +68,9 @@ _LoadedEntry = tuple[ComposableProduct, NDArray[np.float32]]
 
 _DEFAULT_PROFILE_KEY = "default"
 
+# Largest sub-pixel offset, in pixels, still read as grid-aligned.
+_ALIGNMENT_TOLERANCE = 1e-3
+
 
 def _split_profiles(
     rasterio_profile: dict[str, Any] | None,
@@ -237,6 +240,7 @@ class ResolutionWeighter:
         if not rtc_products:
             msg = "rtc_products must not be empty."
             raise ValueError(msg)
+        self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(rtc_products)
         start_date = min(self._acquisition_date(p) for p in rtc_products)
@@ -407,6 +411,7 @@ class ResolutionWeighter:
         if not coh_products:
             msg = "coh_products must not be empty."
             raise ValueError(msg)
+        self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(coh_products)
         baseline_days = self._check_baseline_days(coh_products)
@@ -559,6 +564,7 @@ class ResolutionWeighter:
         rtc_products = list(rtc_products)
         if not rtc_products:
             return {}
+        self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(rtc_products)
         start_date = min(self._acquisition_date(p) for p in rtc_products)
@@ -707,6 +713,7 @@ class ResolutionWeighter:
         coh_products = list(coh_products)
         if not coh_products:
             return {}
+        self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(coh_products)
         baseline_days = self._check_baseline_days(coh_products)
@@ -804,6 +811,19 @@ class ResolutionWeighter:
         return baselines.pop()
 
     @staticmethod
+    def _check_aggregation(aggregation: Literal["mean", "median"] | float) -> None:
+        """Raise ValueError unless ``aggregation`` names a statistic or a quantile in (0, 1)."""
+        if aggregation in ("mean", "median"):
+            return
+        if isinstance(aggregation, float) and 0.0 < aggregation < 1.0:
+            return
+        msg = (
+            f"aggregation must be 'mean', 'median' or a quantile level in the open "
+            f"interval (0, 1); got {aggregation!r}."
+        )
+        raise ValueError(msg)
+
+    @staticmethod
     def _check_polarization(products: Sequence[ComposableProduct]) -> Polarization:
         """Return the common polarization or raise ValueError if products differ."""
         polarization = products[0].polarization
@@ -845,6 +865,16 @@ class ResolutionWeighter:
                     )
                     raise ValueError(msg)
                 win = from_bounds(left, bottom, right, top, transform=src.transform)
+                # Rounding the window would silently shift an input whose pixel
+                # corners do not coincide with the target grid's.
+                offsets = (win.col_off, win.row_off)
+                if any(abs(o - round(o)) > _ALIGNMENT_TOLERANCE for o in offsets):
+                    msg = (
+                        f"'{path.name}' is offset from the target grid by a fraction of a "
+                        f"pixel ({offsets[0]:.3f}, {offsets[1]:.3f}); all inputs must share "
+                        "the output grid."
+                    )
+                    raise ValueError(msg)
                 win = win.round_lengths().round_offsets()
                 data = src.read(band, window=win, boundless=True, fill_value=np.nan)
             return prod, data.astype(np.float32)
@@ -1196,14 +1226,12 @@ class ResolutionWeighter:
         NDArray[np.floating[Any]]
             Shape ``(H, W)`` composite.
         """
+        cls._check_aggregation(aggregation)
         if aggregation == "mean":
             return cls._weighted_mean(values, weights)
         if aggregation == "median":
             return cls._weighted_quantile(values, weights, q=0.5)
-        if isinstance(aggregation, float):
-            return cls._weighted_quantile(values, weights, q=aggregation)
-        msg = f"Unknown aggregation: {aggregation!r}"
-        raise ValueError(msg)
+        return cls._weighted_quantile(values, weights, q=float(aggregation))
 
     @staticmethod
     def _weighted_mean(

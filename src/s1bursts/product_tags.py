@@ -770,7 +770,7 @@ def coherence_metadata(
         "POLARIZATION": product.polarization,
         "DATE_PRIMARY": _date(product.date_primary),
         "DATE_SECONDARY": _date(product.date_secondary),
-        "TEMPORAL_BASELINE_DAYS": str((product.date_secondary - product.date_primary).days),
+        "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
         "PHASE_QUALITY_METHOD": _PHASE_QUALITY_METHOD,
         "PHASE_QUALITY_REFERENCE": _PHASE_QUALITY_REFERENCE,
         "COHERENCE_WINDOW_RANGE": str(win_rg),
@@ -810,7 +810,7 @@ def interferogram_metadata(
         "POLARIZATION": product.polarization,
         "DATE_PRIMARY": _date(product.date_primary),
         "DATE_SECONDARY": _date(product.date_secondary),
-        "TEMPORAL_BASELINE_DAYS": str((product.date_secondary - product.date_primary).days),
+        "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
         "FLAT_EARTH_PHASE_REMOVED": str(config.subtract_flat_earth_phase).lower(),
         "TOPOGRAPHIC_PHASE_REMOVED": str(config.subtract_topographic_phase).lower(),
     }

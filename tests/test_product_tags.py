@@ -605,6 +605,33 @@ class TestBurstProducts:
         assert tags["DATE_PRIMARY"] == "2020-02-05"
         assert tags["DATE_SECONDARY"] == "2020-02-17"
 
+    @pytest.mark.parametrize(
+        ("build", "config"),
+        [
+            (product_tags.coherence_metadata, CoherenceConfig()),
+            (product_tags.interferogram_metadata, InterferogramConfig()),
+        ],
+    )
+    def test_baseline_tag_matches_the_rounded_baseline_in_the_filename(
+        self,
+        build: Any,
+        config: Any,
+    ) -> None:
+        # Previously truncated the timestamp difference, so a secondary acquired a
+        # fraction of a second earlier in the day was tagged 11 days under a COH12 name.
+        cls = CoherenceProduct if config.__class__ is CoherenceConfig else InterferogramProduct
+        product = cls(
+            burst_id=30346,
+            sub_swath="IW1",
+            crs=_UTM32,
+            date_primary=Timestamp("2022-08-25T17:15:50.399"),
+            date_secondary=Timestamp("2022-09-06T17:15:50.100"),
+            polarization="VV",
+            _rel_orbit_number=15,
+        )
+        assert product.baseline_days == 12
+        assert build(product, config).tags["TEMPORAL_BASELINE_DAYS"] == "12"
+
     def test_interferogram_marks_only_the_intensities_as_power(self) -> None:
         metadata = product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig())
         assert metadata.band_names == ["ifg_i", "ifg_q", "intensity_1", "intensity_2"]

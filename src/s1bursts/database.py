@@ -18,7 +18,12 @@ from s1bursts.burst import (
     BurstPairCollection,
 )
 from s1bursts.cdse import CDSEAuth, CDSEBurstClient
-from s1bursts.errors import BurstDownloadError, BurstError, BurstNotFoundError
+from s1bursts.errors import (
+    BurstDownloadError,
+    BurstError,
+    BurstNotFoundError,
+    ConfigurationError,
+)
 from s1bursts.summary import ErrorResult, OkResult, OperationResult, OperationSummary
 
 if TYPE_CHECKING:
@@ -363,7 +368,7 @@ class BurstDatabase:
             return ErrorResult(source=burst, error=e)
 
     def _download_burst_s3(self, burst: Burst) -> OperationResult[Burst]:
-        """Download burst using S3 burst extraction script.
+        """Download a burst by extracting it from the parent product in CDSE S3.
 
         Writes the result to the deterministic SLC path resolved by
         ``FileManager`` (local or S3 via UPath).
@@ -380,6 +385,14 @@ class BurstDatabase:
                 burst_id=burst.burst_id,
             )
             return OkResult(source=burst, result=burst)
+        except ConfigurationError as e:
+            # Recorded per burst, as `_ensure_auth` does for OData, so that the
+            # other endpoint is still tried with the credentials that are set.
+            msg = (
+                f"{e} Set them, or download with endpoint='odata' using "
+                "CDSE_USERNAME and CDSE_PASSWORD only."
+            )
+            return ErrorResult(source=burst, error=BurstDownloadError(msg))
         except (BurstError, OSError) as e:
             return ErrorResult(source=burst, error=e)
 

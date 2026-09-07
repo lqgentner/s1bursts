@@ -328,7 +328,7 @@ class TestAggregateUnweighted:
     def test_unknown_string_raises(self) -> None:
         """An unknown string aggregation must raise ValueError."""
         values = np.array([[[1.0]]])
-        with pytest.raises(ValueError, match="Unknown aggregation"):
+        with pytest.raises(ValueError, match="aggregation must be"):
             # pyrefly: ignore [bad-argument-type]
             _make_weighter()._aggregate_unweighted(values, "mode")
 
@@ -608,9 +608,15 @@ class TestAggregateWeighted:
         result = self._weighter()._aggregate_weighted(self._values, self._weights, q)
         np.testing.assert_allclose(result, expected)
 
+    @pytest.mark.parametrize("q", [0.0, 1.0, 1.5, -0.2])
+    def test_quantile_outside_the_open_unit_interval_raises(self, q: float) -> None:
+        # Previously accepted silently and returned the minimum or maximum.
+        with pytest.raises(ValueError, match="quantile"):
+            self._weighter()._aggregate_weighted(self._values, self._weights, q)
+
     def test_unknown_string_raises(self) -> None:
         """An unrecognised string must raise ValueError."""
-        with pytest.raises(ValueError, match="Unknown aggregation"):
+        with pytest.raises(ValueError, match="aggregation must be"):
             self._weighter()._aggregate_weighted(
                 self._values,
                 self._weights,
@@ -1200,6 +1206,15 @@ class TestComposeRtcLrw:
         # weights 1/100 and 1/1 → (1*0.01 + 9*1) / 1.01
         assert values == pytest.approx(np.full((_TILE, _TILE), (1 * 0.01 + 9) / 1.01), rel=1e-5)
 
+    def test_rejects_an_out_of_range_quantile_before_reading_inputs(
+        self,
+        scene: _Scene,
+    ) -> None:
+        product = _rtc("2022-08-13")
+        # No raster is written for it, so a read attempt would fail differently.
+        with pytest.raises(ValueError, match="quantile"):
+            scene.weighter.compose_rtc_lrw([product], scene.geobox, aggregation=1.5)
+
     def test_writes_the_requested_qa_layers(self, scene: _Scene) -> None:
         products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
         for product in products:
@@ -1640,6 +1655,54 @@ class TestInputConsistency:
 
         with pytest.raises(ValueError, match="must share the output grid"):
             scene.weighter.compose_rtc_lrw([ours, coarse], scene.geobox)
+
+    def test_a_product_offset_by_a_fraction_of_a_pixel_is_refused(self, scene: _Scene) -> None:
+        # Previously the read window was rounded to whole pixels, shifting the
+        # product silently by up to half a pixel.
+        ours, shifted = _rtc("2022-08-13"), _rtc("2022-08-25")
+        _write_raster(scene.manager.get_product_path(ours), [_full(1.0), _full(1.0)])
+        path = scene.manager.get_product_path(shifted)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=_TILE,
+            height=_TILE,
+            count=2,
+            dtype="float32",
+            crs=_UTM32,
+            transform=Affine(10.0, 0.0, 400004.0, 0.0, -10.0, 5200000.0),
+            nodata=np.nan,
+        ) as dst:
+            dst.write(_full(1.0), 1)
+            dst.write(_full(1.0), 2)
+
+        with pytest.raises(ValueError, match="must share the output grid"):
+            scene.weighter.compose_rtc_lrw([ours, shifted], scene.geobox)
+
+    def test_a_product_at_a_whole_pixel_offset_is_accepted(self, scene: _Scene) -> None:
+        """A neighbouring burst starts elsewhere on the same grid; that is the normal case."""
+        ours, neighbour = _rtc("2022-08-13"), _rtc("2022-08-25")
+        _write_raster(scene.manager.get_product_path(ours), [_full(1.0), _full(1.0)])
+        path = scene.manager.get_product_path(neighbour)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=_TILE,
+            height=_TILE,
+            count=2,
+            dtype="float32",
+            crs=_UTM32,
+            transform=Affine(10.0, 0.0, 400030.0, 0.0, -10.0, 5200020.0),
+            nodata=np.nan,
+        ) as dst:
+            dst.write(_full(1.0), 1)
+            dst.write(_full(1.0), 2)
+
+        scene.weighter.compose_rtc_lrw([ours, neighbour], scene.geobox)
 
     def test_mixed_temporal_baselines_are_refused(self, scene: _Scene) -> None:
         """Coherence falls off with the baseline, and the composite carries one."""
