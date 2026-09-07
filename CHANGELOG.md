@@ -35,9 +35,23 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `product_tags.band_statistics()`.
 - `ResolutionWeighter(checksum=True)` records a multihash-encoded SHA-256 of
   every written file in `ResolutionWeighter.checksums`, keyed by output path.
+- `BurstDatabase.search()` follows the catalog's next-link pages, so
+  `max_items` above the 1000 items CDSE serves per request now works.
+- Coherence and interferogram products carry a `LAYER_NAME` tag on every band.
 
 ### Fixed
 
+- Per-burst coherence and interferogram products tagged `TEMPORAL_BASELINE_DAYS`
+  with the truncated timestamp difference, so a pair whose secondary was
+  acquired a fraction of a second earlier in the day was tagged 11 days under a
+  `S1_COH12` name. The tag now uses the rounded baseline the filename uses.
+- Missing CDSE S3 credentials aborted a whole download on the S3 endpoint
+  instead of being recorded per burst, so the OData fallback never ran.
+- A quantile `aggregation` outside `(0, 1)` was accepted and silently returned
+  the minimum or maximum; every `compose_*` call now rejects it.
+- `compose_*` rounded the read window to whole pixels, silently shifting an
+  input whose pixel corners do not coincide with the target grid's; such an
+  input is now refused like one in another CRS or at another pixel size.
 - **SNAP terrain-correction masks are now consistent across SNAP 13 and 14.**
   Graphs use a finite internal no-data marker, preventing interpolation over
   radar-geometry fill pixels.
@@ -169,7 +183,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   library's behaviour until now), SNAP derives `nAzLooks` from `nRgLooks` and
   the local geometry and **silently discards the requested azimuth looks**, so a
   `(5, 1)` multilook was applied as `(5, 2)` for Sentinel-1 IW. Non-square pixels
-  are a correctly resampled to `grid_spacing` in geocoding (terrain correction).
+  are correctly resampled to `grid_spacing` in geocoding (terrain correction).
 - **Breaking:** the graph configs now reject unknown fields (`extra="forbid"`)
   instead of ignoring them.
 - **Breaking:** the coherence graphs no longer contain a `Multilook` node and
@@ -232,7 +246,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `full_burst_id` document the `FileNotFoundError` they raise when the value was
   not propagated and the burst map has not been downloaded.
 
-## Removed
+### Removed
 
 - **Breaking:** removed `CDSES3Settings.s3_env`, a legacy context manager that
   injected `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` for an external script.
