@@ -247,6 +247,51 @@ class TestCDSEBurstClient:
         assert len(response) == 1
         assert mock_get.call_args.kwargs["params"]["$top"] == 10
 
+    @staticmethod
+    def _page(n_values: int, next_link: str | None = None) -> MagicMock:
+        http_response = MagicMock()
+        http_response.headers = {"Content-Type": "application/json"}
+        payload: dict[str, Any] = {
+            "@odata.context": "$metadata#Bursts",
+            "@odata.count": 3,
+            "value": [make_response_value() for _ in range(n_values)],
+        }
+        if next_link is not None:
+            payload["@odata.nextLink"] = next_link
+        http_response.json.return_value = payload
+        return http_response
+
+    def test_search_bursts_follows_next_link_up_to_top(self) -> None:
+        """CDSE caps a page at 1000 items; a larger `top` needs the next-link pages."""
+        client = CDSEBurstClient()
+        pages = [self._page(2, "https://catalogue.example/next"), self._page(1)]
+
+        with patch("s1bursts.cdse.requests.get", side_effect=pages) as mock_get:
+            response = client.search_bursts(["BurstId eq 30346"], top=3, count=True)
+
+        assert len(response) == 3
+        assert response.count == 3
+        assert mock_get.call_count == 2
+        assert mock_get.call_args_list[1].kwargs["url"] == "https://catalogue.example/next"
+
+    def test_search_bursts_stops_at_top(self) -> None:
+        client = CDSEBurstClient()
+        pages = [self._page(2, "https://catalogue.example/next"), self._page(1)]
+
+        with patch("s1bursts.cdse.requests.get", side_effect=pages) as mock_get:
+            response = client.search_bursts(["BurstId eq 30346"], top=2)
+
+        assert len(response) == 2
+        assert mock_get.call_count == 1
+
+    def test_search_bursts_requests_no_more_than_a_page(self) -> None:
+        client = CDSEBurstClient()
+
+        with patch("s1bursts.cdse.requests.get", return_value=self._page(1)) as mock_get:
+            client.search_bursts(top=5000)
+
+        assert mock_get.call_args.kwargs["params"]["$top"] == 1000
+
     def test_search_bursts_rejects_non_json(self) -> None:
         client = CDSEBurstClient()
         http_response = MagicMock()
