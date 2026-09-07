@@ -194,16 +194,7 @@ def _new_transformer_group(source_crs: CRS) -> TransformerGroup:
 
 
 def _missing_grid_names(group: TransformerGroup, *, fetchable: bool | None = None) -> list[str]:
-    """Return the unique names of grids unavailable to a transformer group.
-
-    Parameters
-    ----------
-    group : TransformerGroup
-        Group whose unavailable operations are inspected.
-    fetchable : bool, optional
-        Restrict the result to grids PROJ can download itself (``True``) or to
-        those it cannot (``False``). By default every missing grid is returned.
-    """
+    """Return the unique names of grids unavailable to a transformer group."""
     return sorted(
         {
             grid.short_name
@@ -433,15 +424,15 @@ def prepare_dem_for_snap(
 
     Parameters
     ----------
-    dem : Path
+    dem
         Local DEM to prepare.
-    source_crs : str, optional
+    source_crs
         Compound CRS describing the DEM's horizontal and orthometric references,
         for example ``"EPSG:4326+3855"`` for Copernicus GLO-30. If omitted,
         elevations pass through unchanged.
-    download_missing_grids : bool, default False
+    download_missing_grids
         Download required open-license PROJ grids when they are not installed.
-    cache_dir : Path, optional
+    cache_dir
         Directory for prepared copies. Defaults to ``SNAP_DEM_CACHE``
         (``~/.s1bursts/dem``).
 

@@ -1,7 +1,7 @@
 """Environment-loaded settings for the Sentinel-1 pipeline.
 
 Settings are read from the process environment only. Loading a ``.env`` file is
-left to the application: Call ``dotenv.load_dotenv()`` before :func:`get_settings`
+left to the application: Call ``dotenv.load_dotenv()`` before ``get_settings``
 or export the variables (e.g. ``uv run --env-file .env``).
 """
 

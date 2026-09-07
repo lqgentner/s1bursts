@@ -40,16 +40,24 @@ logger = logging.getLogger(__name__)
 
 
 class BurstProcessor:
-    """High-level batch processor for Sentinel-1 bursts.
+    """Batch processor for Sentinel-1 bursts and burst pairs.
 
-    Provides user-friendly interface for batch processing with:
-    - Progress tracking using rich progress bars
-    - Error handling with continue-on-failure
-    - Summary reporting
-    - Skip existing products
+    Runs one SNAP GPT job per burst or pair with progress tracking, skips
+    products that already exist, records failures per item, and returns an
+    ``OperationSummary``. Takes ``BurstCollection`` and
+    ``BurstPairCollection`` rather than product classes.
 
-    Does not expose product classes to users - accepts BurstCollection
-    and BurstPairCollection instead.
+    Parameters
+    ----------
+    file_manager
+        File manager resolving input SLC and output product paths.
+    config
+        Runtime configuration for SNAP GPT processing; defaults to
+        ``SNAPConfig()``.
+    show_progress
+        Whether to show progress bars.
+    continue_on_error
+        Whether to continue processing after an error.
     """
 
     def __init__(
@@ -60,20 +68,6 @@ class BurstProcessor:
         show_progress: bool = True,
         continue_on_error: bool = True,
     ) -> None:
-        """Initialize BurstProcessor.
-
-        Parameters
-        ----------
-        file_manager : FileManager
-            File manager resolving input SLC and output product paths.
-        config : SNAPConfig | None, default None
-            Runtime configuration for SNAP GPT processing; defaults to
-            ``SNAPConfig()``.
-        show_progress : bool, default True
-            Whether to show progress bars.
-        continue_on_error : bool, default True
-            Whether to continue processing after an error.
-        """
         self.config = config or SNAPConfig()
         self.snap_client = SNAPClient(file_manager, self.config)
         self.manager = file_manager
@@ -92,14 +86,14 @@ class BurstProcessor:
 
         Parameters
         ----------
-        bursts : BurstCollection
+        bursts
             Collection of bursts to process.
-        crs : CRSLike
+        crs
             The coordinate reference system of the geocoded output.
-        config : BackscatterConfig | None, default None
+        config
             Graph-shape configuration; defaults to ``BackscatterConfig()``
             (RTC, Copernicus 30m DEM, multilook ``(5, 1)``).
-        overwrite : bool, default False
+        overwrite
             Whether to overwrite existing products.
 
         Returns
@@ -131,14 +125,14 @@ class BurstProcessor:
 
         Parameters
         ----------
-        pairs : BurstPairCollection
+        pairs
             Collection of burst pairs to process.
-        crs : CRSLike
+        crs
             The coordinate reference system of the geocoded output.
-        config : CoherenceConfig | None, default None
+        config
             Graph-shape configuration; defaults to ``CoherenceConfig()``
             (25x5 window, Copernicus 30m DEM).
-        overwrite : bool, default False
+        overwrite
             Whether to overwrite existing products.
 
         Returns
@@ -170,13 +164,13 @@ class BurstProcessor:
 
         Parameters
         ----------
-        pairs : BurstPairCollection
+        pairs
             Collection of burst pairs to process.
-        crs : CRSLike
+        crs
             The coordinate reference system of the geocoded output.
-        config : InterferogramConfig | None, default None
+        config
             Graph-shape configuration; defaults to ``InterferogramConfig()``.
-        overwrite : bool, default False
+        overwrite
             Whether to overwrite existing products.
 
         Returns
@@ -216,24 +210,7 @@ class BurstProcessor:
         process_fn: Callable[[Any], OperationResult[Any]],
         item_description: str,
     ) -> OperationSummary[Any]:
-        """Process bursts with progress tracking.
-
-        Parameters
-        ----------
-        collection : BurstCollection | BurstPairCollection
-            Collection of bursts or burst pairs to process.
-        process_fn : callable
-            Processing function that takes a Burst or BurstPair and returns a OperationResult.
-            If collection is a BurstCollection, process_fn must take Burst objects.
-            If collection is a BurstPairCollection, process_fn must take BurstPair objects.
-        item_description : str
-            Description for progress bar.
-
-        Returns
-        -------
-        OperationSummary
-            Processing summary with results.
-        """
+        """Process bursts with progress tracking."""
         start_time = time.time()
         results: list[OperationResult[Any]] = []
         items = list(collection)

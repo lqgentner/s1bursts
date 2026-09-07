@@ -82,7 +82,7 @@ class BaseProduct(ABC):
 
         Parameters
         ----------
-        data : dict[str, Any]
+        data
             Mapping of field names to values. Extra keys and ``init=False``
             fields are filtered before construction.
 
@@ -101,11 +101,11 @@ class GeocodedBurst(BurstFootprintMixin, BaseProduct, ABC):
 
     Parameters
     ----------
-    burst_id : int
+    burst_id
         Burst identifier.
-    sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"}
+    sub_swath
         Sub-swath identifier.
-    crs : CRSLike
+    crs
         The coordinate reference system.
     """
 
@@ -131,15 +131,15 @@ class BackscatterProduct(GeocodedBurst):
 
     Parameters
     ----------
-    burst_id : int
+    burst_id
         Burst identifier.
-    sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"}
+    sub_swath
         Sub-swath identifier.
-    crs : CRSLike
+    crs
         The coordinate reference system.
-    date : Timestamp
+    date
         Acquisition date.
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
     """
 
@@ -157,9 +157,9 @@ class BackscatterProduct(GeocodedBurst):
 
         Parameters
         ----------
-        burst : Burst
+        burst
             Burst to create product from.
-        crs : CRSLike
+        crs
             The coordinate reference system.
 
         Returns
@@ -185,15 +185,15 @@ class RTCProduct(BackscatterProduct):
 
     Parameters
     ----------
-    burst_id : int
+    burst_id
         Burst identifier.
-    sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"}
+    sub_swath
         Sub-swath identifier.
-    crs : CRSLike
+    crs
         The coordinate reference system.
-    date : Timestamp
+    date
         Acquisition date.
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
     """
 
@@ -218,15 +218,15 @@ class GTCProduct(BackscatterProduct):
 
     Parameters
     ----------
-    burst_id : int
+    burst_id
         Burst identifier.
-    sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"}
+    sub_swath
         Sub-swath identifier.
-    crs : CRSLike
+    crs
         The coordinate reference system.
-    date : Timestamp
+    date
         Acquisition date.
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
     """
 
@@ -249,17 +249,17 @@ class CoregisteredProduct(GeocodedBurst, ABC):
 
     Parameters
     ----------
-    burst_id : int
+    burst_id
         Burst identifier.
-    sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"}
+    sub_swath
         Sub-swath identifier.
-    crs : CRSLike
+    crs
         The coordinate reference system.
-    date_primary : Timestamp
+    date_primary
         Primary acquisition date.
-    date_secondary : Timestamp
+    date_secondary
         Secondary acquisition date.
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
     """
 
@@ -284,9 +284,9 @@ class CoregisteredProduct(GeocodedBurst, ABC):
 
         Parameters
         ----------
-        pair : BurstPair
+        pair
             Burst pair to create product from.
-        crs : CRSLike
+        crs
             The coordinate reference system.
 
         Returns
@@ -311,17 +311,17 @@ class CoherenceProduct(CoregisteredProduct):
 
     Parameters
     ----------
-    burst_id : int
+    burst_id
         Burst identifier.
-    sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"}
+    sub_swath
         Sub-swath identifier.
-    crs : CRSLike
+    crs
         The coordinate reference system.
-    date_primary : Timestamp
+    date_primary
         Primary acquisition date.
-    date_secondary : Timestamp
+    date_secondary
         Secondary acquisition date.
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
     """
 
@@ -338,17 +338,17 @@ class InterferogramProduct(CoregisteredProduct):
 
     Parameters
     ----------
-    burst_id : int
+    burst_id
         Burst identifier.
-    sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"}
+    sub_swath
         Sub-swath identifier.
-    crs : CRSLike
+    crs
         The coordinate reference system.
-    date_primary : Timestamp
+    date_primary
         Primary acquisition date.
-    date_secondary : Timestamp
+    date_secondary
         Secondary acquisition date.
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
     """
 
@@ -365,13 +365,13 @@ class MGRSTileProduct(BaseProduct):
 
     Parameters
     ----------
-    mgrs_code : str
+    mgrs_code
         MGRS identifier.
-    start_date : Timestamp
+    start_date
         Start of the compositing period (inclusive).
-    end_date : Timestamp
+    end_date
         End of the compositing period (inclusive).
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
     """
 
@@ -396,13 +396,13 @@ class RTCLRWComposite(MGRSTileProduct):
 
     Parameters
     ----------
-    mgrs_code : str
+    mgrs_code
         MGRS grid cell identifier.
-    start_date : Timestamp
+    start_date
         Start of the compositing period (inclusive).
-    end_date : Timestamp
+    end_date
         End of the compositing period (inclusive).
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
     """
 
@@ -419,15 +419,15 @@ class CohLRWComposite(MGRSTileProduct):
 
     Parameters
     ----------
-    mgrs_code : str
+    mgrs_code
         MGRS grid cell identifier.
-    start_date : Timestamp
+    start_date
         Start of the compositing period (inclusive).
-    end_date : Timestamp
+    end_date
         End of the compositing period (inclusive).
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
-    baseline_days : int
+    baseline_days
         Temporal baseline in days.
     """
 
@@ -446,15 +446,15 @@ class RTCPassComposite(MGRSTileProduct):
 
     Parameters
     ----------
-    mgrs_code : str
+    mgrs_code
         MGRS grid cell identifier.
-    start_date : Timestamp
+    start_date
         Start of the compositing period (inclusive).
-    end_date : Timestamp
+    end_date
         End of the compositing period (inclusive).
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
-    pass_direction : {"Ascending", "Descending"}
+    pass_direction
         Pass direction.
     """
 
@@ -473,17 +473,17 @@ class CohPassComposite(MGRSTileProduct):
 
     Parameters
     ----------
-    mgrs_code : str
+    mgrs_code
         MGRS grid cell identifier.
-    start_date : Timestamp
+    start_date
         Start of the compositing period (inclusive).
-    end_date : Timestamp
+    end_date
         End of the compositing period (inclusive).
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
-    pass_direction : {"Ascending", "Descending"}
+    pass_direction
         Pass direction.
-    baseline_days : int
+    baseline_days
         Temporal baseline in days.
     """
 
@@ -503,15 +503,15 @@ class RTCLRWQA(MGRSTileProduct):
 
     Parameters
     ----------
-    mgrs_code : str
+    mgrs_code
         MGRS grid cell identifier.
-    start_date : Timestamp
+    start_date
         Start of the compositing period (inclusive).
-    end_date : Timestamp
+    end_date
         End of the compositing period (inclusive).
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
-    qa_metric : QaMetric
+    qa_metric
         Quality metric stored in the file (number of observations or CQM).
     """
 
@@ -530,17 +530,17 @@ class CohLRWQA(MGRSTileProduct):
 
     Parameters
     ----------
-    mgrs_code : str
+    mgrs_code
         MGRS grid cell identifier.
-    start_date : Timestamp
+    start_date
         Start of the compositing period (inclusive).
-    end_date : Timestamp
+    end_date
         End of the compositing period (inclusive).
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
-    baseline_days : int
+    baseline_days
         Temporal baseline in days.
-    qa_metric : QaMetric
+    qa_metric
         Quality metric stored in the file (number of observations or CQM).
     """
 
@@ -560,15 +560,15 @@ class RTCPassQA(MGRSTileProduct):
 
     Parameters
     ----------
-    mgrs_code : str
+    mgrs_code
         MGRS grid cell identifier.
-    start_date : Timestamp
+    start_date
         Start of the compositing period (inclusive).
-    end_date : Timestamp
+    end_date
         End of the compositing period (inclusive).
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
-    pass_direction : {"Ascending", "Descending"}
+    pass_direction
         Pass direction.
     """
 
@@ -587,17 +587,17 @@ class CohPassQA(MGRSTileProduct):
 
     Parameters
     ----------
-    mgrs_code : str
+    mgrs_code
         MGRS grid cell identifier.
-    start_date : Timestamp
+    start_date
         Start of the compositing period (inclusive).
-    end_date : Timestamp
+    end_date
         End of the compositing period (inclusive).
-    polarization : {"VV", "VH", "HH", "HV"}
+    polarization
         The polarization.
-    pass_direction : {"Ascending", "Descending"}
+    pass_direction
         Pass direction.
-    baseline_days : int
+    baseline_days
         Temporal baseline in days.
     """
 

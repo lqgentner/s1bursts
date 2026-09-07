@@ -40,8 +40,7 @@ _COPERNICUS_TERMS_URL = (
 
 
 class Sentinel1Bursts(GeoVectorData):
-    """
-    Sentinel-1 Burst ID map.
+    """Sentinel-1 Burst ID map.
 
     Sentinel-1 performs systematic acquisition of bursts in both IW and EW modes.
     The bursts overlap almost perfectly between different passes and are always
@@ -57,6 +56,14 @@ class Sentinel1Bursts(GeoVectorData):
     Two maps are provided: one for EW and one for IW acquisition modes.
     The maps have a validity that covers the entire time span of the mission and they
     are global, i.e., they include as well information where no SAR data is acquired.
+
+    Parameters
+    ----------
+    cache_dir
+        The root directory where the dataset is stored. Defaults to the 'FREEZEBASE_CACHE'
+        environment variable or the system cache directory (in that order).
+    mode
+        The Sentinel-1 acquisition mode.
     """
 
     def __init__(
@@ -65,18 +72,6 @@ class Sentinel1Bursts(GeoVectorData):
         *,
         mode: Mode = "IW",
     ) -> None:
-        """
-        Initialize the Sentinel-1 Burst ID map.
-
-        Parameters
-        ----------
-        cache_dir : str or Path or None, default: None
-            The root directory where the dataset is stored. Defaults to the 'FREEZEBASE_CACHE'
-            environment variable or the system cache directory (in that order).
-        mode : {"IW", "EW"}, default: "IW"
-            The Sentinel-1 acquisition mode.
-
-        """
         super().__init__(cache_dir)
         # Validate mode
         try:
@@ -165,10 +160,10 @@ def download_burst_map(cache_dir: str | Path | None = None, *, mode: Mode = "IW"
 
     Parameters
     ----------
-    cache_dir : str or Path or None, default: None
+    cache_dir
         Root directory for cached dataset files. Defaults to the
         ``FREEZEBASE_CACHE`` environment variable or the system cache directory.
-    mode : {"IW", "EW"}, default: "IW"
+    mode
         Sentinel-1 acquisition mode.
 
     Returns
@@ -185,7 +180,7 @@ def _load_indexed_burst_map(cache_dir: str | Path | None, mode: Mode) -> gpd.Geo
     """Load the prepared burst map indexed by ``(burst_id, subswath_name)``.
 
     Does not download: the map is opt-in. Raises a clear error, pointing at
-    :func:`download_burst_map`, when the data has not been fetched yet.
+    ``download_burst_map``, when the data has not been fetched yet.
     """
     try:
         df = Sentinel1Bursts(cache_dir=cache_dir, mode=mode).get_data(download=False)
@@ -218,17 +213,16 @@ def create_s1_pass_direction_lut(
 
     Parameters
     ----------
-    cache_dir : str or Path or None, default: None
+    cache_dir
         Root directory for cached dataset files. Forwarded to
-        :class:`Sentinel1Bursts`.
-    mode : {"IW", "EW"}, default: "IW"
-        Sentinel-1 acquisition mode. Forwarded to :class:`Sentinel1Bursts`.
+        ``Sentinel1Bursts``.
+    mode
+        Sentinel-1 acquisition mode. Forwarded to ``Sentinel1Bursts``.
 
     Returns
     -------
     dict[tuple[int, SubSwath], str]
         Mapping of ``(burst_id, subswath_name)`` → pass direction string.
-
     """
     df = _load_indexed_burst_map(cache_dir, mode)
     # The burst map spells the directions upper case; the package uses the
@@ -256,17 +250,16 @@ def create_s1_orbit_number_lut(
 
     Parameters
     ----------
-    cache_dir : str or Path or None, default: None
+    cache_dir
         Root directory for cached dataset files. Forwarded to
-        :class:`Sentinel1Bursts`.
-    mode : {"IW", "EW"}, default: "IW"
-        Sentinel-1 acquisition mode. Forwarded to :class:`Sentinel1Bursts`.
+        ``Sentinel1Bursts``.
+    mode
+        Sentinel-1 acquisition mode. Forwarded to ``Sentinel1Bursts``.
 
     Returns
     -------
     dict[tuple[int, SubSwath], int]
         Mapping of ``(burst_id, subswath_name)`` → relative orbit number.
-
     """
     df = _load_indexed_burst_map(cache_dir, mode)
     return cast("dict[tuple[int, SubSwath], int]", df["relative_orbit_number"].to_dict())
@@ -290,17 +283,16 @@ def create_s1_geometry_lut(
 
     Parameters
     ----------
-    cache_dir : str or Path or None, default: None
+    cache_dir
         Root directory for cached dataset files. Forwarded to
-        :class:`Sentinel1Bursts`.
-    mode : {"IW", "EW"}, default: "IW"
-        Sentinel-1 acquisition mode. Forwarded to :class:`Sentinel1Bursts`.
+        ``Sentinel1Bursts``.
+    mode
+        Sentinel-1 acquisition mode. Forwarded to ``Sentinel1Bursts``.
 
     Returns
     -------
     dict[tuple[int, SubSwath], Polygon | MultiPolygon]
         Mapping of ``(burst_id, subswath_name)`` → footprint geometry.
-
     """
     df = _load_indexed_burst_map(cache_dir, mode)
     return cast("dict[tuple[int, SubSwath], Polygon | MultiPolygon]", df["geometry"].to_dict())

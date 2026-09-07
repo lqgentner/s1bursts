@@ -3,10 +3,10 @@
 The types here separate two kinds of failure so that batch loops can catch only
 the ones worth recording per item and let the rest abort the run:
 
-- :class:`BurstError` (and subclasses) are *recoverable, per-item* failures — a
+- ``BurstError`` (and subclasses) are *recoverable, per-item* failures — a
   single burst could not be downloaded or processed. Batch loops catch this base
   class, record an ``ErrorResult``, and continue.
-- :class:`ConfigurationError` is an *environment-wide* failure (missing
+- ``ConfigurationError`` is an *environment-wide* failure (missing
   credentials, a broken PROJ database, a missing GPT executable). It affects
   every item, so it must propagate and fail fast — it is deliberately never
   caught by the per-item handlers.

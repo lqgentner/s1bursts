@@ -7,7 +7,7 @@ Where the CEOS-ARD Product Family Specification for Synthetic Aperture Radar,
 version 1.3.1, has a name for something, these tags use that name, so that a
 reader can look a tag up in the accompanying metadata specification rather than
 learn a private dialect. Every product records the specification it borrows
-from in :data:`METADATA_VOCABULARY`.
+from in ``METADATA_VOCABULARY``.
 
 Borrowing the vocabulary is not conformance, which is neither assessed nor
 claimed here.
@@ -120,13 +120,13 @@ class RasterMetadata:
 
     Parameters
     ----------
-    tags : dict[str, str]
+    tags
         Dataset-level tags.
-    band_names : list[str]
+    band_names
         Band descriptions, one per band.
-    units : list[str]
+    units
         Band unit strings, one per band. Empty for a dimensionless band.
-    band_tags : list[dict[str, str]]
+    band_tags
         Per-band tags, one mapping per band.
     """
 
@@ -247,7 +247,7 @@ def _inherited(
 ) -> dict[str, str]:
     """Forward the named keys from the per-burst inputs' tags.
 
-    A key in ``required`` is always emitted, as :data:`UNKNOWN` where the
+    A key in ``required`` is always emitted, as ``UNKNOWN`` where the
     inputs did not supply it — they disagreed, or never carried it. Anything
     else is simply left out when absent, because it may not apply to this
     product at all.
@@ -268,9 +268,9 @@ def band_statistics(data: NDArray[Any], nodata: float) -> dict[str, str]:
 
     Parameters
     ----------
-    data : numpy.ndarray
+    data
         Band values.
-    nodata : float
+    nodata
         The band's nodata value, e.g. NaN for a float composite or ``0`` for
         a uint16 count band. A pixel is valid when it is finite *and* differs
         from ``nodata``, so a stray NaN or infinity in a band with a finite
@@ -306,7 +306,7 @@ def coherence_statistics(values: NDArray[np.floating[Any]]) -> dict[str, str]:
 
     Parameters
     ----------
-    values : numpy.ndarray
+    values
         Coherence values; non-finite entries are ignored.
 
     Returns
@@ -341,17 +341,17 @@ def rtc_lrw_metadata(
 
     Parameters
     ----------
-    product : RTCLRWComposite
+    product
         The product being written.
-    aggregation : {"mean", "median"} or float
+    aggregation
         Temporal aggregation actually applied.
-    clip_max_resolution : float or None
+    clip_max_resolution
         Weight clip actually applied.
-    n_observations : int
+    n_observations
         Number of orbit-date observations entering the composite (spec 2.21).
-    decibel : bool
+    decibel
         Whether the stored values are decibels rather than linear power.
-    source_tags : Mapping[str, str] or None, optional
+    source_tags
         Tags of one of the per-burst inputs, from which the processing
         provenance is inherited.
 
@@ -397,17 +397,17 @@ def coh_lrw_metadata(
 
     Parameters
     ----------
-    product : CohLRWComposite
+    product
         The product being written.
-    aggregation : {"mean", "median"} or float
+    aggregation
         Temporal aggregation actually applied.
-    clip_max_resolution : float or None
+    clip_max_resolution
         Weight clip actually applied.
-    n_observations : int
+    n_observations
         Number of orbit-date observations entering the composite (spec 2.21).
-    statistics : Mapping[str, str] or None, optional
-        Coherence statistics from :func:`coherence_statistics`.
-    source_tags : Mapping[str, str] or None, optional
+    statistics
+        Coherence statistics from ``coherence_statistics``.
+    source_tags
         Tags of one of the per-burst coherence inputs. The estimation window
         originates there and reaches the composite by no other route.
 
@@ -460,15 +460,15 @@ def rtc_pass_metadata(
 
     Parameters
     ----------
-    product : RTCPassComposite
+    product
         The product being written.
-    aggregation : {"mean", "median"} or float
+    aggregation
         Temporal aggregation actually applied.
-    n_observations : int
+    n_observations
         Number of orbit-date observations entering the composite.
-    decibel : bool
+    decibel
         Whether the stored values are decibels rather than linear power.
-    source_tags : Mapping[str, str] or None, optional
+    source_tags
         Tags of one of the per-burst inputs.
 
     Returns
@@ -507,15 +507,15 @@ def coh_pass_metadata(
 
     Parameters
     ----------
-    product : CohPassComposite
+    product
         The product being written.
-    aggregation : {"mean", "median"} or float
+    aggregation
         Temporal aggregation actually applied.
-    n_observations : int
+    n_observations
         Number of orbit-date observations entering the composite.
-    statistics : Mapping[str, str] or None, optional
-        Coherence statistics from :func:`coherence_statistics`.
-    source_tags : Mapping[str, str] or None, optional
+    statistics
+        Coherence statistics from ``coherence_statistics``.
+    source_tags
         Tags of one of the per-burst coherence inputs.
 
     Returns
@@ -561,18 +561,18 @@ def qa_metadata(
 
     Parameters
     ----------
-    product : RTCLRWQA or CohLRWQA or RTCPassQA or CohPassQA
+    product
         The QA product being written.
-    aggregation : {"mean", "median"} or float
+    aggregation
         Temporal aggregation actually applied to the parent composite.
-    n_observations : int
+    n_observations
         Number of orbit-date observations entering the composite (spec 2.21).
-    clip_max_resolution : float or None, optional
+    clip_max_resolution
         Weight clip actually applied; ignored for a pass composite's QA, which
         applies no weighting.
-    cqm_decibel : bool, default False
+    cqm_decibel
         Whether a ``QA-CQM`` layer stores decibels rather than linear values.
-    source_tags : Mapping[str, str] or None, optional
+    source_tags
         Tags of one of the per-burst inputs.
 
     Returns
@@ -670,11 +670,11 @@ def backscatter_metadata(
 
     Parameters
     ----------
-    product : RTCProduct or GTCProduct
+    product
         The product being written.
-    config : BackscatterConfig
+    config
         Configuration the graph was built from.
-    snap_version : tuple of int or None, optional
+    snap_version
         Version of the SNAP installation that ran the graph, from
         ``s1bursts.snap_client.snap_version``. Written as ``N/A`` when unknown.
 
@@ -747,11 +747,11 @@ def coherence_metadata(
 
     Parameters
     ----------
-    product : CoherenceProduct
+    product
         The product being written.
-    config : CoherenceConfig
+    config
         Configuration the graph was built from.
-    snap_version : tuple of int or None, optional
+    snap_version
         Version of the SNAP installation that ran the graph, from
         ``s1bursts.snap_client.snap_version``. Written as ``N/A`` when unknown.
 
@@ -792,11 +792,11 @@ def interferogram_metadata(
 
     Parameters
     ----------
-    product : InterferogramProduct
+    product
         The product being written.
-    config : InterferogramConfig
+    config
         Configuration the graph was built from.
-    snap_version : tuple of int or None, optional
+    snap_version
         Version of the SNAP installation that ran the graph, from
         ``s1bursts.snap_client.snap_version``. Written as ``N/A`` when unknown.
 
@@ -835,11 +835,11 @@ def burst_metadata(
 
     Parameters
     ----------
-    product : RTCProduct or GTCProduct or CoherenceProduct or InterferogramProduct
+    product
         The product being written.
-    config : BackscatterConfig or CoherenceConfig or InterferogramConfig
+    config
         Configuration the graph was built from.
-    snap_version : tuple of int or None, optional
+    snap_version
         Version of the SNAP installation that ran the graph, from
         ``s1bursts.snap_client.snap_version``. Written as ``N/A`` when unknown.
 

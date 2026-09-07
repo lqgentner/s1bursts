@@ -64,16 +64,6 @@ def _parse_xml(data: bytes) -> etree._Element:
 
     A fresh parser is created per call because ``lxml`` parsers are not safe to
     share across the threads that drive concurrent burst extraction.
-
-    Parameters
-    ----------
-    data : bytes
-        Raw XML document bytes.
-
-    Returns
-    -------
-    lxml.etree._Element
-        Parsed document root.
     """
     parser = etree.XMLParser(resolve_entities=False, no_network=True)
     return etree.fromstring(data, parser=parser)
@@ -256,7 +246,7 @@ def _resolve_burst(
     """Resolve burst position and build all derived naming metadata.
 
     Tries a direct ``<burstId>`` XPath match first; falls back to
-    :func:`_orbital_burst_number` for legacy products without that field.
+    ``_orbital_burst_number`` for legacy products without that field.
     """
     bursts = annotation_root.findall("swathTiming/burstList/burst")
 
@@ -508,20 +498,7 @@ def _extract_tiff(
     geoloc_pts: list[tuple[float, float, float, float, float]],
     meta: _BurstMeta,
 ) -> None:
-    """Extract a single burst from a CDSE S3 TIFF using windowed read and GCPs.
-
-    Parameters
-    ----------
-    tiff_s3_path : UPath
-        S3 path to the full-product measurement TIFF.
-    dst_tiff : Path
-        Local destination for the extracted burst TIFF.
-    geoloc_pts : list of (pixel, line_shifted, lon, lat, height) tuples
-        Geolocation grid points; line values are already shifted by
-        ``meta.starting_line`` so they are relative to the burst window.
-    meta : _BurstMeta
-        Burst metadata (for window dimensions).
-    """
+    """Extract a single burst from a CDSE S3 TIFF using windowed read and GCPs."""
     gcps = [
         GroundControlPoint(row=line, col=pixel, x=lon, y=lat, z=height)
         for pixel, line, lon, lat, height in geoloc_pts
@@ -581,15 +558,15 @@ def extract_burst_from_s3(  # noqa: PLR0915
 
     Parameters
     ----------
-    save_path : str, Path, or UPath
+    save_path
         Full destination path (including filename) for the ``.zip``.
-    parent_product_name : str
+    parent_product_name
         Name of the parent ``*.SAFE`` product on CDSE.
-    polarization : str
+    polarization
         Polarization channel, e.g. ``"VV"``, ``"VH"``, ``"HH"``, ``"HV"``.
-    sub_swath : str
+    sub_swath
         Subswath identifier, e.g. ``"IW1"``, ``"IW2"``, ``"IW3"``.
-    burst_id : int
+    burst_id
         Relative burst ID within the subswath.
 
     Returns

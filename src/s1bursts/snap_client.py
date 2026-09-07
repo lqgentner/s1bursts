@@ -81,12 +81,6 @@ def _resolve_gpt_path(bin_dir: Path | None, snap_settings: SNAPSettings) -> Path
     1. ``bin_dir`` (the ``bin`` argument passed to ``SNAPConfig``).
     2. ``SNAP_BIN``, a SNAP installation's ``bin`` directory.
     3. ``gpt`` discovered on ``PATH``.
-
-    Raises
-    ------
-    ConfigurationError
-        If none of the above resolve to a candidate path, or the resolved path is
-        not an executable file.
     """
     resolved_bin = bin_dir or snap_settings.bin
     if resolved_bin is not None:
@@ -137,8 +131,8 @@ def snap_version(gpt_path: Path) -> tuple[int, ...] | None:
 
     Parameters
     ----------
-    gpt_path : Path
-        The ``gpt`` executable, as resolved by :func:`_resolve_gpt_path`.
+    gpt_path
+        The ``gpt`` executable, as resolved by ``_resolve_gpt_path``.
 
     Returns
     -------
@@ -198,11 +192,6 @@ def _normalize_nodata(dataset: rasterio.io.DatasetWriter, nodata: float) -> int:
     Terrain-Correction can leave zeros in edge tiles over DEM voids. Requiring
     zero in every band preserves valid zero crossings in complex products. This
     normalization is only safe after the graph's no-data band maths has run.
-
-    Returns
-    -------
-    int
-        Number of pixels replaced.
     """
     replaced = 0
     for _, window in dataset.block_windows(1):
@@ -225,27 +214,27 @@ class SNAPConfig:
 
     Parameters
     ----------
-    bin : Path, optional
+    bin
         A SNAP installation's ``bin`` directory, used to locate the ``gpt``
         executable. Defaults to ``SNAP_BIN``, then ``gpt`` discovered on ``PATH``.
-    rasterio_profile : dict, optional
+    rasterio_profile
         Overrides for the rasterio profile used when rewriting GPT output
         GeoTIFFs. Merged over ``{"dtype": "float32", "nodata": "nan"}``.
-    max_workers : int, optional
+    max_workers
         Number of parallel GPT subprocesses; at least 1. Defaults to
         ``SNAP_MAX_WORKERS`` (or 1).
-    max_ram_gb : float, optional
+    max_ram_gb
         Total RAM budget across all GPT processes in GB; must be positive and
         large enough to give every worker a 512 MB heap on top of 3 GB of JVM
         and OS overhead. Defaults to ``SNAP_MAX_RAM_GB`` (or 4).
-    gpt_threads_per_job : int, optional
+    gpt_threads_per_job
         Threads per GPT process (``-q``); at least 1. Defaults to
         ``SNAP_THREADS_PER_JOB`` or ``cpu_count // max_workers``.
-    gpt_cache_ratio : float, optional
+    gpt_cache_ratio
         Fraction of the per-process Java heap used for the GPT tile cache
         (``-c``); greater than 0 and at most 1. Defaults to
         ``SNAP_CACHE_RATIO`` (or 0.7).
-    auxdata_path : Path, optional
+    auxdata_path
         Shared SNAP auxdata cache (DEM tiles, orbit files). Defaults to
         ``SNAP_AUXDATA_PATH`` (or ``~/.snap/auxdata``).
 
@@ -398,23 +387,13 @@ class SNAPClient:
 
     Parameters
     ----------
-    file_manager : FileManager
+    file_manager
         File manager resolving input SLC and output product paths.
-    config : SNAPConfig | None, default None
+    config
         Runtime configuration for SNAP GPT; defaults to ``SNAPConfig()``.
-
     """
 
     def __init__(self, file_manager: FileManager, config: SNAPConfig | None = None) -> None:
-        """Initialize SNAP client.
-
-        Parameters
-        ----------
-        file_manager : FileManager
-            File manager resolving input SLC and output product paths.
-        config : SNAPConfig | None, default None
-            Runtime configuration for SNAP GPT; defaults to ``SNAPConfig()``.
-        """
         self.config = config or SNAPConfig()
         self.manager = file_manager
 
@@ -427,37 +406,7 @@ class SNAPClient:
         process_params: dict[str, str] | None = None,
         timeout: int = 3600,
     ) -> Path:
-        """Run SNAP GPT with given parameters.
-
-        Parameters
-        ----------
-        graph : Path
-            Path to the SNAP GPT processing graph XML file.
-        source_files : dict[str, Path]
-            Mapping of source parameter names to their file paths.
-        target_file : Path
-            Path where GPT should write the output file.
-            The file type is determined based on the suffix.
-        snap_userdir : Path
-            Per-job SNAP user directory passed via ``-J-Dsnap.userdir``. Also
-            hosts the JVM's ``java.io.tmpdir``, so that temporary files the
-            process leaves behind are removed with the userdir.
-        process_params : dict[str, str] | None, optional
-            Additional processing parameters passed as ``-P`` flags.
-        timeout : int, default 3600
-            Maximum time in seconds to wait for GPT to finish.
-
-        Returns
-        -------
-        Path
-            Path to the output file written by GPT.
-
-        Raises
-        ------
-        SnapProcessingError
-            If GPT returns a non-zero exit code, times out, or the output
-            file is missing.
-        """
+        """Run SNAP GPT with given parameters."""
         commands = [str(self.config.resolved_gpt_path), str(graph)]
 
         for source_name, source_file in source_files.items():
@@ -549,20 +498,6 @@ class SNAPClient:
         SNAP's GeoTIFF writer does not embed a NODATA tag, so the profile's
         ``nodata`` is stamped onto the local staging file first;
         ``rewrite_tiff`` then carries it into the product.
-
-        Parameters
-        ----------
-        staging_file : Path
-            Uncompressed GeoTIFF written by GPT.
-        product_path : Path | UPath
-            Final product location (local or S3).
-        metadata : RasterMetadata
-            Tags, band descriptions and units to write into the product.
-        normalize_nodata : bool, default False
-            Convert the no-data markers GPT leaves behind into the product's own
-            no-data value; see :func:`_normalize_nodata`. Only pass ``True`` for
-            a graph that ran the band maths, since that is what makes the markers
-            unambiguous.
         """
         profile = self.config.rasterio_profile or {}
         nodata = profile.get("nodata")
@@ -609,13 +544,13 @@ class SNAPClient:
 
         Parameters
         ----------
-        burst : Burst
+        burst
             Burst to process.
-        crs : CRSLike
+        crs
             The coordinate reference system of the geocoded output.
-        config : BackscatterConfig
+        config
             Graph-shape configuration.
-        overwrite : bool, default False
+        overwrite
             Whether to overwrite existing product.
 
         Returns
@@ -691,13 +626,13 @@ class SNAPClient:
 
         Parameters
         ----------
-        pair : BurstPair
+        pair
             Burst pair to process.
-        crs : CRSLike
+        crs
             The coordinate reference system of the geocoded output.
-        config : CoherenceConfig
+        config
             Graph-shape configuration (window size, DEM, …).
-        overwrite : bool, default False
+        overwrite
             Whether to overwrite existing product.
 
         Returns
@@ -771,13 +706,13 @@ class SNAPClient:
 
         Parameters
         ----------
-        pair : BurstPair
+        pair
             Burst pair to process.
-        crs : CRSLike
+        crs
             The coordinate reference system of the geocoded output.
-        config : InterferogramConfig
+        config
             Graph-shape configuration.
-        overwrite : bool, default False
+        overwrite
             Whether to overwrite existing product.
 
         Returns

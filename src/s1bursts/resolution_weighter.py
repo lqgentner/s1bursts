@@ -93,18 +93,18 @@ class ResolutionWeighter:
 
     Parameters
     ----------
-    file_manager : FileManager
+    file_manager
         Used to resolve input file paths and output product paths.
-    n_workers : int, default 8
+    n_workers
         Number of threads for parallel file I/O during product loading.
-    rasterio_profile : dict[str, Any] or None, optional
+    rasterio_profile
         GeoTIFF profile applied to every product, or profiles keyed by product
         type with an optional ``"default"`` entry. Product-specific settings
         override the default. If omitted, uses the library defaults with
         float32 data and NaN no-data.
-    checksum : bool, default False
+    checksum
         Compute a SHA-256 multihash of every written file's exact bytes and
-        record it in :attr:`checksums`, keyed by output path. Costs holding
+        record it in ``checksums``, keyed by output path. Costs holding
         the encoded COG in memory a second time per write.
 
     Attributes
@@ -201,29 +201,29 @@ class ResolutionWeighter:
 
         Parameters
         ----------
-        rtc_products : Collection[RTCProduct]
+        rtc_products
             RTC products to composite.  All products must share the same
             polarization.
-        geobox : MGRSGeoBox
+        geobox
             Target MGRS grid cell.
-        aggregation : {"mean", "median"} or float, default "median"
+        aggregation
             Temporal aggregation applied after weighting.  Pass ``"mean"`` or
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
-        clip_max_resolution : float or None, default None
+        clip_max_resolution
             Upper limit for $W = 1/A$, used to suppress extreme weights in
             radar shadow. ``1.0`` is the weight of a flat reference facet.
-        decibel : bool, default False
+        decibel
             Convert the result from power to decibels after aggregation.
             Non-positive values become NaN.
-        write_qa : bool, default False
+        write_qa
             If ``True``, also write two auxiliary QA products alongside the
             composite: a contributing-observations map (``QA-NUM``) and a
             composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
-        cqm_decibel : bool, default False
+        cqm_decibel
             Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
             linear units. Independent of ``decibel``.
-        overwrite : bool, default False
+        overwrite
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
 
@@ -373,29 +373,29 @@ class ResolutionWeighter:
 
         Parameters
         ----------
-        coh_products : Collection[CoherenceProduct]
+        coh_products
             Coherence products to composite.  All must share the same
             polarization and ``baseline_days``.
-        rtc_products : Collection[RTCProduct]
+        rtc_products
             RTC products providing the local scattering area (band 2) used as
             weights. They must cover the coherence orbit/date combinations.
-        geobox : MGRSGeoBox
+        geobox
             Target MGRS grid cell.
-        aggregation : {"mean", "median"} or float, default "median"
+        aggregation
             Temporal aggregation applied after weighting.  Pass ``"mean"`` or
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
-        clip_max_resolution : float or None, default None
+        clip_max_resolution
             Upper limit for $W = 1/A$, used to suppress extreme weights in
             radar shadow. ``1.0`` is the weight of a flat reference facet.
-        write_qa : bool, default False
+        write_qa
             If ``True``, also write two auxiliary QA products alongside the
             composite: a contributing-observations map (``QA-NUM``) and a
             composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
-        cqm_decibel : bool, default False
+        cqm_decibel
             Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
             linear units.
-        overwrite : bool, default False
+        overwrite
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
 
@@ -539,23 +539,23 @@ class ResolutionWeighter:
 
         Parameters
         ----------
-        rtc_products : Collection[RTCProduct]
+        rtc_products
             RTC products to composite.  Products from both pass directions may
             be mixed; they are split by their ``pass_direction``.
-        geobox : MGRSGeoBox
+        geobox
             Target MGRS grid cell.
-        aggregation : {"mean", "median"} or float, default "median"
+        aggregation
             Temporal aggregation method.  Pass ``"mean"`` or ``"median"`` for
             the corresponding statistic, or a float in ``(0, 1)`` for an
             interpolated quantile at that level.
-        decibel : bool, default False
+        decibel
             If ``True``, convert the aggregated composite from intensity
             (power) to decibels before writing; non-positive intensities
             become NaN.  Aggregation always happens in the linear domain.
-        write_qa : bool, default False
+        write_qa
             If ``True``, also write a contributing-observations QA product
             (``QA-NUM``) per pass direction.
-        overwrite : bool, default False
+        overwrite
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
 
@@ -693,19 +693,19 @@ class ResolutionWeighter:
 
         Parameters
         ----------
-        coh_products : Collection[CoherenceProduct]
+        coh_products
             Coherence products to composite.  All must share the same
             ``baseline_days``.
-        geobox : MGRSGeoBox
+        geobox
             Target MGRS grid cell.
-        aggregation : {"mean", "median"} or float, default "median"
+        aggregation
             Temporal aggregation method.  Pass ``"mean"`` or ``"median"`` for
             the corresponding statistic, or a float in ``(0, 1)`` for an
             interpolated quantile at that level.
-        write_qa : bool, default False
+        write_qa
             If ``True``, also write a contributing-observations QA product
             (``QA-NUM``) per pass direction.
-        overwrite : bool, default False
+        overwrite
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
 
@@ -1110,14 +1110,7 @@ class ResolutionWeighter:
         obs_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
         area_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
     ) -> None:
-        """Verify every observation group has a matching scattering-area group.
-
-        Raises
-        ------
-        ValueError
-            If any ``(rel_orbit_number, date)`` group present in the
-            observations has no corresponding RTC scattering-area group.
-        """
+        """Verify every observation group has a matching scattering-area group."""
         missing = [key for key in obs_groups if key not in area_groups]
         if missing:
             formatted = ", ".join(f"(orbit {orbit}, {date.date()})" for orbit, date in missing)
@@ -1168,7 +1161,7 @@ class ResolutionWeighter:
         """Per-pixel count of observations that carry weight into the composite.
 
         An observation contributes when it is finite and its resolution weight
-        is non-zero, which is the pairing :meth:`_weighted_mean` sums over.  The
+        is non-zero, which is the pairing ``_weighted_mean`` sums over.  The
         CEOS-ARD Contributing Observations Image (SAR PFS v1.3.1, item 2.21).
         """
         contributes = np.isfinite(values) & (weights > 0)
@@ -1215,22 +1208,7 @@ class ResolutionWeighter:
         weights: NDArray[np.floating[Any]],
         aggregation: Literal["mean", "median"] | float,
     ) -> NDArray[np.floating[Any]]:
-        """Dispatch to the aggregation function.
-
-        Parameters
-        ----------
-        values : NDArray[np.floating[Any]]
-            Shape ``(N, H, W)`` observations.
-        weights : NDArray[np.floating[Any]]
-            Shape ``(N, H, W)`` non-negative resolution weights.
-        aggregation : {"mean", "median"} or float
-            Determines which aggregation function is called.
-
-        Returns
-        -------
-        NDArray[np.floating[Any]]
-            Shape ``(H, W)`` composite.
-        """
+        """Dispatch to the aggregation function."""
         cls._check_aggregation(aggregation)
         if aggregation == "mean":
             return cls._weighted_mean(values, weights)
@@ -1323,7 +1301,7 @@ class ResolutionWeighter:
     ) -> NDArray[np.floating[Any]]:
         """Unweighted temporal aggregate over the first (N) axis.
 
-        Equivalent to :meth:`_aggregate_weighted` with uniform weights, so the
+        Equivalent to ``_aggregate_weighted`` with uniform weights, so the
         mean and the interpolated ``median`` / quantile use the same definition
         as the LRW composites.
         """

@@ -21,11 +21,11 @@ class OkResult[T]:
 
     Parameters
     ----------
-    source : Any
+    source
         The source burst or burst pair.
-    result : T
+    result
         The resulting product.
-    skipped : bool
+    skipped
         Whether the operation was skipped (product already exists).
     """
 
@@ -40,9 +40,9 @@ class ErrorResult:
 
     Parameters
     ----------
-    source : Any
+    source
         The source burst or burst pair.
-    error : Exception
+    error
         The exception that caused the failure.
     """
 
@@ -59,19 +59,19 @@ class OperationSummary[T]:
 
     Parameters
     ----------
-    n_total : int
+    n_total
         Total number of operations attempted.
-    n_processed : int
+    n_processed
         Number of successfully processed items.
-    n_skipped : int
+    n_skipped
         Number of skipped operations (already existed).
-    n_failed : int
+    n_failed
         Number of failed operations.
-    products : list[T]
+    products
         The products successfully processed or already existed.
-    failed_items : list[ErrorResult]
+    failed_items
         List of operation results for failed items.
-    processing_time : float
+    processing_time
         Total operation time in seconds.
     """
 
@@ -109,11 +109,11 @@ class OperationSummary[T]:
 
         Parameters
         ----------
-        results : Collection[OkResult[T] | ErrorResult]
+        results
             Results from individual operations.
-        start_time : float
+        start_time
             Unix timestamp at start of batch.
-        end_time : float
+        end_time
             Unix timestamp at end of batch.
 
         Returns
@@ -136,7 +136,7 @@ class OperationSummary[T]:
 
         Parameters
         ----------
-        console : Console, optional
+        console
             Rich console for output. Creates new one if not provided.
         """
         if console is None:
