@@ -32,6 +32,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - `compose_*` rounded the read window to whole pixels, silently shifting an
   input whose pixel corners do not coincide with the target grid's; such an
   input is now refused like one in another CRS or at another pixel size.
+- The HyP3 validation campaign no longer fails under Python 3.14 on an
+  unclosed file left behind by `hyp3_sdk`'s download helper.
 
 ### Changed
 
