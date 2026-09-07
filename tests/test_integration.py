@@ -324,7 +324,7 @@ class TestSnapProcessing:
         product_path = file_manager.get_product_path(summary.products[0])
         assert product_path.exists()
         with rasterio.open(product_path) as src:
-            assert src.count == 2  # Gamma0 + simulatedImage
+            assert src.count == 2  # gamma0 + scattering_area
             assert src.crs.to_epsg() == 32632
             # SNAP's GeoTIFF writer drops the NODATA tag; _finalize_product re-stamps it
             assert src.nodata is not None
@@ -334,7 +334,7 @@ class TestSnapProcessing:
 
         valid = np.isfinite(bands)
         assert valid.mean() > 0.1
-        # Gamma0 is a power ratio and simulatedImage an area: both positive where
+        # gamma0 is a power ratio and scattering_area an area: both positive where
         # defined. This is also what catches a no-data marker that survived
         # `_normalize_nodata` — the sentinel is finite, so nothing else would.
         assert (bands[valid] > 0).all()
@@ -405,7 +405,7 @@ class TestSnapProcessing:
         assert product_path.exists()
 
         with rasterio.open(product_path) as src:
-            # Beta0 alone: no Terrain-Flattening, so no simulatedImage.
+            # beta0 alone: no Terrain-Flattening, so no scattering_area.
             assert src.count == len(config.output_bands) == 1
             assert src.descriptions == tuple(config.output_bands)
             assert src.crs.to_epsg() == 32632
@@ -526,23 +526,26 @@ class TestSnapProcessing:
             assert src.transform.c % spacing == pytest.approx(0.0)
             assert src.transform.f % spacing == pytest.approx(0.0)
 
-            ifg_i, ifg_q, intensity_1, intensity_2 = src.read()
+            ifg_real, ifg_imag, intensity_primary, intensity_secondary = src.read()
 
-        valid = np.isfinite(ifg_i)
+        valid = np.isfinite(ifg_real)
         # A geocoded burst is a parallelogram in its bounding box, so a large
         # share of the frame is legitimately NaN — but most of it is not.
         assert valid.mean() > 0.1
         # Real and imaginary parts are the two halves of one complex sample and
         # are therefore valid over exactly the same pixels.
-        assert np.array_equal(valid, np.isfinite(ifg_q))
+        assert np.array_equal(valid, np.isfinite(ifg_imag))
         # Interferometric phase, not a magnitude image: both components take
         # either sign.
-        for band, name in ((ifg_i, "ifg_i"), (ifg_q, "ifg_q")):
+        for band, name in ((ifg_real, "ifg_real"), (ifg_imag, "ifg_imag")):
             assert (band[valid] > 0).any(), f"{name} has no positive samples"
             assert (band[valid] < 0).any(), f"{name} has no negative samples"
         # Both intensities are powers of the same coregistered samples, so they
         # are nonnegative and valid over exactly the pixels the interferogram is.
-        for band, name in ((intensity_1, "intensity_1"), (intensity_2, "intensity_2")):
+        for band, name in (
+            (intensity_primary, "intensity_primary"),
+            (intensity_secondary, "intensity_secondary"),
+        ):
             assert np.array_equal(np.isfinite(band), valid), f"{name} has a different extent"
             assert (band[valid] >= 0).all(), f"{name} has negative samples"
 

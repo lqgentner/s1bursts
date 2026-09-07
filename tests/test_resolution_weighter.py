@@ -91,20 +91,20 @@ class TestCalcWeights:
         np.testing.assert_allclose(result, [[[0.5]]])
 
     def test_zero_area_gives_zero_weight(self) -> None:
-        """contributing_area == 0 must produce weight 0 (not inf)."""
+        """scattering_area == 0 must produce weight 0 (not inf)."""
         sim = np.array([[[0.0]]], dtype=np.float32)
         result = ResolutionWeighter._calc_weights(sim, clip_max_resolution=None)
         np.testing.assert_allclose(result, [[[0.0]]])
 
     def test_negative_area_gives_zero_weight(self) -> None:
-        """contributing_area < 0 must produce weight 0."""
+        """scattering_area < 0 must produce weight 0."""
         sim = np.array([[[-1.0]]], dtype=np.float32)
         result = ResolutionWeighter._calc_weights(sim, clip_max_resolution=None)
         np.testing.assert_allclose(result, [[[0.0]]])
 
     @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
     def test_nonfinite_area_gives_zero_weight(self, bad: float) -> None:
-        """Non-finite contributing_area values must produce weight 0."""
+        """Non-finite scattering_area values must produce weight 0."""
         sim = np.array([[[bad]]], dtype=np.float64)
         result = ResolutionWeighter._calc_weights(sim, clip_max_resolution=None)
         np.testing.assert_allclose(result, [[[0.0]]])
@@ -627,12 +627,12 @@ class TestAggregateWeighted:
 
 
 # ---------------------------------------------------------------------------
-# _check_sim_coverage
+# _check_area_coverage
 # ---------------------------------------------------------------------------
 
 
 class TestCheckSimCoverage:
-    """Tests for ``ResolutionWeighter._check_sim_coverage``."""
+    """Tests for ``ResolutionWeighter._check_area_coverage``."""
 
     def test_full_coverage_passes(self) -> None:
         """No error is raised when every observation group has a sim group."""
@@ -642,7 +642,7 @@ class TestCheckSimCoverage:
         obs = {key_a: arr, key_b: arr}
         sim = {key_a: arr, key_b: arr}
         # Must not raise.
-        ResolutionWeighter._check_sim_coverage(obs, sim)
+        ResolutionWeighter._check_area_coverage(obs, sim)
 
     def test_missing_group_raises(self) -> None:
         """A missing sim group raises ValueError naming the orbit/date."""
@@ -652,7 +652,7 @@ class TestCheckSimCoverage:
         obs = {key_a: arr, key_b: arr}
         sim = {key_a: arr}  # key_b missing
         with pytest.raises(ValueError, match=r"orbit 10, 2024-01-13"):
-            ResolutionWeighter._check_sim_coverage(obs, sim)
+            ResolutionWeighter._check_area_coverage(obs, sim)
 
 
 # ---------------------------------------------------------------------------
@@ -700,7 +700,7 @@ class TestCountContributions:
         np.testing.assert_array_equal(result, [[2, 1]])
 
     def test_zero_weight_observation_is_not_counted(self) -> None:
-        """A finite value whose contributing area was invalid must not count."""
+        """A finite value whose scattering area was invalid must not count."""
         values = np.array([[[1.0]], [[2.0]]])
         weights = np.array([[[0.0]], [[1.0]]])
         result = ResolutionWeighter._count_contributions(values, weights)
@@ -743,10 +743,10 @@ class TestCalcCqm:
         areas=[2, 4, 10], weights=1/area=[0.5, 0.25, 0.1].  With unclipped
         weights this reduces to ``sum(w) / N`` = (0.5+0.25+0.1)/3.
         """
-        contributing_area = np.array([[[2.0]], [[4.0]], [[10.0]]])
-        weights = 1.0 / contributing_area
+        scattering_area = np.array([[[2.0]], [[4.0]], [[10.0]]])
+        weights = 1.0 / scattering_area
         values = np.ones((3, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        result = ResolutionWeighter._calc_cqm(values, scattering_area, weights, "mean")
         np.testing.assert_allclose(result, [[(0.5 + 0.25 + 0.1) / 3.0]], rtol=1e-6)
 
     def test_clipped_weights_change_cqm(self) -> None:
@@ -756,10 +756,10 @@ class TestCalcCqm:
         [2, 0.1] (sum 2.1).  CQM = 1 / Σ(wgt·A) with normalized weights:
         Σ(w·A) = (2·0.25 + 0.1·10) / 2.1 = 1.5 / 2.1, so CQM = 2.1 / 1.5 = 1.4.
         """
-        contributing_area = np.array([[[0.25]], [[10.0]]])
+        scattering_area = np.array([[[0.25]], [[10.0]]])
         weights = np.array([[[2.0]], [[0.1]]])  # 1/area=[4, 0.1] clipped at 2
         values = np.ones((2, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        result = ResolutionWeighter._calc_cqm(values, scattering_area, weights, "mean")
         np.testing.assert_allclose(result, [[1.4]], rtol=1e-6)
 
     def test_median_aggregates_the_areas_with_the_same_operator(self) -> None:
@@ -768,28 +768,28 @@ class TestCalcCqm:
         areas=[1, 2, 10], weights=1/area=[1, 0.5, 0.1].  The weighted median
         area interpolates to 1.4, so CQM = 1/1.4; the mean would give 1.6/3.
         """
-        contributing_area = np.array([[[1.0]], [[2.0]], [[10.0]]])
-        weights = 1.0 / contributing_area
+        scattering_area = np.array([[[1.0]], [[2.0]], [[10.0]]])
+        weights = 1.0 / scattering_area
         values = np.ones((3, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "median")
+        result = ResolutionWeighter._calc_cqm(values, scattering_area, weights, "median")
         np.testing.assert_allclose(result, [[1.0 / 1.4]], rtol=1e-6)
 
     def test_quantile_inverts_the_aggregated_area(self) -> None:
         """A float aggregation takes that weighted quantile of the areas."""
-        contributing_area = np.array([[[1.0]], [[2.0]], [[10.0]]])
-        weights = 1.0 / contributing_area
+        scattering_area = np.array([[[1.0]], [[2.0]], [[10.0]]])
+        weights = 1.0 / scattering_area
         values = np.ones((3, 1, 1))
-        expected = 1.0 / ResolutionWeighter._weighted_quantile(contributing_area, weights, 0.75)
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, 0.75)
+        expected = 1.0 / ResolutionWeighter._weighted_quantile(scattering_area, weights, 0.75)
+        result = ResolutionWeighter._calc_cqm(values, scattering_area, weights, 0.75)
         np.testing.assert_allclose(result, expected, rtol=1e-6)
 
     def test_aggregation_changes_the_result(self) -> None:
         """The three aggregations do not collapse onto one value."""
-        contributing_area = np.array([[[1.0]], [[2.0]], [[10.0]]])
-        weights = 1.0 / contributing_area
+        scattering_area = np.array([[[1.0]], [[2.0]], [[10.0]]])
+        weights = 1.0 / scattering_area
         values = np.ones((3, 1, 1))
         results = [
-            float(ResolutionWeighter._calc_cqm(values, contributing_area, weights, agg)[0, 0])
+            float(ResolutionWeighter._calc_cqm(values, scattering_area, weights, agg)[0, 0])
             for agg in ("mean", "median", 0.75)
         ]
         assert len(set(results)) == 3
@@ -800,31 +800,31 @@ class TestCalcCqm:
         Previously its area entered the CQM even though the composite and the
         QA-NUM count both excluded it.
         """
-        contributing_area = np.array([[[1.0]], [[4.0]]])
-        weights = 1.0 / contributing_area
+        scattering_area = np.array([[[1.0]], [[4.0]]])
+        weights = 1.0 / scattering_area
         values = np.array([[[0.8]], [[np.nan]]])
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        result = ResolutionWeighter._calc_cqm(values, scattering_area, weights, "mean")
         np.testing.assert_allclose(result, [[1.0]], rtol=1e-6)
 
     def test_exclusion_agrees_with_the_contributing_observation_count(self) -> None:
         """CQM and QA-NUM describe the same set of observations."""
-        contributing_area = np.array([[[1.0]], [[4.0]]])
-        weights = 1.0 / contributing_area
+        scattering_area = np.array([[[1.0]], [[4.0]]])
+        weights = 1.0 / scattering_area
         values = np.array([[[0.8]], [[np.nan]]])
         counted = ResolutionWeighter._count_contributions(values, weights)
         only_contributor = ResolutionWeighter._calc_cqm(
-            values[:1], contributing_area[:1], weights[:1], "mean"
+            values[:1], scattering_area[:1], weights[:1], "mean"
         )
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        result = ResolutionWeighter._calc_cqm(values, scattering_area, weights, "mean")
         assert counted[0, 0] == 1
         np.testing.assert_allclose(result, only_contributor, rtol=1e-6)
 
     def test_zero_total_weight_is_nan(self) -> None:
         """A pixel whose weights are all zero yields NaN."""
-        contributing_area = np.array([[[2.0]], [[4.0]]])
+        scattering_area = np.array([[[2.0]], [[4.0]]])
         weights = np.zeros((2, 1, 1))
         values = np.ones((2, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        result = ResolutionWeighter._calc_cqm(values, scattering_area, weights, "mean")
         assert np.isnan(result[0, 0])
 
     def test_all_nan_observations_is_nan(self) -> None:
@@ -833,18 +833,18 @@ class TestCalcCqm:
         This keeps CQM's invalid footprint aligned with the composite, which is
         also NaN where every observation is non-finite.
         """
-        contributing_area = np.array([[[2.0]], [[4.0]]])
-        weights = 1.0 / contributing_area  # valid geometry, nonzero weight
+        scattering_area = np.array([[[2.0]], [[4.0]]])
+        weights = 1.0 / scattering_area  # valid geometry, nonzero weight
         values = np.array([[[np.nan]], [[np.nan]]])  # but no finite observation
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        result = ResolutionWeighter._calc_cqm(values, scattering_area, weights, "mean")
         assert np.isnan(result[0, 0])
 
     def test_returns_float32(self) -> None:
         """CQM is returned as float32."""
-        contributing_area = np.array([[[2.0]]])
+        scattering_area = np.array([[[2.0]]])
         weights = np.array([[[0.5]]])
         values = np.ones((1, 1, 1))
-        result = ResolutionWeighter._calc_cqm(values, contributing_area, weights, "mean")
+        result = ResolutionWeighter._calc_cqm(values, scattering_area, weights, "mean")
         assert result.dtype == np.float32
 
 
@@ -1184,13 +1184,13 @@ def _full(value: float) -> NDArray[np.float32]:
 
 
 class TestComposeRtcLrw:
-    def test_weights_by_simulated_area_and_writes_a_readable_composite(
+    def test_weights_by_scattering_area_and_writes_a_readable_composite(
         self,
         scene: _Scene,
     ) -> None:
-        """The scene with the smaller simulated area must dominate the result.
+        """The scene with the smaller scattering area must dominate the result.
 
-        Small `simulatedImage` area means fine local resolution, so Small et al.'s
+        A small scattering area means fine local resolution, so Small et al.'s
         weighting gives it the larger weight.
         """
         coarse, fine = _rtc("2022-08-13"), _rtc("2022-08-25")
@@ -1252,7 +1252,7 @@ class TestComposeRtcLrw:
         assert counts[1, 1] == 2
 
     def test_unweighted_pixels_do_not_count_in_the_qa_layer(self, scene: _Scene) -> None:
-        """A pixel with a value but no contributing area carries no weight.
+        """A pixel with a value but no scattering area carries no weight.
 
         SNAP masks the intensity and the area band independently, so a finite
         intensity can meet a missing area.  Such a pixel contributes nothing to
@@ -1345,7 +1345,7 @@ class TestComposeCohLrw:
         coh = _coh("2022-08-01", "2022-08-13")
         _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
 
-        with pytest.raises(ValueError, match="No matching RTC contributing area"):
+        with pytest.raises(ValueError, match="No matching RTC scattering area"):
             scene.weighter.compose_coherence_lrw([coh], [], scene.geobox)
 
     def test_writes_the_requested_qa_layers(self, scene: _Scene) -> None:

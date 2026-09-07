@@ -70,8 +70,8 @@ SNAP is the reference implementation for the processing graphs, so its output ca
 
 | Output | Reference | Producer |
 | --- | --- | --- |
-| RTC (`Gamma0`, `simulatedImage`) | [OPERA RTC-S1](https://hyp3-docs.asf.alaska.edu/guides/opera_rtc_product_guide/) | NASA/JPL, ISCE3 |
-| Coherence (`coh`) | [HyP3 burst InSAR](https://hyp3-docs.asf.alaska.edu/guides/burst_insar_product_guide) | ASF, ISCE2 topsApp |
+| RTC (`gamma0`, `scattering_area`) | [OPERA RTC-S1](https://hyp3-docs.asf.alaska.edu/guides/opera_rtc_product_guide/) | NASA/JPL, ISCE3 |
+| Coherence (`coherence`) | [HyP3 burst InSAR](https://hyp3-docs.asf.alaska.edu/guides/burst_insar_product_guide) | ASF, ISCE2 topsApp |
 
 Both are burst-level on the same ESA burst IDs and use the same Copernicus GLO-30 DEM, so the processing chain is the substantial difference.
 

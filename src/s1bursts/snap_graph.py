@@ -487,7 +487,7 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
     if flatten_terrain:
         return [
             {
-                "name": "Gamma0",
+                "name": "gamma0",
                 "type": "float32",
                 "expression": (
                     f"Gamma0_${{swath}}_${{polarization}} > 0 ? "
@@ -496,7 +496,7 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
                 "noDataValue": _SENTINEL_EXPR,
             },
             {
-                "name": "sim",
+                "name": "scattering_area",
                 "type": "float32",
                 "expression": f"simulatedImage > 0 ? simulatedImage : {_SENTINEL_EXPR}",
                 "noDataValue": _SENTINEL_EXPR,
@@ -504,7 +504,7 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
         ]
     return [
         {
-            "name": "Beta0",
+            "name": "beta0",
             "type": "float32",
             "expression": (
                 f"Beta0_${{swath}}_${{polarization}} > 0 ? "
@@ -518,7 +518,7 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
 def _replace_zeros_target_bands_coherence() -> list[dict[str, Any]]:
     return [
         {
-            "name": "coh",
+            "name": "coherence",
             "type": "float32",
             "expression": (
                 f"coh_${{swath}}_${{polarization}}_${{date1}}_${{date2}} > 0 ? "
@@ -647,7 +647,7 @@ def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
     cond = "(int1 != 0) and (int2 != 0)"
     return [
         {
-            "name": "i_ifg",
+            "name": "ifg_real",
             "type": "float32",
             "expression": (
                 f"{cond} ? i_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : "
@@ -657,7 +657,7 @@ def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
             "noDataValue": _SENTINEL_EXPR,
         },
         {
-            "name": "q_ifg",
+            "name": "ifg_imag",
             "type": "float32",
             "expression": (
                 f"{cond} ? q_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : "
@@ -667,14 +667,14 @@ def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
             "noDataValue": _SENTINEL_EXPR,
         },
         {
-            "name": "intensity1",
+            "name": "intensity_primary",
             "type": "float32",
             "expression": f"{cond} ? int1 : {_SENTINEL_EXPR}",
             "unit": "intensity",
             "noDataValue": _SENTINEL_EXPR,
         },
         {
-            "name": "intensity2",
+            "name": "intensity_secondary",
             "type": "float32",
             "expression": f"{cond} ? int2 : {_SENTINEL_EXPR}",
             "unit": "intensity",
@@ -877,7 +877,7 @@ def build_interferogram_graph(
         grid_spacing=cfg.grid_spacing,
         align_to_standard_grid=cfg.align_to_standard_grid,
         standard_grid_origin=cfg.standard_grid_origin,
-        # i_ifg / q_ifg are tagged real / imaginary, so SNAP needs to keep
+        # ifg_real / ifg_imag are tagged real / imaginary, so SNAP needs to keep
         # them paired through projection.
         output_complex=True,
     )
@@ -1064,8 +1064,8 @@ class BackscatterConfig(GeocodingConfig):
     def output_bands(self) -> list[str]:
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
         if self.flatten_terrain:
-            return ["Gamma0", "simulatedImage"]
-        return ["Beta0"]
+            return ["gamma0", "scattering_area"]
+        return ["beta0"]
 
     @override
     def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
@@ -1128,7 +1128,7 @@ class CoherenceConfig(GeocodingConfig):
     @property
     def output_bands(self) -> list[str]:
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
-        return ["coh"]
+        return ["coherence"]
 
     @override
     def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
@@ -1169,7 +1169,7 @@ class InterferogramConfig(GeocodingConfig):
     @property
     def output_bands(self) -> list[str]:
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
-        return ["ifg_i", "ifg_q", "intensity_1", "intensity_2"]
+        return ["ifg_real", "ifg_imag", "intensity_primary", "intensity_secondary"]
 
     @override
     def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:

@@ -80,8 +80,17 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - **Breaking:** `compensate_dem_for_snap()` is renamed to
   `prepare_dem_for_snap()` to reflect that it can now apply both the pixel
   shift and vertical datum conversion of an external DEM for SNAP.
-- The area SNAP writes as `simulatedImage` is now called the *local
-  contributing area*, following CEOS-ARD terminology.
+- **Breaking:** per-burst products name their bands in snake case, and the
+  GeoTIFF band description, the graph's band and the `LAYER_NAME` band tag now
+  agree: RTC `gamma0` and `scattering_area` (was `Gamma0`, `simulatedImage`),
+  GTC `beta0` (was `Beta0`), coherence `coherence` (was `coh`), interferogram
+  `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` (was
+  `ifg_i`, `ifg_q`, `intensity_1`, `intensity_2`). Code reading bands by
+  description must use the new names.
+- The area SNAP writes as `simulatedImage` is called the *local scattering
+  area* throughout, the CEOS-ARD term. Small et al. call it the local
+  contributing area and OPERA the area normalization factor; all three are the
+  same quantity.
 - Requires `freezebase[s3]>=0.7,<0.8` for product metadata, composite codec
   profiles, `write_cog(checksum=...)`, and context handling of burst downloads.
 - **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It

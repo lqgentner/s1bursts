@@ -415,7 +415,7 @@ def compare_scene(
     _check_projection(coherence, scene)
 
     ours_path = process(scene, work)
-    ours, theirs, _, alignment = read_aligned(ours_path, coherence, "coh")
+    ours, theirs, _, alignment = read_aligned(ours_path, coherence, "coherence")
     valid = valid_mask(ours, theirs)
 
     baseline = date.fromisoformat(scene.secondary_date) - date.fromisoformat(scene.reference_date)

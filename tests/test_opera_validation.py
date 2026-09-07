@@ -184,7 +184,7 @@ class TestGeometryContract:
         scene: Scene,
         campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
-        """Compare SNAP's ``simulatedImage`` with OPERA's ANF."""
+        """Compare the local scattering area (SNAP's ``simulatedImage``) with OPERA's ANF."""
         stats = campaign(scene)["anf"]["layover_shadow_excluded"]
 
         assert abs(stats["median_ratio"] - 1.0) < MAX_ANF_RATIO_DEVIATION, (

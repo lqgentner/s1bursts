@@ -524,18 +524,18 @@ class TestQaLayers:
 class TestBurstProducts:
     def test_rtc_names_the_scattering_area_band(self) -> None:
         metadata = product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig())
-        assert metadata.band_names == ["Gamma0", "simulatedImage"]
+        assert metadata.band_names == ["gamma0", "scattering_area"]
         assert metadata.units == ["linear power", ""]
-        assert metadata.band_tags[1]["LAYER_NAME"] == "scatteringArea"
+        assert metadata.band_tags[1]["LAYER_NAME"] == "scattering_area"
 
     def test_gtc_has_a_single_band(self) -> None:
         metadata = product_tags.backscatter_metadata(
             _gtc_burst(),
             BackscatterConfig(flatten_terrain=False),
         )
-        assert metadata.band_names == ["Beta0"]
+        assert metadata.band_names == ["beta0"]
         assert metadata.units == ["linear power"]
-        assert metadata.band_tags == []
+        assert metadata.band_tags == [{"LAYER_NAME": "beta0"}]
 
     def test_multilook_is_recorded_when_applied(self) -> None:
         tags = product_tags.backscatter_metadata(
@@ -634,8 +634,21 @@ class TestBurstProducts:
 
     def test_interferogram_marks_only_the_intensities_as_power(self) -> None:
         metadata = product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig())
-        assert metadata.band_names == ["ifg_i", "ifg_q", "intensity_1", "intensity_2"]
+        names = ["ifg_real", "ifg_imag", "intensity_primary", "intensity_secondary"]
+        assert metadata.band_names == names
         assert metadata.units == ["", "", "linear power", "linear power"]
+        assert [tags["LAYER_NAME"] for tags in metadata.band_tags] == names
+
+    def test_every_per_burst_band_carries_its_name_as_layer_name(self) -> None:
+        """One name per band: the description and the LAYER_NAME tag agree."""
+        for metadata in (
+            product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()),
+            product_tags.backscatter_metadata(
+                _gtc_burst(), BackscatterConfig(flatten_terrain=False)
+            ),
+            product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()),
+        ):
+            assert [tags["LAYER_NAME"] for tags in metadata.band_tags] == metadata.band_names
 
     def test_interferogram_records_the_phase_removals(self) -> None:
         tags = product_tags.interferogram_metadata(

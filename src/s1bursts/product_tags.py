@@ -367,7 +367,7 @@ def rtc_lrw_metadata(
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "gamma0",
         "LAYER_DESCRIPTION": (
-            "Gamma-0 backscatter composite, weighted by the inverse local contributing area."
+            "Gamma-0 backscatter composite, weighted by the inverse local scattering area."
         ),
         **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
     }
@@ -421,7 +421,7 @@ def coh_lrw_metadata(
         "MEASUREMENT_TYPE": "Coherence",
         "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
         # Small et al. define LRW for backscatter power; weighting coherence by
-        # local contributing area is this package's extension, so say so rather
+        # local scattering area is this package's extension, so say so rather
         # than let the reference imply a method the paper does not cover.
         **(
             _lrw(aggregation, clip_max_resolution)
@@ -436,7 +436,7 @@ def coh_lrw_metadata(
         "LAYER_NAME": "coherence",
         "LAYER_DESCRIPTION": (
             "Repeat-pass interferometric coherence composite, "
-            "weighted by the inverse local contributing area."
+            "weighted by the inverse local scattering area."
         ),
         **dict(statistics or {}),
         **_inherited(
@@ -714,11 +714,12 @@ def backscatter_metadata(
             tags=tags,
             band_names=list(config.output_bands),
             units=[_LINEAR_POWER_UNIT],
+            band_tags=[{"LAYER_NAME": "beta0"}],
         )
 
-    # Band 2 is the local contributing area terrain flattening divides by, the
-    # layer CEOS-ARD calls scatteringArea (item 2.3) and OPERA calls
-    # rtc_anf_gamma0_to_beta0.
+    # Band 2 is the local scattering area terrain flattening divides by: CEOS-ARD
+    # item 2.3, Small et al.'s local contributing area, OPERA's area
+    # normalization factor.
     return RasterMetadata(
         tags=tags,
         band_names=list(config.output_bands),
@@ -726,10 +727,8 @@ def backscatter_metadata(
         band_tags=[
             {"LAYER_NAME": "gamma0"},
             {
-                "LAYER_NAME": "scatteringArea",
-                "LAYER_DESCRIPTION": (
-                    "Local contributing area relative to a flat reference facet."
-                ),
+                "LAYER_NAME": "scattering_area",
+                "LAYER_DESCRIPTION": ("Local scattering area relative to a flat reference facet."),
             },
         ],
     )
@@ -777,7 +776,12 @@ def coherence_metadata(
         "COHERENCE_WINDOW_AZIMUTH": str(win_az),
         "COHERENCE_WEIGHTING_SHAPE": _COHERENCE_WEIGHTING_SHAPE,
     }
-    return RasterMetadata(tags=tags, band_names=list(config.output_bands), units=[""])
+    return RasterMetadata(
+        tags=tags,
+        band_names=list(config.output_bands),
+        units=[""],
+        band_tags=[{"LAYER_NAME": "coherence"}],
+    )
 
 
 def interferogram_metadata(
@@ -820,6 +824,7 @@ def interferogram_metadata(
         tags=tags,
         band_names=list(config.output_bands),
         units=["", "", _LINEAR_POWER_UNIT, _LINEAR_POWER_UNIT],
+        band_tags=[{"LAYER_NAME": name} for name in config.output_bands],
     )
 
 

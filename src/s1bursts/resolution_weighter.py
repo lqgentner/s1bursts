@@ -5,10 +5,12 @@ of [Small et al. (2022)](https://doi.org/10.1109/TGRS.2021.3055562), which the C
 Product Family Specification for Synthetic Aperture Radar adopts as its
 Composite Backscatter (CB) product.
 
-The weights come from the local contributing area ``A``, the area terrain
+The weights come from the local scattering area ``A``, the area terrain
 flattening divides beta nought by, so ``A = 1`` is a flat reference facet.
-SNAP names the band ``simulatedImage``, CEOS-ARD names the layer
-``scatteringArea``, and OPERA names it ``rtc_anf_gamma0_to_beta0``.
+That is the CEOS-ARD term; the same quantity is the local contributing area
+of Small et al., the area normalization factor (ANF) of OPERA, and the
+``simulatedImage`` band SNAP's Terrain-Flattening writes. This package stores
+it as the ``scattering_area`` band of every RTC product.
 """
 
 from __future__ import annotations
@@ -193,7 +195,7 @@ class ResolutionWeighter:
     ) -> RTCLRWComposite | RTCLRWResult:
         r"""Compute a locally resolution weighted (LRW) RTC intensity composite.
 
-        Band 1 supplies intensity and band 2 the local contributing area $A$.
+        Band 1 supplies intensity and band 2 the local scattering area $A$.
         Observations are weighted by normalized $1/A$ ([1] eq. 3-4, [2]
         eq. A5.1-A5.3) after mosaicking each orbit and acquisition date.
 
@@ -271,13 +273,13 @@ class ResolutionWeighter:
             return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
 
         rtc_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=1))
-        sim_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
+        area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
 
-        self._check_sim_coverage(rtc_groups, sim_groups)
+        self._check_area_coverage(rtc_groups, area_groups)
         rtc_obs = np.stack(list(rtc_groups.values()))  # (N, H, W)
-        sim_obs = np.stack([sim_groups[key] for key in rtc_groups])  # (N, H, W)
+        area_obs = np.stack([area_groups[key] for key in rtc_groups])  # (N, H, W)
 
-        weights = self._calc_weights(sim_obs, clip_max_resolution)
+        weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(rtc_obs, weights, aggregation)
         if decibel:
             composite = self._to_decibel(composite)
@@ -300,7 +302,7 @@ class ResolutionWeighter:
         if qa:
             self._write_lrw_qa(
                 rtc_obs,
-                sim_obs,
+                area_obs,
                 weights,
                 qa,
                 geobox,
@@ -375,7 +377,7 @@ class ResolutionWeighter:
             Coherence products to composite.  All must share the same
             polarization and ``baseline_days``.
         rtc_products : Collection[RTCProduct]
-            RTC products providing the local contributing area (band 2) used as
+            RTC products providing the local scattering area (band 2) used as
             weights. They must cover the coherence orbit/date combinations.
         geobox : MGRSGeoBox
             Target MGRS grid cell.
@@ -445,13 +447,13 @@ class ResolutionWeighter:
             return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
 
         coh_groups = self._stitch_by_orbit_date(self._load_band(coh_products, geobox, band=1))
-        sim_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
+        area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
 
-        self._check_sim_coverage(coh_groups, sim_groups)
+        self._check_area_coverage(coh_groups, area_groups)
         coh_obs = np.stack(list(coh_groups.values()))  # (N, H, W)
-        sim_obs = np.stack([sim_groups[key] for key in coh_groups])  # (N, H, W)
+        area_obs = np.stack([area_groups[key] for key in coh_groups])  # (N, H, W)
 
-        weights = self._calc_weights(sim_obs, clip_max_resolution)
+        weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(coh_obs, weights, aggregation)
         source_tags = self._input_tags(coh_products, additional_dem_products=rtc_products)
         n_observations = len(coh_obs)
@@ -472,7 +474,7 @@ class ResolutionWeighter:
         if qa:
             self._write_lrw_qa(
                 coh_obs,
-                sim_obs,
+                area_obs,
                 weights,
                 qa,
                 geobox,
@@ -1002,7 +1004,7 @@ class ResolutionWeighter:
     def _write_lrw_qa(
         self,
         values: NDArray[np.floating[Any]],
-        contributing_area: NDArray[np.floating[Any]],
+        scattering_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
         qa: Mapping[QaMetric, LRWQAProduct],
         geobox: MGRSGeoBox,
@@ -1030,7 +1032,7 @@ class ResolutionWeighter:
             nodata=0,
             overwrite=overwrite,
         )
-        cqm = self._calc_cqm(values, contributing_area, weights, aggregation)
+        cqm = self._calc_cqm(values, scattering_area, weights, aggregation)
         self._save(
             self._to_decibel(cqm) if cqm_decibel else cqm,
             qa[QaMetric.CQM],
@@ -1101,43 +1103,43 @@ class ResolutionWeighter:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _check_sim_coverage(
+    def _check_area_coverage(
         obs_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
-        sim_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
+        area_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
     ) -> None:
-        """Verify every observation group has a matching simulated-area group.
+        """Verify every observation group has a matching scattering-area group.
 
         Raises
         ------
         ValueError
             If any ``(rel_orbit_number, date)`` group present in the
-            observations has no corresponding RTC simulated-area group.
+            observations has no corresponding RTC scattering-area group.
         """
-        missing = [key for key in obs_groups if key not in sim_groups]
+        missing = [key for key in obs_groups if key not in area_groups]
         if missing:
             formatted = ", ".join(f"(orbit {orbit}, {date.date()})" for orbit, date in missing)
-            msg = f"No matching RTC contributing area for orbit/date group(s): {formatted}"
+            msg = f"No matching RTC scattering area for orbit/date group(s): {formatted}"
             raise ValueError(msg)
 
     @staticmethod
     def _calc_weights(
-        contributing_area: NDArray[np.floating[Any]],
+        scattering_area: NDArray[np.floating[Any]],
         clip_max_resolution: float | None,
     ) -> NDArray[np.floating[Any]]:
-        """Compute resolution weights from the local contributing area.
+        """Compute resolution weights from the local scattering area.
 
         The local area is inversely proportional to the local resolution, so
         the unnormalized resolution weight is ``w = 1 / A`` (Small et al. 2022,
         eq. 3-4; CEOS-ARD SAR v1.3.1, eq. A5.1).  Normalization to sum one
         (eq. A5.2) happens in the aggregation, which needs the clipped weights.
 
-        Invalid pixels (``contributing_area <= 0`` or non-finite) receive weight
+        Invalid pixels (``scattering_area <= 0`` or non-finite) receive weight
         zero.  An optional upper clip on ``1/A`` suppresses extreme weights in
         shadow areas.
         """
-        is_valid = (contributing_area > 0) & np.isfinite(contributing_area)
+        is_valid = (scattering_area > 0) & np.isfinite(scattering_area)
         with np.errstate(divide="ignore", invalid="ignore"):
-            weights = np.where(is_valid, 1.0 / contributing_area, 0.0)
+            weights = np.where(is_valid, 1.0 / scattering_area, 0.0)
         if clip_max_resolution is not None:
             weights = weights.clip(max=clip_max_resolution)
         return weights
@@ -1173,13 +1175,13 @@ class ResolutionWeighter:
     def _calc_cqm(
         cls,
         values: NDArray[np.floating[Any]],
-        contributing_area: NDArray[np.floating[Any]],
+        scattering_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
         aggregation: Literal["mean", "median"] | float,
     ) -> NDArray[np.float32]:
         """Composite quality map (CQM) over the first (N) axis.
 
-        The reciprocal of the local contributing area ``Aᵢ`` combined under the
+        The reciprocal of the local scattering area ``Aᵢ`` combined under the
         same weights and the same aggregation as the composite itself, so the
         map describes the composite that was actually written.  Under ``mean``
         this is ``1 / Σ(Wᵢ · Aᵢ)`` with ``Wᵢ`` normalized to sum to one, the
@@ -1193,7 +1195,7 @@ class ResolutionWeighter:
         """
         contributing = np.where(np.isfinite(values), weights, 0.0)
         with np.errstate(divide="ignore", invalid="ignore"):
-            aggregated_area = cls._aggregate_weighted(contributing_area, contributing, aggregation)
+            aggregated_area = cls._aggregate_weighted(scattering_area, contributing, aggregation)
             cqm = (1.0 / aggregated_area).astype(np.float32)
         invalid = contributing.sum(axis=0) == 0
         cqm[invalid] = np.nan

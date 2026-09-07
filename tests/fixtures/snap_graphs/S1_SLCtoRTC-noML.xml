@@ -78,13 +78,13 @@
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <targetBands>
         <targetBand>
-          <name>Gamma0</name>
+          <name>gamma0</name>
           <type>float32</type>
           <expression>Gamma0_${swath}_${polarization} &gt; 0 ? Gamma0_${swath}_${polarization} : -1099511627776.0</expression>
           <noDataValue>-1099511627776.0</noDataValue>
         </targetBand>
         <targetBand>
-          <name>sim</name>
+          <name>scattering_area</name>
           <type>float32</type>
           <expression>simulatedImage &gt; 0 ? simulatedImage : -1099511627776.0</expression>
           <noDataValue>-1099511627776.0</noDataValue>
