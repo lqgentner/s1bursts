@@ -59,6 +59,15 @@ class TimeRange:
     def __init__(self, start: DateLike, end: DateLike) -> None:
         object.__setattr__(self, "start", calendar_day(start))
         object.__setattr__(self, "end", calendar_day(end))
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        """Check the order of the days.
+
+        Separate from ``__init__`` because a validation library that builds a
+        dataclass from its fields, pydantic for one, skips ``__init__`` but
+        still calls this.
+        """
         if self.end < self.start:
             msg = f"time range end {self.end} is before its start {self.start}"
             raise ValueError(msg)
