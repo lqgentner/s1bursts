@@ -205,8 +205,25 @@ def _compositing_parameters(
     return ";".join(parts)
 
 
-def _tile(product: MGRSTileProduct, *, family: str) -> dict[str, str]:
-    """Identity, date window and polarization, shared by every composite."""
+type Acquisitions = tuple[Timestamp, Timestamp]
+"""First and last acquisition date that entered a composite."""
+
+
+def _tile(
+    product: MGRSTileProduct,
+    *,
+    family: str,
+    acquisitions: Acquisitions | None = None,
+) -> dict[str, str]:
+    """Identity, date window and polarization, shared by every composite.
+
+    ``COMPOSITE_START_DATE`` and ``COMPOSITE_END_DATE`` are the product's dates:
+    the compositing window when the caller named one, the observed span
+    otherwise. ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` are
+    always the observed span, so the two pairs coincide unless a window was
+    given, and a reader can tell how much of the window the data covers.
+    """
+    first, last = acquisitions or (product.start_date, product.end_date)
     return {
         "METADATA_VOCABULARY": METADATA_VOCABULARY,
         **_pipeline(),
@@ -217,6 +234,8 @@ def _tile(product: MGRSTileProduct, *, family: str) -> dict[str, str]:
         "MGRS_TILE": product.mgrs_code,
         "COMPOSITE_START_DATE": _date(product.start_date),
         "COMPOSITE_END_DATE": _date(product.end_date),
+        "FIRST_ACQUISITION_DATE": _date(first),
+        "LAST_ACQUISITION_DATE": _date(last),
         "POLARIZATION": product.polarization,
         "PIXEL_COORDINATE_CONVENTION": _PIXEL_CONVENTION,
     }
@@ -336,6 +355,7 @@ def rtc_lrw_metadata(
     n_observations: int,
     decibel: bool,
     source_tags: Mapping[str, str] | None = None,
+    acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
     """Metadata for a locally resolution weighted RTC composite.
 
@@ -354,6 +374,9 @@ def rtc_lrw_metadata(
     source_tags
         Tags of one of the per-burst inputs, from which the processing
         provenance is inherited.
+    acquisitions
+        First and last acquisition date that contributed; defaults to the
+        product's own dates.
 
     Returns
     -------
@@ -361,7 +384,7 @@ def rtc_lrw_metadata(
         Tags, band description and unit for the composite.
     """
     tags = {
-        **_tile(product, family="Composite Backscatter"),
+        **_tile(product, family="Composite Backscatter", acquisitions=acquisitions),
         **_backscatter(gamma0=True, decibel=decibel),
         **_lrw(aggregation, clip_max_resolution),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
@@ -386,6 +409,7 @@ def coh_lrw_metadata(
     n_observations: int,
     statistics: Mapping[str, str] | None = None,
     source_tags: Mapping[str, str] | None = None,
+    acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
     """Metadata for a locally resolution weighted coherence composite.
 
@@ -410,6 +434,9 @@ def coh_lrw_metadata(
     source_tags
         Tags of one of the per-burst coherence inputs. The estimation window
         originates there and reaches the composite by no other route.
+    acquisitions
+        First and last acquisition date that contributed; defaults to the
+        product's own dates.
 
     Returns
     -------
@@ -417,7 +444,7 @@ def coh_lrw_metadata(
         Tags, band description and unit for the composite.
     """
     tags = {
-        **_tile(product, family="Composite Coherence"),
+        **_tile(product, family="Composite Coherence", acquisitions=acquisitions),
         "MEASUREMENT_TYPE": "Coherence",
         "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
         # Small et al. define LRW for backscatter power; weighting coherence by
@@ -455,6 +482,7 @@ def rtc_pass_metadata(
     n_observations: int,
     decibel: bool,
     source_tags: Mapping[str, str] | None = None,
+    acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
     """Metadata for an unweighted RTC composite of a single pass direction.
 
@@ -470,6 +498,9 @@ def rtc_pass_metadata(
         Whether the stored values are decibels rather than linear power.
     source_tags
         Tags of one of the per-burst inputs.
+    acquisitions
+        First and last acquisition date that contributed; defaults to the
+        product's own dates.
 
     Returns
     -------
@@ -477,7 +508,7 @@ def rtc_pass_metadata(
         Tags, band description and unit for the composite.
     """
     tags = {
-        **_tile(product, family="Composite Backscatter"),
+        **_tile(product, family="Composite Backscatter", acquisitions=acquisitions),
         **_backscatter(gamma0=True, decibel=decibel),
         **_unweighted(aggregation),
         "PASS_DIRECTION": product.pass_direction,
@@ -502,6 +533,7 @@ def coh_pass_metadata(
     n_observations: int,
     statistics: Mapping[str, str] | None = None,
     source_tags: Mapping[str, str] | None = None,
+    acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
     """Metadata for an unweighted coherence composite of a single pass direction.
 
@@ -517,6 +549,9 @@ def coh_pass_metadata(
         Coherence statistics from ``coherence_statistics``.
     source_tags
         Tags of one of the per-burst coherence inputs.
+    acquisitions
+        First and last acquisition date that contributed; defaults to the
+        product's own dates.
 
     Returns
     -------
@@ -524,7 +559,7 @@ def coh_pass_metadata(
         Tags, band description and unit for the composite.
     """
     tags = {
-        **_tile(product, family="Composite Coherence"),
+        **_tile(product, family="Composite Coherence", acquisitions=acquisitions),
         "MEASUREMENT_TYPE": "Coherence",
         "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
         **_unweighted(aggregation),
@@ -553,6 +588,7 @@ def qa_metadata(
     clip_max_resolution: float | None = None,
     cqm_decibel: bool = False,
     source_tags: Mapping[str, str] | None = None,
+    acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
     """Metadata for a QA auxiliary: contributing observations or composite quality map.
 
@@ -574,6 +610,9 @@ def qa_metadata(
         Whether a ``QA-CQM`` layer stores decibels rather than linear values.
     source_tags
         Tags of one of the per-burst inputs.
+    acquisitions
+        First and last acquisition date that contributed; defaults to the
+        product's own dates.
 
     Returns
     -------
@@ -590,6 +629,7 @@ def qa_metadata(
         **_tile(
             product,
             family="Composite Coherence" if coherence else "Composite Backscatter",
+            acquisitions=acquisitions,
         ),
         **(_lrw(aggregation, clip_max_resolution) if weighted else _unweighted(aggregation)),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),

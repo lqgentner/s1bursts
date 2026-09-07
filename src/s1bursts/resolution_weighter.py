@@ -60,6 +60,8 @@ type LRWQAProduct = RTCLRWQA | CohLRWQA
 type QAProduct = RTCLRWQA | CohLRWQA | RTCPassQA | CohPassQA
 
 # Return shapes when ``write_qa=True``: the composite paired with its QA-product bundle.
+type TimeRange = tuple[Timestamp, Timestamp]
+"""Inclusive compositing window; see ``time_range`` on the ``compose_*`` methods."""
 type RTCLRWResult = tuple[RTCLRWComposite, tuple[RTCLRWQA, RTCLRWQA]]
 type CohLRWResult = tuple[CohLRWComposite, tuple[CohLRWQA, CohLRWQA]]
 type RTCPassResult = tuple[RTCPassComposite, RTCPassQA]
@@ -154,6 +156,7 @@ class ResolutionWeighter:
         write_qa: Literal[False] = False,
         cqm_decibel: bool = ...,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> RTCLRWComposite: ...
     @overload
     def compose_rtc_lrw(
@@ -167,6 +170,7 @@ class ResolutionWeighter:
         write_qa: Literal[True],
         cqm_decibel: bool = ...,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> RTCLRWResult: ...
     @overload
     def compose_rtc_lrw(
@@ -180,6 +184,7 @@ class ResolutionWeighter:
         write_qa: bool,
         cqm_decibel: bool = ...,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> RTCLRWComposite | RTCLRWResult: ...
     def compose_rtc_lrw(
         self,
@@ -192,6 +197,7 @@ class ResolutionWeighter:
         write_qa: bool = False,
         cqm_decibel: bool = False,
         overwrite: bool = False,
+        time_range: TimeRange | None = None,
     ) -> RTCLRWComposite | RTCLRWResult:
         r"""Compute a locally resolution weighted (LRW) RTC intensity composite.
 
@@ -226,6 +232,13 @@ class ResolutionWeighter:
         overwrite
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
+        time_range
+            Inclusive compositing window ``(start, end)``. When given, the
+            product is named and tagged with these dates rather than with the
+            first and last acquisition, so every tile composited from one search
+            shares them; the observed span is kept in the
+            ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
+            input outside the window is a ``ValueError``.
 
         Returns
         -------
@@ -245,8 +258,8 @@ class ResolutionWeighter:
         self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(rtc_products)
-        start_date = min(self._acquisition_date(p) for p in rtc_products)
-        end_date = max(self._acquisition_date(p) for p in rtc_products)
+        acquisitions = self._acquisition_span(rtc_products)
+        start_date, end_date = self._composite_dates(acquisitions, time_range)
 
         product = RTCLRWComposite(
             mgrs_code=geobox.mgrs_code,
@@ -296,6 +309,7 @@ class ResolutionWeighter:
                 n_observations=n_observations,
                 decibel=decibel,
                 source_tags=source_tags,
+                acquisitions=acquisitions,
             ),
             overwrite=overwrite,
         )
@@ -310,6 +324,7 @@ class ResolutionWeighter:
                 clip_max_resolution=clip_max_resolution,
                 cqm_decibel=cqm_decibel,
                 source_tags=source_tags,
+                acquisitions=acquisitions,
                 overwrite=overwrite,
             )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
@@ -326,6 +341,7 @@ class ResolutionWeighter:
         write_qa: Literal[False] = False,
         cqm_decibel: bool = ...,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> CohLRWComposite: ...
     @overload
     def compose_coherence_lrw(
@@ -339,6 +355,7 @@ class ResolutionWeighter:
         write_qa: Literal[True],
         cqm_decibel: bool = ...,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> CohLRWResult: ...
     @overload
     def compose_coherence_lrw(
@@ -352,6 +369,7 @@ class ResolutionWeighter:
         write_qa: bool,
         cqm_decibel: bool = ...,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> CohLRWComposite | CohLRWResult: ...
     def compose_coherence_lrw(
         self,
@@ -364,6 +382,7 @@ class ResolutionWeighter:
         write_qa: bool = False,
         cqm_decibel: bool = False,
         overwrite: bool = False,
+        time_range: TimeRange | None = None,
     ) -> CohLRWComposite | CohLRWResult:
         r"""Compute a locally resolution weighted (LRW) coherence composite.
 
@@ -398,6 +417,13 @@ class ResolutionWeighter:
         overwrite
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
+        time_range
+            Inclusive compositing window ``(start, end)``. When given, the
+            product is named and tagged with these dates rather than with the
+            first and last acquisition, so every tile composited from one search
+            shares them; the observed span is kept in the
+            ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
+            input outside the window is a ``ValueError``.
 
         Returns
         -------
@@ -418,8 +444,8 @@ class ResolutionWeighter:
 
         polarization = self._check_polarization(coh_products)
         baseline_days = self._check_baseline_days(coh_products)
-        start_date = min(self._acquisition_date(p) for p in coh_products)
-        end_date = max(self._acquisition_date(p) for p in coh_products)
+        acquisitions = self._acquisition_span(coh_products)
+        start_date, end_date = self._composite_dates(acquisitions, time_range)
 
         product = CohLRWComposite(
             mgrs_code=geobox.mgrs_code,
@@ -469,6 +495,7 @@ class ResolutionWeighter:
                 n_observations=n_observations,
                 statistics=product_tags.coherence_statistics(composite),
                 source_tags=source_tags,
+                acquisitions=acquisitions,
             ),
             overwrite=overwrite,
         )
@@ -483,6 +510,7 @@ class ResolutionWeighter:
                 clip_max_resolution=clip_max_resolution,
                 cqm_decibel=cqm_decibel,
                 source_tags=source_tags,
+                acquisitions=acquisitions,
                 overwrite=overwrite,
             )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
@@ -497,6 +525,7 @@ class ResolutionWeighter:
         decibel: bool = ...,
         write_qa: Literal[False] = False,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> dict[PassDirection, RTCPassComposite]: ...
     @overload
     def compose_rtc_by_pass(
@@ -508,6 +537,7 @@ class ResolutionWeighter:
         decibel: bool = ...,
         write_qa: Literal[True],
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> dict[PassDirection, RTCPassResult]: ...
     @overload
     def compose_rtc_by_pass(
@@ -519,6 +549,7 @@ class ResolutionWeighter:
         decibel: bool = ...,
         write_qa: bool,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> dict[PassDirection, RTCPassComposite | RTCPassResult]: ...
     def compose_rtc_by_pass(
         self,
@@ -529,6 +560,7 @@ class ResolutionWeighter:
         decibel: bool = False,
         write_qa: bool = False,
         overwrite: bool = False,
+        time_range: TimeRange | None = None,
     ) -> Mapping[PassDirection, RTCPassComposite | RTCPassResult]:
         """Compute unweighted RTC composites stratified by pass direction.
 
@@ -558,6 +590,13 @@ class ResolutionWeighter:
         overwrite
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
+        time_range
+            Inclusive compositing window ``(start, end)``. When given, the
+            product is named and tagged with these dates rather than with the
+            first and last acquisition, so every tile composited from one search
+            shares them; the observed span is kept in the
+            ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
+            input outside the window is a ``ValueError``.
 
         Returns
         -------
@@ -571,8 +610,8 @@ class ResolutionWeighter:
         self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(rtc_products)
-        start_date = min(self._acquisition_date(p) for p in rtc_products)
-        end_date = max(self._acquisition_date(p) for p in rtc_products)
+        acquisitions = self._acquisition_span(rtc_products)
+        start_date, end_date = self._composite_dates(acquisitions, time_range)
 
         loaded = self._load_band(rtc_products, geobox, band=1)
 
@@ -636,6 +675,7 @@ class ResolutionWeighter:
                         aggregation=aggregation,
                         n_observations=len(rtc_obs),
                         source_tags=source_tags,
+                        acquisitions=acquisitions,
                     ),
                     dtype=np.uint16,
                     nodata=0,
@@ -654,6 +694,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         write_qa: Literal[False] = False,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> dict[PassDirection, CohPassComposite]: ...
     @overload
     def compose_coherence_by_pass(
@@ -664,6 +705,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         write_qa: Literal[True],
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> dict[PassDirection, CohPassResult]: ...
     @overload
     def compose_coherence_by_pass(
@@ -674,6 +716,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = ...,
         write_qa: bool,
         overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
     ) -> dict[PassDirection, CohPassComposite | CohPassResult]: ...
     def compose_coherence_by_pass(
         self,
@@ -683,6 +726,7 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = "median",
         write_qa: bool = False,
         overwrite: bool = False,
+        time_range: TimeRange | None = None,
     ) -> Mapping[PassDirection, CohPassComposite | CohPassResult]:
         """Compute unweighted coherence composites stratified by pass direction.
 
@@ -708,6 +752,13 @@ class ResolutionWeighter:
         overwrite
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
+        time_range
+            Inclusive compositing window ``(start, end)``. When given, the
+            product is named and tagged with these dates rather than with the
+            first and last acquisition, so every tile composited from one search
+            shares them; the observed span is kept in the
+            ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
+            input outside the window is a ``ValueError``.
 
         Returns
         -------
@@ -722,8 +773,8 @@ class ResolutionWeighter:
 
         polarization = self._check_polarization(coh_products)
         baseline_days = self._check_baseline_days(coh_products)
-        start_date = min(self._acquisition_date(p) for p in coh_products)
-        end_date = max(self._acquisition_date(p) for p in coh_products)
+        acquisitions = self._acquisition_span(coh_products)
+        start_date, end_date = self._composite_dates(acquisitions, time_range)
 
         loaded = self._load_band(coh_products, geobox, band=1)
 
@@ -787,6 +838,7 @@ class ResolutionWeighter:
                         aggregation=aggregation,
                         n_observations=len(coh_obs),
                         source_tags=source_tags,
+                        acquisitions=acquisitions,
                     ),
                     dtype=np.uint16,
                     nodata=0,
@@ -1016,6 +1068,7 @@ class ResolutionWeighter:
         clip_max_resolution: float | None,
         cqm_decibel: bool,
         source_tags: Mapping[str, str],
+        acquisitions: product_tags.Acquisitions,
         overwrite: bool,
     ) -> None:
         """Compute and write the contributing-observations and composite quality QA products."""
@@ -1030,6 +1083,7 @@ class ResolutionWeighter:
                 clip_max_resolution=clip_max_resolution,
                 n_observations=n_observations,
                 source_tags=source_tags,
+                acquisitions=acquisitions,
             ),
             dtype=np.uint16,
             nodata=0,
@@ -1047,6 +1101,7 @@ class ResolutionWeighter:
                 n_observations=n_observations,
                 cqm_decibel=cqm_decibel,
                 source_tags=source_tags,
+                acquisitions=acquisitions,
             ),
             dtype=np.float32,
             nodata=np.nan,
@@ -1056,6 +1111,43 @@ class ResolutionWeighter:
     # ------------------------------------------------------------------
     # Private helpers — spatial mosaicking
     # ------------------------------------------------------------------
+
+    @classmethod
+    def _acquisition_span(
+        cls, products: Collection[ComposableProduct]
+    ) -> product_tags.Acquisitions:
+        """First and last acquisition date among ``products``."""
+        dates = [cls._acquisition_date(p) for p in products]
+        return min(dates), max(dates)
+
+    @staticmethod
+    def _composite_dates(
+        acquisitions: product_tags.Acquisitions,
+        time_range: TimeRange | None,
+    ) -> tuple[Timestamp, Timestamp]:
+        """Pick the dates a composite is named and tagged with.
+
+        The compositing window when the caller gave one — the same for every
+        tile composited from the same search — otherwise the observed span.
+
+        Raises
+        ------
+        ValueError
+            If an input lies outside ``time_range``: the window is a claim about
+            what the composite was built from, and an input beyond it would make
+            that claim false.
+        """
+        if time_range is None:
+            return acquisitions
+        start, end = time_range
+        first, last = acquisitions
+        if first < start or last > end:
+            msg = (
+                f"inputs span {first.date()}..{last.date()}, outside the time range "
+                f"{start.date()}..{end.date()}"
+            )
+            raise ValueError(msg)
+        return start, end
 
     @staticmethod
     def _acquisition_date(product: ComposableProduct) -> Timestamp:

@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is pre-1.0 (`0.x`), minor releases may contain breaking changes.
 
+## Unreleased
+
+### Added
+
+- `time_range` on every `ResolutionWeighter.compose_*()` method: an inclusive
+  compositing window the product is named and tagged with, so all tiles built
+  from one search carry the same dates. The observed span moves to the new
+  `FIRST_ACQUISITION_DATE` and `LAST_ACQUISITION_DATE` tags, which are always
+  written. An input outside the window is refused. Without `time_range`
+  nothing changes.
+
 ## [0.4.0] - 2026-09-07
 
 ### Added

@@ -1864,3 +1864,64 @@ class TestPerProductProfiles:
             structure = src.tags(ns="IMAGE_STRUCTURE")
         assert structure["COMPRESSION"] == "LERC_ZSTD"
         assert float(structure["MAX_Z_ERROR"]) == pytest.approx(1e-5)
+
+
+class TestComposeTimeRange:
+    """``time_range`` names the compositing window instead of the observed span.
+
+    The window is the sampling frame a caller chose, identical for every tile of
+    a year; the first and last acquisition are what actually contributed and
+    vary per tile. Without ``time_range`` the two coincide, as before.
+    """
+
+    @staticmethod
+    def _compose(tmp_path: Path, **kwargs: Any) -> tuple[FileManager, RTCLRWComposite]:
+        fm, weighter, geobox = TestComposeReturns._setup(tmp_path)
+        p1, p2 = _rtc_stub(10, 12), _rtc_stub(20, 24)  # observed 2020-01-12 .. 2020-01-24
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.full((2, 2), 2.0, np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+        # pyrefly: ignore [no-matching-overload]
+        result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean", **kwargs)
+        assert isinstance(result, RTCLRWComposite)
+        return fm, result
+
+    def test_window_names_the_product_and_the_file(self, tmp_path: Path) -> None:
+        window = (Timestamp("2020-01-01"), Timestamp("2020-01-31"))
+        fm, product = self._compose(tmp_path, time_range=window)
+        assert (product.start_date, product.end_date) == window
+        assert fm.get_product_path(product).name.endswith("_20200101_20200131.tif")
+
+    def test_window_is_the_composite_date_and_the_span_is_kept_as_acquisitions(
+        self, tmp_path: Path
+    ) -> None:
+        window = (Timestamp("2020-01-01"), Timestamp("2020-01-31"))
+        fm, product = self._compose(tmp_path, time_range=window)
+        with rasterio.open(fm.get_product_path(product)) as src:
+            tags = src.tags()
+        assert (tags["COMPOSITE_START_DATE"], tags["COMPOSITE_END_DATE"]) == (
+            "2020-01-01",
+            "2020-01-31",
+        )
+        assert (tags["FIRST_ACQUISITION_DATE"], tags["LAST_ACQUISITION_DATE"]) == (
+            "2020-01-12",
+            "2020-01-24",
+        )
+
+    def test_without_a_window_the_span_is_the_composite_date(self, tmp_path: Path) -> None:
+        fm, product = self._compose(tmp_path)
+        assert (product.start_date, product.end_date) == (
+            Timestamp("2020-01-12"),
+            Timestamp("2020-01-24"),
+        )
+        with rasterio.open(fm.get_product_path(product)) as src:
+            tags = src.tags()
+        assert tags["FIRST_ACQUISITION_DATE"] == tags["COMPOSITE_START_DATE"] == "2020-01-12"
+        assert tags["LAST_ACQUISITION_DATE"] == tags["COMPOSITE_END_DATE"] == "2020-01-24"
+
+    def test_an_input_outside_the_window_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="outside the time range"):
+            self._compose(tmp_path, time_range=(Timestamp("2020-01-01"), Timestamp("2020-01-20")))
