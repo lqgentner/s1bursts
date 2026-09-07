@@ -10,12 +10,22 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Added
 
-- `time_range` on every `ResolutionWeighter.compose_*()` method: an inclusive
-  compositing window the product is named and tagged with, so all tiles built
-  from one search carry the same dates. The observed span moves to the new
-  `FIRST_ACQUISITION_DATE` and `LAST_ACQUISITION_DATE` tags, which are always
-  written. Each pass composite carries the span of its own direction. An input
-  outside the window is refused. Without `time_range` nothing changes.
+- `TimeRange`, an inclusive window of calendar days. `SearchQuery` accepts it
+  as `time_range` and searches every acquisition on any of its days, so the
+  caller no longer translates an inclusive last day into an exclusive stop.
+- `time_range` on every `ResolutionWeighter.compose_*()` method: the same
+  `TimeRange` the search was made with. The product is named and tagged with
+  its days, so all tiles built from one search carry the same dates. The
+  observed span moves to the new `FIRST_ACQUISITION_DATE` and
+  `LAST_ACQUISITION_DATE` tags, which are always written. Each pass composite
+  carries the span of its own direction. An input outside the window is
+  refused. Without `time_range` nothing changes.
+
+### Changed
+
+- A `SearchQuery` given a pair of instants now treats the stop as exclusive,
+  `[start, stop)`, where the CDSE filter used to include an acquisition at
+  exactly the stop instant.
 
 ## [0.4.0] - 2026-09-07
 

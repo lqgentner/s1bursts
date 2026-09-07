@@ -28,6 +28,7 @@ from s1bursts.product import (
     RTCProduct,
 )
 from s1bursts.resolution_weighter import ResolutionWeighter
+from s1bursts.time_range import TimeRange
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1413,7 +1414,7 @@ class TestComposeByPass:
     def test_coherence_pass_composite_carries_window_and_span(self, scene: _Scene) -> None:
         product = _coh("2022-08-01", "2022-08-13")
         _write_raster(scene.manager.get_product_path(product), [_full(0.4)])
-        window = (Timestamp("2022-07-15"), Timestamp("2022-10-12"))
+        window = TimeRange("2022-07-15", "2022-10-12")
 
         result = scene.weighter.compose_coherence_by_pass(
             [product], scene.geobox, write_qa=True, time_range=window
@@ -1911,15 +1912,18 @@ class TestComposeTimeRange:
         return fm, result
 
     def test_window_names_the_product_and_the_file(self, tmp_path: Path) -> None:
-        window = (Timestamp("2020-01-01"), Timestamp("2020-01-31"))
+        window = TimeRange("2020-01-01", "2020-01-31")
         fm, product = self._compose(tmp_path, time_range=window)
-        assert (product.start_date, product.end_date) == window
+        assert (product.start_date, product.end_date) == (
+            Timestamp("2020-01-01"),
+            Timestamp("2020-01-31"),
+        )
         assert fm.get_product_path(product).name.endswith("_20200101_20200131.tif")
 
     def test_window_is_the_composite_date_and_the_span_is_kept_as_acquisitions(
         self, tmp_path: Path
     ) -> None:
-        window = (Timestamp("2020-01-01"), Timestamp("2020-01-31"))
+        window = TimeRange("2020-01-01", "2020-01-31")
         fm, product = self._compose(tmp_path, time_range=window)
         with rasterio.open(fm.get_product_path(product)) as src:
             tags = src.tags()
@@ -1943,9 +1947,15 @@ class TestComposeTimeRange:
         assert tags["FIRST_ACQUISITION_DATE"] == tags["COMPOSITE_START_DATE"] == "2020-01-12"
         assert tags["LAST_ACQUISITION_DATE"] == tags["COMPOSITE_END_DATE"] == "2020-01-24"
 
+    def test_a_pair_of_instants_is_refused(self, tmp_path: Path) -> None:
+        """A search range stops the midnight after the window, a day past the composite's end."""
+        search_range = TimeRange("2020-01-01", "2020-01-31").half_open()
+        with pytest.raises(TypeError, match="must be a TimeRange"):
+            self._compose(tmp_path, time_range=search_range)
+
     def test_an_input_outside_the_window_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="outside the time range"):
-            self._compose(tmp_path, time_range=(Timestamp("2020-01-01"), Timestamp("2020-01-20")))
+            self._compose(tmp_path, time_range=TimeRange("2020-01-01", "2020-01-20"))
 
     def test_timezone_aware_acquisitions_are_compared_by_calendar_day(
         self, tmp_path: Path
@@ -1961,7 +1971,7 @@ class TestComposeTimeRange:
         }
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
-        window = (Timestamp("2020-01-12"), Timestamp("2020-01-24"))
+        window = TimeRange("2020-01-12", "2020-01-24")
         # pyrefly: ignore [no-matching-overload]
         product = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean", time_range=window)
         assert isinstance(product, RTCLRWComposite)
@@ -1978,7 +1988,7 @@ class TestComposeTimeRange:
         desc = [_rtc_stub(20, 9, "Descending"), _rtc_stub(20, 27, "Descending")]
         power = {id(p): np.full((2, 2), 1.0, np.float32) for p in [*asc, *desc]}
         TestComposeReturns._patch_load(weighter, power)
-        window = (Timestamp("2020-01-01"), Timestamp("2020-01-31"))
+        window = TimeRange("2020-01-01", "2020-01-31")
         # pyrefly: ignore [no-matching-overload]
         result = weighter.compose_rtc_by_pass(
             [*asc, *desc],

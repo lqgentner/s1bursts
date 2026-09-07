@@ -8,6 +8,8 @@ from typing import Literal, Protocol, runtime_checkable
 import pandas as pd
 from pandas import Timestamp
 
+from s1bursts.time_range import TimeRange
+
 type Polarization = Literal["VV", "VH", "HH", "HV"]
 type Mode = Literal["IW", "EW"]
 type SubSwath = Literal["IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"]
@@ -45,7 +47,10 @@ class SearchQuery:
     Parameters
     ----------
     time_range
-        Start and end of the acquisition time window. Accepts ISO strings or Timestamps.
+        Acquisition time window. A :class:`~s1bursts.time_range.TimeRange` keeps
+        every acquisition on any of its days; the same window then names the
+        composite built from the search. A pair of ISO strings or Timestamps is
+        a half-open ``[start, stop)`` pair of instants.
     intersects
         Spatial filter; bursts must intersect this geometry.
     burst_id
@@ -74,7 +79,7 @@ class SearchQuery:
 
     def __init__(
         self,
-        time_range: tuple[str | Timestamp, str | Timestamp] | None = None,
+        time_range: TimeRange | tuple[str | Timestamp, str | Timestamp] | None = None,
         intersects: HasWkt | None = None,
         burst_id: int | None = None,
         abs_burst_id: int | None = None,
@@ -131,11 +136,13 @@ class SearchQuery:
 
     @staticmethod
     def _convert_to_timestamp_range(
-        time_range: tuple[str | Timestamp, str | Timestamp] | None,
+        time_range: TimeRange | tuple[str | Timestamp, str | Timestamp] | None,
     ) -> tuple[Timestamp, Timestamp] | None:
-        """Convert a time range tuple to Timestamps, validating ordering."""
+        """Return the ``[start, stop)`` instants to filter on, validating ordering."""
         if time_range is None:
             return None
+        if isinstance(time_range, TimeRange):
+            return time_range.half_open()
 
         if not isinstance(time_range, Sequence):
             msg = f"time_range must be of type tuple, received `{type(time_range).__name__}`."

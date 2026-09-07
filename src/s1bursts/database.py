@@ -385,10 +385,11 @@ class BurstDatabase:
             start, end = query.time_range
             fmt = "%Y-%m-%dT%H:%M:%SZ"
             # ContentDate/Start maps to BeginningDateTime (sensingTime),
-            # which matches Burst.date.
+            # which matches Burst.date. The stop is exclusive, so a TimeRange's
+            # stop, the midnight after its last day, keeps that whole day.
             filters.append(
                 f"ContentDate/Start ge {start.strftime(fmt)} and "
-                f"ContentDate/Start le {end.strftime(fmt)}",
+                f"ContentDate/Start lt {end.strftime(fmt)}",
             )
         if query.intersects:
             filters.append(

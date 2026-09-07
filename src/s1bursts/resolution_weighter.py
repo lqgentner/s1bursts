@@ -41,6 +41,7 @@ from s1bursts.product import (
     RTCPassQA,
     RTCProduct,
 )
+from s1bursts.time_range import TimeRange, calendar_day
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Sequence
@@ -60,8 +61,6 @@ type LRWQAProduct = RTCLRWQA | CohLRWQA
 type QAProduct = RTCLRWQA | CohLRWQA | RTCPassQA | CohPassQA
 
 # Return shapes when ``write_qa=True``: the composite paired with its QA-product bundle.
-type TimeRange = tuple[Timestamp, Timestamp]
-"""Inclusive compositing window; see ``time_range`` on the ``compose_*`` methods."""
 type RTCLRWResult = tuple[RTCLRWComposite, tuple[RTCLRWQA, RTCLRWQA]]
 type CohLRWResult = tuple[CohLRWComposite, tuple[CohLRWQA, CohLRWQA]]
 type RTCPassResult = tuple[RTCPassComposite, RTCPassQA]
@@ -72,9 +71,7 @@ _OrbitDateKey = tuple[int, Timestamp]
 
 def _calendar_day(value: Timestamp) -> Timestamp:
     """``value`` as a naive midnight timestamp of its UTC calendar day."""
-    if value.tzinfo is not None:
-        value = value.tz_convert("UTC").tz_localize(None)
-    return value.normalize()
+    return Timestamp(calendar_day(value))
 
 
 _LoadedEntry = tuple[ComposableProduct, NDArray[np.float32]]
@@ -242,10 +239,11 @@ class ResolutionWeighter:
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
         time_range
-            Inclusive compositing window ``(start, end)``. When given, the
-            product is named and tagged with these dates rather than with the
-            first and last acquisition, so every tile composited from one search
-            shares them; the observed span is kept in the
+            The compositing window, as calendar days; pass the same
+            :class:`~s1bursts.time_range.TimeRange` the search was made with.
+            When given, the product is named and tagged with its days rather
+            than with the first and last acquisition, so every tile composited
+            from one search shares them; the observed span is kept in the
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
 
@@ -427,10 +425,11 @@ class ResolutionWeighter:
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
         time_range
-            Inclusive compositing window ``(start, end)``. When given, the
-            product is named and tagged with these dates rather than with the
-            first and last acquisition, so every tile composited from one search
-            shares them; the observed span is kept in the
+            The compositing window, as calendar days; pass the same
+            :class:`~s1bursts.time_range.TimeRange` the search was made with.
+            When given, the product is named and tagged with its days rather
+            than with the first and last acquisition, so every tile composited
+            from one search shares them; the observed span is kept in the
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
 
@@ -600,10 +599,11 @@ class ResolutionWeighter:
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
         time_range
-            Inclusive compositing window ``(start, end)``. When given, the
-            product is named and tagged with these dates rather than with the
-            first and last acquisition, so every tile composited from one search
-            shares them; the observed span is kept in the
+            The compositing window, as calendar days; pass the same
+            :class:`~s1bursts.time_range.TimeRange` the search was made with.
+            When given, the product is named and tagged with its days rather
+            than with the first and last acquisition, so every tile composited
+            from one search shares them; the observed span is kept in the
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
 
@@ -765,10 +765,11 @@ class ResolutionWeighter:
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
         time_range
-            Inclusive compositing window ``(start, end)``. When given, the
-            product is named and tagged with these dates rather than with the
-            first and last acquisition, so every tile composited from one search
-            shares them; the observed span is kept in the
+            The compositing window, as calendar days; pass the same
+            :class:`~s1bursts.time_range.TimeRange` the search was made with.
+            When given, the product is named and tagged with its days rather
+            than with the first and last acquisition, so every tile composited
+            from one search shares them; the observed span is kept in the
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
 
@@ -1158,15 +1159,19 @@ class ResolutionWeighter:
         """
         if time_range is None:
             return acquisitions
-        start, end = time_range
-        first, last = acquisitions
-        if first < _calendar_day(start) or last > _calendar_day(end):
+        if not isinstance(time_range, TimeRange):
+            # A ``(start, stop)`` pair of instants, such as a search range, ends
+            # one day later than the window it was made from.
             msg = (
-                f"inputs span {first.date()}..{last.date()}, outside the time range "
-                f"{start.date()}..{end.date()}"
+                "time_range must be a TimeRange of calendar days, "
+                f"received {type(time_range).__name__}"
             )
+            raise TypeError(msg)
+        first, last = acquisitions
+        if first not in time_range or last not in time_range:
+            msg = f"inputs span {first.date()}..{last.date()}, outside the time range {time_range}"
             raise ValueError(msg)
-        return start, end
+        return Timestamp(time_range.start), Timestamp(time_range.end)
 
     @staticmethod
     def _acquisition_date(product: ComposableProduct) -> Timestamp:
