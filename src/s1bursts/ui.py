@@ -1,28 +1,31 @@
 """UI utilities for creating HTML representations of Sentinel-1 data structures."""
 
+from __future__ import annotations
+
 from functools import lru_cache
 from importlib.resources import files
+from typing import TYPE_CHECKING
 
-import geopandas as gpd
 from odc.geo.ui import svg_base_map
 from shapely.geometry import MultiPolygon, Polygon
-from shapely.geometry.base import BaseGeometry
+
+if TYPE_CHECKING:
+    import geopandas as gpd
+    from shapely.geometry.base import BaseGeometry
 
 
 def geometry_to_svg_path(geom: BaseGeometry) -> str:
-    """
-    Convert a Shapely geometry to an SVG path string.
+    """Convert a Shapely geometry to an SVG path string.
 
     Parameters
     ----------
-    geom : shapely.geometry
+    geom
         Geometry to convert (Polygon or MultiPolygon).
 
     Returns
     -------
     str
         SVG path string.
-
     """
     if isinstance(geom, Polygon):
         coords = list(geom.exterior.coords)
@@ -45,25 +48,23 @@ def create_footprint_svg(
     stroke_color: str = "#66cc99",
     stroke_width: float = 1.0,
 ) -> str:
-    """
-    Create a simple SVG map of geographic footprints.
+    """Create a simple SVG map of geographic footprints.
 
     Parameters
     ----------
-    gdf : gpd.GeoDataFrame
+    gdf
         GeoDataFrame with geometry column containing footprints.
-    svg_width : int, optional
+    svg_width
         Width of SVG in pixels (default: 400).
-    stroke_color : str, optional
+    stroke_color
         SVG stroke color (default: "#66cc99").
-    stroke_width : float, optional
+    stroke_width
         SVG stroke width (default: 1.0).
 
     Returns
     -------
     str
         SVG string representation of the footprints.
-
     """
     if len(gdf) == 0 or "geometry" not in gdf.columns:
         return "<div class='map-placeholder'>No geometries to display</div>"
@@ -133,23 +134,21 @@ def create_footprint_svg(
 
 
 def create_world_map_with_target(gdf: gpd.GeoDataFrame, size: int = 200) -> str:
-    """
-    Create a small world map showing the centroid of geometries.
+    """Create a small world map showing the centroid of geometries.
 
     Calculates centroid efficiently from the bounding box of all geometries.
 
     Parameters
     ----------
-    gdf : gpd.GeoDataFrame
+    gdf
         GeoDataFrame with geometry column.
-    size : int, optional
+    size
         Size of the map in pixels (default: 200).
 
     Returns
     -------
     str
         SVG string of world map with target marker, or empty string if unavailable.
-
     """
     if len(gdf) == 0 or "geometry" not in gdf.columns:
         return ""

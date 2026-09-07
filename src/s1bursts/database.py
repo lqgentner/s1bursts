@@ -18,7 +18,12 @@ from s1bursts.burst import (
     BurstPairCollection,
 )
 from s1bursts.cdse import CDSEAuth, CDSEBurstClient
-from s1bursts.errors import BurstDownloadError, BurstError, BurstNotFoundError
+from s1bursts.errors import (
+    BurstDownloadError,
+    BurstError,
+    BurstNotFoundError,
+    ConfigurationError,
+)
 from s1bursts.summary import ErrorResult, OkResult, OperationResult, OperationSummary
 
 if TYPE_CHECKING:
@@ -44,18 +49,18 @@ class BurstDatabase:
 
     Parameters
     ----------
-    file_manager : FileManager
+    file_manager
         File manager for determining SLC download paths.
-    auth : CDSEAuth, optional
+    auth
         Authentication credentials for the CDSE API. If ``None``, a
         ``CDSEAuth`` instance is created lazily from the ``CDSE_USERNAME`` /
         ``CDSE_PASSWORD`` settings on the first download. Searching the
         catalog requires no authentication.
-    show_progress : bool, default True
+    show_progress
         Whether to show progress bars during downloads.
-    continue_on_error : bool, default True
+    continue_on_error
         Whether to continue downloading after individual failures.
-    default_endpoint : {"odata", "s3"}, default "odata"
+    default_endpoint
         Default download endpoint. If a download fails, the other endpoint
         is tried automatically.
     """
@@ -69,24 +74,6 @@ class BurstDatabase:
         continue_on_error: bool = True,
         default_endpoint: Endpoint = "odata",
     ) -> None:
-        """Initialize BurstDatabase.
-
-        Parameters
-        ----------
-        file_manager : FileManager
-            File manager for determining SLC download paths.
-        auth : CDSEAuth, optional
-            Authentication for CDSE. If ``None``, a ``CDSEAuth`` instance is
-            built lazily from the ``CDSE_USERNAME`` / ``CDSE_PASSWORD``
-            settings on the first download.
-        show_progress : bool, default True
-            Whether to show progress bars.
-        continue_on_error : bool, default True
-            Whether to continue processing after errors.
-        default_endpoint : {"odata", "s3"}, default "odata"
-            Default download endpoint to use. If a download fails, the other
-            endpoint is tried automatically as a fallback.
-        """
         self.client = CDSEBurstClient(auth=auth)
         self.file_manager = file_manager
         self.show_progress = show_progress
@@ -106,14 +93,6 @@ class BurstDatabase:
         immediately before an OData request, so a user who configured only
         ``CDSE_S3_*`` credentials is never asked for OData credentials unless an
         OData attempt actually happens (as primary endpoint or as S3 fallback).
-
-        Raises
-        ------
-        BurstDownloadError
-            If OData credentials are required but not configured. Raised as a
-            per-burst :class:`BurstError` so the download loop records it and,
-            when S3 was the primary endpoint, still surfaces the original S3
-            failure alongside it.
         """
         with self._auth_lock:
             if self.client.auth is None:
@@ -132,9 +111,9 @@ class BurstDatabase:
 
         Parameters
         ----------
-        query : SearchQuery
+        query
             Search parameters.
-        max_items : int, default 100
+        max_items
             Maximum number of results to return.
 
         Returns
@@ -164,13 +143,13 @@ class BurstDatabase:
 
         Parameters
         ----------
-        bursts : BurstCollection | BurstPairCollection | Burst | BurstPair
+        bursts
             Bursts to download.
-        overwrite : bool, default False
+        overwrite
             Whether to overwrite existing files.
-        max_workers : int, default 5
+        max_workers
             Number of parallel download threads.
-        endpoint : {"odata", "s3"}, optional
+        endpoint
             Download endpoint to use. If ``None``, uses the
             ``default_endpoint`` specified during initialization. If a
             download fails, the other endpoint is tried automatically.
@@ -251,20 +230,7 @@ class BurstDatabase:
         )
 
     def _download_single_burst(self, burst: Burst, endpoint: Endpoint) -> OperationResult[Burst]:
-        """Download a single burst using specified endpoint with fallback.
-
-        Parameters
-        ----------
-        burst : Burst
-            Burst to download.
-        endpoint : {"odata", "s3"}
-            Primary endpoint to use.
-
-        Returns
-        -------
-        OperationResult
-            Result of the download operation.
-        """
+        """Download a single burst using specified endpoint with fallback."""
         if self.file_manager.get_slc_path(burst).exists():
             return OkResult(source=burst, result=burst, skipped=True)
 
@@ -363,7 +329,7 @@ class BurstDatabase:
             return ErrorResult(source=burst, error=e)
 
     def _download_burst_s3(self, burst: Burst) -> OperationResult[Burst]:
-        """Download burst using S3 burst extraction script.
+        """Download a burst by extracting it from the parent product in CDSE S3.
 
         Writes the result to the deterministic SLC path resolved by
         ``FileManager`` (local or S3 via UPath).
@@ -380,23 +346,20 @@ class BurstDatabase:
                 burst_id=burst.burst_id,
             )
             return OkResult(source=burst, result=burst)
+        except ConfigurationError as e:
+            # Recorded per burst, as `_ensure_auth` does for OData, so that the
+            # other endpoint is still tried with the credentials that are set.
+            msg = (
+                f"{e} Set them, or download with endpoint='odata' using "
+                "CDSE_USERNAME and CDSE_PASSWORD only."
+            )
+            return ErrorResult(source=burst, error=BurstDownloadError(msg))
         except (BurstError, OSError) as e:
             return ErrorResult(source=burst, error=e)
 
     @staticmethod
     def _convert_query_to_filters(query: SearchQuery) -> list[str]:
-        """Convert a SearchQuery to a list of CDSE OData filter strings.
-
-        Parameters
-        ----------
-        query : SearchQuery
-            Query to convert.
-
-        Returns
-        -------
-        list[str]
-            List of OData filter expressions to pass to the CDSE API.
-        """
+        """Convert a SearchQuery to a list of CDSE OData filter strings."""
         # CDSE spells the pass direction upper case and calls it OrbitDirection.
         pass_direction = query.pass_direction.upper() if query.pass_direction else None
         simple_filters: list[tuple[str | int | None, str]] = [
@@ -436,18 +399,7 @@ class BurstDatabase:
 
     @staticmethod
     def _validate_completeness(response: CDSEResponse) -> None:
-        """Raise if the CDSE response is truncated.
-
-        Parameters
-        ----------
-        response : CDSEResponse
-            Response to validate.
-
-        Raises
-        ------
-        RuntimeError
-            If the total count exceeds the number of returned items.
-        """
+        """Raise if the CDSE response is truncated."""
         if response.is_complete():
             return
         msg = (

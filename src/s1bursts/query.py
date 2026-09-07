@@ -44,26 +44,26 @@ class SearchQuery:
 
     Parameters
     ----------
-    time_range : tuple[str | Timestamp, str | Timestamp] | None, optional
+    time_range
         Start and end of the acquisition time window. Accepts ISO strings or Timestamps.
-    intersects : HasWkt | None, optional
+    intersects
         Spatial filter; bursts must intersect this geometry.
-    burst_id : int | None, optional
+    burst_id
         Sentinel-1 relative burst ID, unique within each sub-swath. Must be positive.
-    abs_burst_id : int | None, optional
+    abs_burst_id
         Sentinel-1 absolute burst ID, globally unique across all sub-swaths and orbits.
         Must be positive.
-    polarization : {"VV", "VH", "HH", "HV"} | None, optional
+    polarization
         Polarization channel.
-    mode : {"IW", "EW"} | None, optional
+    mode
         Acquisition mode.
-    sub_swath : {"IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5"} | None, optional
+    sub_swath
         Sub-swath identifier.
-    pass_direction : {"Ascending", "Descending"} | None, optional
+    pass_direction
         Pass direction.
-    platform_serial_id : {"A", "B", "C", "D"} | None, optional
+    platform_serial_id
         Sentinel-1 platform serial identifier.
-    rel_orbit_number : int | None, optional
+    rel_orbit_number
         Relative orbit number (1-175).
 
     Raises
@@ -115,27 +115,7 @@ class SearchQuery:
         field_name: str,
         allowed: tuple[str, ...],
     ) -> T | None:
-        """Validate that a value is one of the accepted identifiers.
-
-        Parameters
-        ----------
-        value : str | None
-            Value to validate.
-        field_name : str
-            Name of the field, used in the error message.
-        allowed : tuple of str
-            Accepted values.
-
-        Returns
-        -------
-        str | None
-            The validated value.
-
-        Raises
-        ------
-        ValueError
-            If value is not one of ``allowed``.
-        """
+        """Validate that a value is one of the accepted identifiers."""
         if value is not None and value not in allowed:
             msg = f"{field_name} must be one of {', '.join(allowed)}; received '{value}'"
             raise ValueError(msg)
@@ -143,23 +123,7 @@ class SearchQuery:
 
     @staticmethod
     def _validate_geometry(geometry: HasWkt | None) -> HasWkt | None:
-        """Validate that geometry implements the WKT protocol.
-
-        Parameters
-        ----------
-        geometry : HasWkt | None
-            Geometry to validate.
-
-        Returns
-        -------
-        HasWkt | None
-            The validated geometry.
-
-        Raises
-        ------
-        ValueError
-            If geometry does not implement `wkt`.
-        """
+        """Validate that geometry implements the WKT protocol."""
         if geometry is not None and not isinstance(geometry, HasWkt):
             msg = "`intersects` must be a Geometry that implements `wkt`."
             raise ValueError(msg)
@@ -169,25 +133,7 @@ class SearchQuery:
     def _convert_to_timestamp_range(
         time_range: tuple[str | Timestamp, str | Timestamp] | None,
     ) -> tuple[Timestamp, Timestamp] | None:
-        """Convert a time range tuple to Timestamps, validating ordering.
-
-        Parameters
-        ----------
-        time_range : tuple[str | Timestamp, str | Timestamp] | None
-            Start and end times as strings or Timestamps.
-
-        Returns
-        -------
-        tuple[Timestamp, Timestamp] | None
-            Converted time range, or None if input is None.
-
-        Raises
-        ------
-        TypeError
-            If time_range is not a sequence.
-        ValueError
-            If time_range does not have exactly 2 elements or start >= end.
-        """
+        """Convert a time range tuple to Timestamps, validating ordering."""
         if time_range is None:
             return None
 
@@ -217,29 +163,7 @@ class SearchQuery:
         minimum: int,
         maximum: int | None = None,
     ) -> int | None:
-        """Validate that an integer falls inside an inclusive range.
-
-        Parameters
-        ----------
-        value : int | None
-            Value to validate.
-        field_name : str
-            Name of the field, used in the error message.
-        minimum : int
-            Smallest accepted value.
-        maximum : int, optional
-            Largest accepted value; unbounded above if omitted.
-
-        Returns
-        -------
-        int | None
-            The validated value.
-
-        Raises
-        ------
-        ValueError
-            If value falls outside the range.
-        """
+        """Validate that an integer falls inside an inclusive range."""
         if value is None:
             return None
         if value < minimum or (maximum is not None and value > maximum):

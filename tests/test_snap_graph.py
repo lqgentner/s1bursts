@@ -269,23 +269,23 @@ def test_coherence_mermaid_takes_the_snap_version() -> None:
 
 
 def test_backscatter_output_bands_rtc() -> None:
-    assert BackscatterConfig().output_bands == ["Gamma0", "simulatedImage"]
+    assert BackscatterConfig().output_bands == ["gamma0", "scattering_area"]
 
 
 def test_backscatter_output_bands_gtc() -> None:
-    assert BackscatterConfig(flatten_terrain=False).output_bands == ["Beta0"]
+    assert BackscatterConfig(flatten_terrain=False).output_bands == ["beta0"]
 
 
 def test_coherence_output_bands() -> None:
-    assert CoherenceConfig().output_bands == ["coh"]
+    assert CoherenceConfig().output_bands == ["coherence"]
 
 
 def test_interferogram_output_bands() -> None:
     assert InterferogramConfig().output_bands == [
-        "ifg_i",
-        "ifg_q",
-        "intensity_1",
-        "intensity_2",
+        "ifg_real",
+        "ifg_imag",
+        "intensity_primary",
+        "intensity_secondary",
     ]
 
 

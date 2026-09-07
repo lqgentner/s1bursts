@@ -1,6 +1,6 @@
 # s1bursts Development Setup
 
-s1bursts is a Sentinel-1 SLC burst download and InSAR processing package, built on the CDSE APIs and ESA SNAP GPT. For domain context, product hierarchy, and pipeline design decisions, see [`SENTINEL1_LRW_PIPELINE.md`](SENTINEL1_LRW_PIPELINE.md).
+s1bursts is a Sentinel-1 SLC burst download and InSAR processing package, built on the CDSE APIs and ESA SNAP GPT. For domain context, product hierarchy, and pipeline design decisions, see [`docs/SENTINEL1_LRW_PIPELINE.md`](docs/SENTINEL1_LRW_PIPELINE.md).
 
 Shared geo/IO helpers (MGRS grid, rasterio/S3 raster access, HTTP download tooling) come from the sibling [freezebase](https://github.com/lqgentner/freezebase) package — the only first-party dependency, so that s1bursts can be released on PyPI with a wheel-only dependency set (no GDAL, no scipy).
 
@@ -70,8 +70,8 @@ SNAP is the reference implementation for the processing graphs, so its output ca
 
 | Output | Reference | Producer |
 | --- | --- | --- |
-| RTC (`Gamma0`, `simulatedImage`) | [OPERA RTC-S1](https://hyp3-docs.asf.alaska.edu/guides/opera_rtc_product_guide/) | NASA/JPL, ISCE3 |
-| Coherence (`coh`) | [HyP3 burst InSAR](https://hyp3-docs.asf.alaska.edu/guides/burst_insar_product_guide) | ASF, ISCE2 topsApp |
+| RTC (`gamma0`, `scattering_area`) | [OPERA RTC-S1](https://hyp3-docs.asf.alaska.edu/guides/opera_rtc_product_guide/) | NASA/JPL, ISCE3 |
+| Coherence (`coherence`) | [HyP3 burst InSAR](https://hyp3-docs.asf.alaska.edu/guides/burst_insar_product_guide) | ASF, ISCE2 topsApp |
 
 Both are burst-level on the same ESA burst IDs and use the same Copernicus GLO-30 DEM, so the processing chain is the substantial difference.
 

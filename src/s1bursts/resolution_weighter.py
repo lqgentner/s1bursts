@@ -5,10 +5,12 @@ of [Small et al. (2022)](https://doi.org/10.1109/TGRS.2021.3055562), which the C
 Product Family Specification for Synthetic Aperture Radar adopts as its
 Composite Backscatter (CB) product.
 
-The weights come from the local contributing area ``A``, the area terrain
+The weights come from the local scattering area ``A``, the area terrain
 flattening divides beta nought by, so ``A = 1`` is a flat reference facet.
-SNAP names the band ``simulatedImage``, CEOS-ARD names the layer
-``scatteringArea``, and OPERA names it ``rtc_anf_gamma0_to_beta0``.
+That is the CEOS-ARD term; the same quantity is the local contributing area
+of Small et al., the area normalization factor (ANF) of OPERA, and the
+``simulatedImage`` band SNAP's Terrain-Flattening writes. This package stores
+it as the ``scattering_area`` band of every RTC product.
 """
 
 from __future__ import annotations
@@ -68,6 +70,9 @@ _LoadedEntry = tuple[ComposableProduct, NDArray[np.float32]]
 
 _DEFAULT_PROFILE_KEY = "default"
 
+# Largest sub-pixel offset, in pixels, still read as grid-aligned.
+_ALIGNMENT_TOLERANCE = 1e-3
+
 
 def _split_profiles(
     rasterio_profile: dict[str, Any] | None,
@@ -88,18 +93,18 @@ class ResolutionWeighter:
 
     Parameters
     ----------
-    file_manager : FileManager
+    file_manager
         Used to resolve input file paths and output product paths.
-    n_workers : int, default 8
+    n_workers
         Number of threads for parallel file I/O during product loading.
-    rasterio_profile : dict[str, Any] or None, optional
+    rasterio_profile
         GeoTIFF profile applied to every product, or profiles keyed by product
         type with an optional ``"default"`` entry. Product-specific settings
         override the default. If omitted, uses the library defaults with
         float32 data and NaN no-data.
-    checksum : bool, default False
+    checksum
         Compute a SHA-256 multihash of every written file's exact bytes and
-        record it in :attr:`checksums`, keyed by output path. Costs holding
+        record it in ``checksums``, keyed by output path. Costs holding
         the encoded COG in memory a second time per write.
 
     Attributes
@@ -190,35 +195,35 @@ class ResolutionWeighter:
     ) -> RTCLRWComposite | RTCLRWResult:
         r"""Compute a locally resolution weighted (LRW) RTC intensity composite.
 
-        Band 1 supplies intensity and band 2 the local contributing area $A$.
+        Band 1 supplies intensity and band 2 the local scattering area $A$.
         Observations are weighted by normalized $1/A$ ([1] eq. 3-4, [2]
         eq. A5.1-A5.3) after mosaicking each orbit and acquisition date.
 
         Parameters
         ----------
-        rtc_products : Collection[RTCProduct]
+        rtc_products
             RTC products to composite.  All products must share the same
             polarization.
-        geobox : MGRSGeoBox
+        geobox
             Target MGRS grid cell.
-        aggregation : {"mean", "median"} or float, default "median"
+        aggregation
             Temporal aggregation applied after weighting.  Pass ``"mean"`` or
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
-        clip_max_resolution : float or None, default None
+        clip_max_resolution
             Upper limit for $W = 1/A$, used to suppress extreme weights in
             radar shadow. ``1.0`` is the weight of a flat reference facet.
-        decibel : bool, default False
+        decibel
             Convert the result from power to decibels after aggregation.
             Non-positive values become NaN.
-        write_qa : bool, default False
+        write_qa
             If ``True``, also write two auxiliary QA products alongside the
             composite: a contributing-observations map (``QA-NUM``) and a
             composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
-        cqm_decibel : bool, default False
+        cqm_decibel
             Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
             linear units. Independent of ``decibel``.
-        overwrite : bool, default False
+        overwrite
             If ``False`` and the output file already exists, skip computation
             and return the existing product metadata.
 
@@ -237,6 +242,7 @@ class ResolutionWeighter:
         if not rtc_products:
             msg = "rtc_products must not be empty."
             raise ValueError(msg)
+        self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(rtc_products)
         start_date = min(self._acquisition_date(p) for p in rtc_products)
@@ -267,13 +273,13 @@ class ResolutionWeighter:
             return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
 
         rtc_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=1))
-        sim_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
+        area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
 
-        self._check_sim_coverage(rtc_groups, sim_groups)
+        self._check_area_coverage(rtc_groups, area_groups)
         rtc_obs = np.stack(list(rtc_groups.values()))  # (N, H, W)
-        sim_obs = np.stack([sim_groups[key] for key in rtc_groups])  # (N, H, W)
+        area_obs = np.stack([area_groups[key] for key in rtc_groups])  # (N, H, W)
 
-        weights = self._calc_weights(sim_obs, clip_max_resolution)
+        weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(rtc_obs, weights, aggregation)
         if decibel:
             composite = self._to_decibel(composite)
@@ -296,7 +302,7 @@ class ResolutionWeighter:
         if qa:
             self._write_lrw_qa(
                 rtc_obs,
-                sim_obs,
+                area_obs,
                 weights,
                 qa,
                 geobox,
@@ -367,30 +373,31 @@ class ResolutionWeighter:
 
         Parameters
         ----------
-        coh_products : Collection[CoherenceProduct]
+        coh_products
             Coherence products to composite.  All must share the same
             polarization and ``baseline_days``.
-        rtc_products : Collection[RTCProduct]
-            RTC products providing the local contributing area (band 2) used as
+        rtc_products
+            RTC products providing the local scattering area (band 2) used as
             weights. They must cover the coherence orbit/date combinations.
-        geobox : MGRSGeoBox
+        geobox
             Target MGRS grid cell.
-        aggregation : {"mean", "median"} or float, default "median"
+        aggregation
             Temporal aggregation applied after weighting.  Pass ``"mean"`` or
             ``"median"`` for the corresponding statistic, or a float in
             ``(0, 1)`` to compute a weighted quantile at that level.
-        clip_max_resolution : float or None, default None
+        clip_max_resolution
             Upper limit for $W = 1/A$, used to suppress extreme weights in
             radar shadow. ``1.0`` is the weight of a flat reference facet.
-        write_qa : bool, default False
+        write_qa
             If ``True``, also write two auxiliary QA products alongside the
             composite: a contributing-observations map (``QA-NUM``) and a
             composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
-        cqm_decibel : bool, default False
+        cqm_decibel
             Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
             linear units.
-        overwrite : bool, default False
-            Skip writing if the output file already exists.
+        overwrite
+            If ``False`` and the output file already exists, skip computation
+            and return the existing product metadata.
 
         Returns
         -------
@@ -407,6 +414,7 @@ class ResolutionWeighter:
         if not coh_products:
             msg = "coh_products must not be empty."
             raise ValueError(msg)
+        self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(coh_products)
         baseline_days = self._check_baseline_days(coh_products)
@@ -440,13 +448,13 @@ class ResolutionWeighter:
             return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
 
         coh_groups = self._stitch_by_orbit_date(self._load_band(coh_products, geobox, band=1))
-        sim_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
+        area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
 
-        self._check_sim_coverage(coh_groups, sim_groups)
+        self._check_area_coverage(coh_groups, area_groups)
         coh_obs = np.stack(list(coh_groups.values()))  # (N, H, W)
-        sim_obs = np.stack([sim_groups[key] for key in coh_groups])  # (N, H, W)
+        area_obs = np.stack([area_groups[key] for key in coh_groups])  # (N, H, W)
 
-        weights = self._calc_weights(sim_obs, clip_max_resolution)
+        weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(coh_obs, weights, aggregation)
         source_tags = self._input_tags(coh_products, additional_dem_products=rtc_products)
         n_observations = len(coh_obs)
@@ -467,7 +475,7 @@ class ResolutionWeighter:
         if qa:
             self._write_lrw_qa(
                 coh_obs,
-                sim_obs,
+                area_obs,
                 weights,
                 qa,
                 geobox,
@@ -531,24 +539,25 @@ class ResolutionWeighter:
 
         Parameters
         ----------
-        rtc_products : Collection[RTCProduct]
+        rtc_products
             RTC products to composite.  Products from both pass directions may
-            be mixed; they are split automatically via the ESA burst map.
-        geobox : MGRSGeoBox
+            be mixed; they are split by their ``pass_direction``.
+        geobox
             Target MGRS grid cell.
-        aggregation : {"mean", "median"} or float, default "median"
+        aggregation
             Temporal aggregation method.  Pass ``"mean"`` or ``"median"`` for
             the corresponding statistic, or a float in ``(0, 1)`` for an
             interpolated quantile at that level.
-        decibel : bool, default False
+        decibel
             If ``True``, convert the aggregated composite from intensity
             (power) to decibels before writing; non-positive intensities
             become NaN.  Aggregation always happens in the linear domain.
-        write_qa : bool, default False
+        write_qa
             If ``True``, also write a contributing-observations QA product
             (``QA-NUM``) per pass direction.
-        overwrite : bool, default False
-            Skip writing if the output file already exists.
+        overwrite
+            If ``False`` and the output file already exists, skip computation
+            and return the existing product metadata.
 
         Returns
         -------
@@ -559,6 +568,7 @@ class ResolutionWeighter:
         rtc_products = list(rtc_products)
         if not rtc_products:
             return {}
+        self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(rtc_products)
         start_date = min(self._acquisition_date(p) for p in rtc_products)
@@ -678,25 +688,26 @@ class ResolutionWeighter:
 
         Bursts from the same orbit and primary acquisition date are mosaicked
         using the first non-NaN pixel strategy.  The resulting orbit-date
-        observations are then aggregated temporally (mean or median) per orbit
+        observations are then aggregated temporally (mean or median) per pass
         direction (ascending / descending).
 
         Parameters
         ----------
-        coh_products : Collection[CoherenceProduct]
+        coh_products
             Coherence products to composite.  All must share the same
             ``baseline_days``.
-        geobox : MGRSGeoBox
+        geobox
             Target MGRS grid cell.
-        aggregation : {"mean", "median"} or float, default "median"
+        aggregation
             Temporal aggregation method.  Pass ``"mean"`` or ``"median"`` for
             the corresponding statistic, or a float in ``(0, 1)`` for an
             interpolated quantile at that level.
-        write_qa : bool, default False
+        write_qa
             If ``True``, also write a contributing-observations QA product
             (``QA-NUM``) per pass direction.
-        overwrite : bool, default False
-            Skip writing if the output file already exists.
+        overwrite
+            If ``False`` and the output file already exists, skip computation
+            and return the existing product metadata.
 
         Returns
         -------
@@ -707,6 +718,7 @@ class ResolutionWeighter:
         coh_products = list(coh_products)
         if not coh_products:
             return {}
+        self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(coh_products)
         baseline_days = self._check_baseline_days(coh_products)
@@ -804,6 +816,19 @@ class ResolutionWeighter:
         return baselines.pop()
 
     @staticmethod
+    def _check_aggregation(aggregation: Literal["mean", "median"] | float) -> None:
+        """Raise ValueError unless ``aggregation`` names a statistic or a quantile in (0, 1)."""
+        if aggregation in ("mean", "median"):
+            return
+        if isinstance(aggregation, float) and 0.0 < aggregation < 1.0:
+            return
+        msg = (
+            f"aggregation must be 'mean', 'median' or a quantile level in the open "
+            f"interval (0, 1); got {aggregation!r}."
+        )
+        raise ValueError(msg)
+
+    @staticmethod
     def _check_polarization(products: Sequence[ComposableProduct]) -> Polarization:
         """Return the common polarization or raise ValueError if products differ."""
         polarization = products[0].polarization
@@ -845,6 +870,16 @@ class ResolutionWeighter:
                     )
                     raise ValueError(msg)
                 win = from_bounds(left, bottom, right, top, transform=src.transform)
+                # Rounding the window would silently shift an input whose pixel
+                # corners do not coincide with the target grid's.
+                offsets = (win.col_off, win.row_off)
+                if any(abs(o - round(o)) > _ALIGNMENT_TOLERANCE for o in offsets):
+                    msg = (
+                        f"'{path.name}' is offset from the target grid by a fraction of a "
+                        f"pixel ({offsets[0]:.3f}, {offsets[1]:.3f}); all inputs must share "
+                        "the output grid."
+                    )
+                    raise ValueError(msg)
                 win = win.round_lengths().round_offsets()
                 data = src.read(band, window=win, boundless=True, fill_value=np.nan)
             return prod, data.astype(np.float32)
@@ -972,7 +1007,7 @@ class ResolutionWeighter:
     def _write_lrw_qa(
         self,
         values: NDArray[np.floating[Any]],
-        contributing_area: NDArray[np.floating[Any]],
+        scattering_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
         qa: Mapping[QaMetric, LRWQAProduct],
         geobox: MGRSGeoBox,
@@ -1000,7 +1035,7 @@ class ResolutionWeighter:
             nodata=0,
             overwrite=overwrite,
         )
-        cqm = self._calc_cqm(values, contributing_area, weights, aggregation)
+        cqm = self._calc_cqm(values, scattering_area, weights, aggregation)
         self._save(
             self._to_decibel(cqm) if cqm_decibel else cqm,
             qa[QaMetric.CQM],
@@ -1071,43 +1106,36 @@ class ResolutionWeighter:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _check_sim_coverage(
+    def _check_area_coverage(
         obs_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
-        sim_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
+        area_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
     ) -> None:
-        """Verify every observation group has a matching simulated-area group.
-
-        Raises
-        ------
-        ValueError
-            If any ``(rel_orbit_number, date)`` group present in the
-            observations has no corresponding RTC simulated-area group.
-        """
-        missing = [key for key in obs_groups if key not in sim_groups]
+        """Verify every observation group has a matching scattering-area group."""
+        missing = [key for key in obs_groups if key not in area_groups]
         if missing:
             formatted = ", ".join(f"(orbit {orbit}, {date.date()})" for orbit, date in missing)
-            msg = f"No matching RTC contributing area for orbit/date group(s): {formatted}"
+            msg = f"No matching RTC scattering area for orbit/date group(s): {formatted}"
             raise ValueError(msg)
 
     @staticmethod
     def _calc_weights(
-        contributing_area: NDArray[np.floating[Any]],
+        scattering_area: NDArray[np.floating[Any]],
         clip_max_resolution: float | None,
     ) -> NDArray[np.floating[Any]]:
-        """Compute resolution weights from the local contributing area.
+        """Compute resolution weights from the local scattering area.
 
         The local area is inversely proportional to the local resolution, so
         the unnormalized resolution weight is ``w = 1 / A`` (Small et al. 2022,
         eq. 3-4; CEOS-ARD SAR v1.3.1, eq. A5.1).  Normalization to sum one
         (eq. A5.2) happens in the aggregation, which needs the clipped weights.
 
-        Invalid pixels (``contributing_area <= 0`` or non-finite) receive weight
+        Invalid pixels (``scattering_area <= 0`` or non-finite) receive weight
         zero.  An optional upper clip on ``1/A`` suppresses extreme weights in
         shadow areas.
         """
-        is_valid = (contributing_area > 0) & np.isfinite(contributing_area)
+        is_valid = (scattering_area > 0) & np.isfinite(scattering_area)
         with np.errstate(divide="ignore", invalid="ignore"):
-            weights = np.where(is_valid, 1.0 / contributing_area, 0.0)
+            weights = np.where(is_valid, 1.0 / scattering_area, 0.0)
         if clip_max_resolution is not None:
             weights = weights.clip(max=clip_max_resolution)
         return weights
@@ -1133,7 +1161,7 @@ class ResolutionWeighter:
         """Per-pixel count of observations that carry weight into the composite.
 
         An observation contributes when it is finite and its resolution weight
-        is non-zero, which is the pairing :meth:`_weighted_mean` sums over.  The
+        is non-zero, which is the pairing ``_weighted_mean`` sums over.  The
         CEOS-ARD Contributing Observations Image (SAR PFS v1.3.1, item 2.21).
         """
         contributes = np.isfinite(values) & (weights > 0)
@@ -1143,13 +1171,13 @@ class ResolutionWeighter:
     def _calc_cqm(
         cls,
         values: NDArray[np.floating[Any]],
-        contributing_area: NDArray[np.floating[Any]],
+        scattering_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
         aggregation: Literal["mean", "median"] | float,
     ) -> NDArray[np.float32]:
         """Composite quality map (CQM) over the first (N) axis.
 
-        The reciprocal of the local contributing area ``Aᵢ`` combined under the
+        The reciprocal of the local scattering area ``Aᵢ`` combined under the
         same weights and the same aggregation as the composite itself, so the
         map describes the composite that was actually written.  Under ``mean``
         this is ``1 / Σ(Wᵢ · Aᵢ)`` with ``Wᵢ`` normalized to sum to one, the
@@ -1163,7 +1191,7 @@ class ResolutionWeighter:
         """
         contributing = np.where(np.isfinite(values), weights, 0.0)
         with np.errstate(divide="ignore", invalid="ignore"):
-            aggregated_area = cls._aggregate_weighted(contributing_area, contributing, aggregation)
+            aggregated_area = cls._aggregate_weighted(scattering_area, contributing, aggregation)
             cqm = (1.0 / aggregated_area).astype(np.float32)
         invalid = contributing.sum(axis=0) == 0
         cqm[invalid] = np.nan
@@ -1180,30 +1208,13 @@ class ResolutionWeighter:
         weights: NDArray[np.floating[Any]],
         aggregation: Literal["mean", "median"] | float,
     ) -> NDArray[np.floating[Any]]:
-        """Dispatch to the aggregation function.
-
-        Parameters
-        ----------
-        values : NDArray[np.floating[Any]]
-            Shape ``(N, H, W)`` observations.
-        weights : NDArray[np.floating[Any]]
-            Shape ``(N, H, W)`` non-negative resolution weights.
-        aggregation : {"mean", "median"} or float
-            Determines which aggregation function is called.
-
-        Returns
-        -------
-        NDArray[np.floating[Any]]
-            Shape ``(H, W)`` composite.
-        """
+        """Dispatch to the aggregation function."""
+        cls._check_aggregation(aggregation)
         if aggregation == "mean":
             return cls._weighted_mean(values, weights)
         if aggregation == "median":
             return cls._weighted_quantile(values, weights, q=0.5)
-        if isinstance(aggregation, float):
-            return cls._weighted_quantile(values, weights, q=aggregation)
-        msg = f"Unknown aggregation: {aggregation!r}"
-        raise ValueError(msg)
+        return cls._weighted_quantile(values, weights, q=aggregation)
 
     @staticmethod
     def _weighted_mean(
@@ -1290,7 +1301,7 @@ class ResolutionWeighter:
     ) -> NDArray[np.floating[Any]]:
         """Unweighted temporal aggregate over the first (N) axis.
 
-        Equivalent to :meth:`_aggregate_weighted` with uniform weights, so the
+        Equivalent to ``_aggregate_weighted`` with uniform weights, so the
         mean and the interpolated ``median`` / quantile use the same definition
         as the LRW composites.
         """

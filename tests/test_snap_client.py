@@ -349,7 +349,7 @@ class TestCreateBackscatter:
         assert params["polarization"] == "VV"
         assert params["crs"] == "EPSG:32632"
         metadata = mock_finalize.call_args.kwargs["metadata"]
-        assert metadata.band_names == ["Gamma0", "simulatedImage"]
+        assert metadata.band_names == ["gamma0", "scattering_area"]
         assert metadata.tags["PRODUCT_TYPE"] == "RTC"
 
     def test_gtc_when_terrain_flattening_disabled(self, client: SNAPClient) -> None:
@@ -430,7 +430,7 @@ class TestFinalizeProduct:
             product,
             metadata=RasterMetadata(
                 tags={"PRODUCT_TYPE": "RTC", "BACKSCATTER_CONVENTION": "Power"},
-                band_names=["Gamma0"],
+                band_names=["gamma0"],
                 units=["linear power"],
                 band_tags=[{"LAYER_NAME": "gamma0"}],
             ),
@@ -439,7 +439,7 @@ class TestFinalizeProduct:
         with rasterio.open(product) as ds:
             assert ds.nodata is not None
             assert np.isnan(ds.nodata)
-            assert ds.descriptions == ("Gamma0",)
+            assert ds.descriptions == ("gamma0",)
             assert ds.tags()["PRODUCT_TYPE"] == "RTC"
             assert ds.tags()["BACKSCATTER_CONVENTION"] == "Power"
             assert ds.tags(1) == {"LAYER_NAME": "gamma0"}
@@ -464,7 +464,7 @@ class TestFinalizeProduct:
         client._finalize_product(
             staging,
             product,
-            metadata=RasterMetadata(tags={}, band_names=["i_ifg", "q_ifg"], units=["", ""]),
+            metadata=RasterMetadata(tags={}, band_names=["ifg_real", "ifg_imag"], units=["", ""]),
             normalize_nodata=True,
         )
 
@@ -488,7 +488,7 @@ class TestFinalizeProduct:
         client._finalize_product(
             staging,
             product,
-            metadata=RasterMetadata(tags={}, band_names=["Gamma0"], units=["linear power"]),
+            metadata=RasterMetadata(tags={}, band_names=["gamma0"], units=["linear power"]),
         )
 
         with rasterio.open(product) as ds:
@@ -504,7 +504,7 @@ class TestFinalizeProduct:
         client._finalize_product(
             staging,
             product,
-            metadata=RasterMetadata(tags={}, band_names=["Gamma0"], units=["linear power"]),
+            metadata=RasterMetadata(tags={}, band_names=["gamma0"], units=["linear power"]),
             normalize_nodata=True,
         )
 
@@ -539,7 +539,7 @@ class TestCreateCoherence:
         assert params["date1"] == "01Jan2022"
         assert params["date2"] == "13Jan2022"
         metadata = mock_finalize.call_args.kwargs["metadata"]
-        assert metadata.band_names == ["coh"]
+        assert metadata.band_names == ["coherence"]
         assert metadata.tags["COHERENCE_WINDOW_RANGE"] == "25"
 
     def test_gpt_failure_returns_error_result(self, client: SNAPClient) -> None:
@@ -773,19 +773,6 @@ class TestRunGpt:
             self._invoke(client, tmp_path)
 
         assert not (tmp_path / "out.tif").exists()
-
-    def test_removes_a_partial_beam_dimap_data_directory(
-        self,
-        gpt_client: Callable[[str], SNAPClient],
-        tmp_path: Path,
-    ) -> None:
-        client = gpt_client('touch "$6"; mkdir -p "${6%.dim}.data"; exit 1')
-
-        with pytest.raises(SnapProcessingError):
-            self._invoke(client, tmp_path, target_name="out.dim")
-
-        assert not (tmp_path / "out.dim").exists()
-        assert not (tmp_path / "out.data").exists()
 
     def test_reports_a_timeout(
         self,

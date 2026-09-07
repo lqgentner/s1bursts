@@ -21,8 +21,8 @@ The processor is open source at <https://github.com/opera-adt/RTC>.
 
 Two layers are compared:
 
-- **gamma-0:** OPERA's acquisition layer against this package's `Gamma0` band.
-- **area normalization factor (ANF):** OPERA's `rtc_anf_gamma0_to_beta0` static layer against this package's `simulatedImage` band. Both hold the local contributing area, so this isolates terrain flattening and geocoding separately from calibration and speckle.
+- **gamma-0:** OPERA's acquisition layer against this package's `gamma0` band.
+- **area normalization factor (ANF):** OPERA's `rtc_anf_gamma0_to_beta0` static layer against this package's `scattering_area` band (SNAP's `simulatedImage`). Both hold the local scattering area, so this isolates terrain flattening and geocoding separately from calibration and speckle.
 
 ### Comparison requirements
 

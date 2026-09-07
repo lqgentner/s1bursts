@@ -129,28 +129,28 @@
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <targetBands>
         <targetBand>
-          <name>i_ifg</name>
+          <name>ifg_real</name>
           <type>float32</type>
           <expression>(int1 != 0) and (int2 != 0) ? i_ifg_${swath}_${polarization}_${date1}_${date2} : -1099511627776.0</expression>
           <unit>real</unit>
           <noDataValue>-1099511627776.0</noDataValue>
         </targetBand>
         <targetBand>
-          <name>q_ifg</name>
+          <name>ifg_imag</name>
           <type>float32</type>
           <expression>(int1 != 0) and (int2 != 0) ? q_ifg_${swath}_${polarization}_${date1}_${date2} : -1099511627776.0</expression>
           <unit>imaginary</unit>
           <noDataValue>-1099511627776.0</noDataValue>
         </targetBand>
         <targetBand>
-          <name>intensity1</name>
+          <name>intensity_primary</name>
           <type>float32</type>
           <expression>(int1 != 0) and (int2 != 0) ? int1 : -1099511627776.0</expression>
           <unit>intensity</unit>
           <noDataValue>-1099511627776.0</noDataValue>
         </targetBand>
         <targetBand>
-          <name>intensity2</name>
+          <name>intensity_secondary</name>
           <type>float32</type>
           <expression>(int1 != 0) and (int2 != 0) ? int2 : -1099511627776.0</expression>
           <unit>intensity</unit>

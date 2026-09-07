@@ -1,10 +1,8 @@
-"""Dynamic SNAP GPT graph generation from typed Pydantic configs.
+"""SNAP GPT graph generation from typed Pydantic configs.
 
-This module replaces the hand-maintained XML graphs that used to live under
-``config/snap_graphs/``.  Each product type (backscatter, coherence,
-interferogram) has a frozen Pydantic config that describes the
-graph shape; ``build_*_graph(cfg)`` functions emit the corresponding SNAP
-GPT XML on demand.
+Each product type (backscatter, coherence, interferogram) has a frozen
+Pydantic config that describes the graph shape; ``build_*_graph(cfg)``
+functions emit the corresponding SNAP GPT XML on demand.
 
 Per-burst values such as ``${swath}``, ``${polarization}``, ``${date1}``,
 ``${date2}``, ``${crs}``, ``${primary}``, ``${secondary}``, ``${source}``
@@ -322,7 +320,7 @@ def _interferogram(
 
 def _band_select(graph: Element, node_id: str, source: str, *, pattern: str) -> str:
     node = _new_node(graph, node_id, "BandSelect", [source])
-    # Match the existing static graph: BandSelect's <parameters> has no class.
+    # BandSelect's <parameters> carries no class attribute in SNAP's own graphs.
     p = _new_params(node, class_attr=False)
     _add_param(p, "bandNamePattern", pattern)
     return node_id
@@ -428,7 +426,7 @@ def xml_to_mermaid(graph_xml: str) -> str:
 
     Parameters
     ----------
-    graph_xml : str
+    graph_xml
         SNAP GPT graph XML document.
 
     Returns
@@ -487,7 +485,7 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
     if flatten_terrain:
         return [
             {
-                "name": "Gamma0",
+                "name": "gamma0",
                 "type": "float32",
                 "expression": (
                     f"Gamma0_${{swath}}_${{polarization}} > 0 ? "
@@ -496,7 +494,7 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
                 "noDataValue": _SENTINEL_EXPR,
             },
             {
-                "name": "sim",
+                "name": "scattering_area",
                 "type": "float32",
                 "expression": f"simulatedImage > 0 ? simulatedImage : {_SENTINEL_EXPR}",
                 "noDataValue": _SENTINEL_EXPR,
@@ -504,7 +502,7 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
         ]
     return [
         {
-            "name": "Beta0",
+            "name": "beta0",
             "type": "float32",
             "expression": (
                 f"Beta0_${{swath}}_${{polarization}} > 0 ? "
@@ -518,7 +516,7 @@ def _replace_zeros_target_bands_backscatter(*, flatten_terrain: bool) -> list[di
 def _replace_zeros_target_bands_coherence() -> list[dict[str, Any]]:
     return [
         {
-            "name": "coh",
+            "name": "coherence",
             "type": "float32",
             "expression": (
                 f"coh_${{swath}}_${{polarization}}_${{date1}}_${{date2}} > 0 ? "
@@ -540,8 +538,8 @@ def stack_band_suffixes(snap_version: tuple[int, ...] | None) -> tuple[str, str]
 
     Parameters
     ----------
-    snap_version : tuple of int or None
-        SNAP version as returned by :func:`s1bursts.snap_client.snap_version`.
+    snap_version
+        SNAP version as returned by ``s1bursts.snap_client.snap_version``.
         ``None`` selects the naming of SNAP 13 and earlier.
 
     Returns
@@ -565,8 +563,8 @@ def supports_coherence_options(snap_version: tuple[int, ...] | None) -> bool:
 
     Parameters
     ----------
-    snap_version : tuple of int or None
-        SNAP version as returned by :func:`s1bursts.snap_client.snap_version`.
+    snap_version
+        SNAP version as returned by ``s1bursts.snap_client.snap_version``.
         ``None`` (an installation whose version could not be read) counts as
         not supporting them.
 
@@ -582,13 +580,7 @@ def _coherence_option_values(
     cfg: CoherenceConfig,
     snap_version: tuple[int, ...] | None,
 ) -> tuple[bool | None, bool | None]:
-    """Resolve the SNAP 14 Coherence options to write, ``None`` each to leave out.
-
-    Raises
-    ------
-    ConfigurationError
-        If an option is enabled but the SNAP version cannot run it.
-    """
+    """Resolve the SNAP 14 Coherence options to write, ``None`` each to leave out."""
     if supports_coherence_options(snap_version):
         return (cfg.correct_coherence_bias, cfg.remove_local_phase_ramp)
 
@@ -647,7 +639,7 @@ def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
     cond = "(int1 != 0) and (int2 != 0)"
     return [
         {
-            "name": "i_ifg",
+            "name": "ifg_real",
             "type": "float32",
             "expression": (
                 f"{cond} ? i_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : "
@@ -657,7 +649,7 @@ def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
             "noDataValue": _SENTINEL_EXPR,
         },
         {
-            "name": "q_ifg",
+            "name": "ifg_imag",
             "type": "float32",
             "expression": (
                 f"{cond} ? q_ifg_${{swath}}_${{polarization}}_${{date1}}_${{date2}} : "
@@ -667,14 +659,14 @@ def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
             "noDataValue": _SENTINEL_EXPR,
         },
         {
-            "name": "intensity1",
+            "name": "intensity_primary",
             "type": "float32",
             "expression": f"{cond} ? int1 : {_SENTINEL_EXPR}",
             "unit": "intensity",
             "noDataValue": _SENTINEL_EXPR,
         },
         {
-            "name": "intensity2",
+            "name": "intensity_secondary",
             "type": "float32",
             "expression": f"{cond} ? int2 : {_SENTINEL_EXPR}",
             "unit": "intensity",
@@ -877,7 +869,7 @@ def build_interferogram_graph(
         grid_spacing=cfg.grid_spacing,
         align_to_standard_grid=cfg.align_to_standard_grid,
         standard_grid_origin=cfg.standard_grid_origin,
-        # i_ifg / q_ifg are tagged real / imaginary, so SNAP needs to keep
+        # ifg_real / ifg_imag are tagged real / imaginary, so SNAP needs to keep
         # them paired through projection.
         output_complex=True,
     )
@@ -926,30 +918,30 @@ class GeocodingConfig(BaseModel):
     """Terrain-Correction tail parameters shared by every product type.
 
     Abstract: inherited by each per-product config, which supplies the graph
-    that precedes the shared Terrain-Correction tail via :meth:`to_xml`.
+    that precedes the shared Terrain-Correction tail via ``to_xml``.
 
     Parameters
     ----------
-    grid_spacing : float, default 10.0
+    grid_spacing
         Output pixel spacing in metres of the target CRS. Must be positive.
-    dem : str or Path, default "Copernicus 30m Global DEM"
+    dem
         DEM used for geocoding. A string selects one of SNAP's auto-download
         DEMs; a path (or a string with a file suffix) is passed as an external
         DEM.
-    dem_name : str or None, optional
+    dem_name
         Identification written to product metadata for an external DEM. Ignored
         for SNAP's built-in DEMs, whose ``dem`` value is already their name.
-    img_resampling : ResamplingMethod, default "BILINEAR_INTERPOLATION"
+    img_resampling
         Resampling of the image during terrain correction.
-    dem_resampling : DEMResamplingMethod, default "BILINEAR_INTERPOLATION"
+    dem_resampling
         Resampling of the DEM during terrain correction.
-    align_to_standard_grid : bool, default True
+    align_to_standard_grid
         Snap the output to a fixed global grid, so products from different
         bursts and dates share pixel boundaries and can be stacked without
         resampling.
-    external_dem_nodata : float, default 0.0
+    external_dem_nodata
         No-data value of an external DEM.
-    external_dem_apply_egm : bool, default False
+    external_dem_apply_egm
         Convert an external DEM from EGM96 geoid heights to WGS84 ellipsoidal
         heights, which is the reference terrain correction requires. SNAP does
         this automatically for its built-in ACE / Copernicus / SRTM DEMs, all of
@@ -960,7 +952,7 @@ class GeocodingConfig(BaseModel):
         the usual case for national DEMs) and leave it ``False`` only when the
         DEM already carries ellipsoidal heights. Note this default differs from
         SNAP's own, which is ``True``. Leave it ``False`` for a DEM returned by
-        :func:`s1bursts.prepare_dem_for_snap`, which has already been converted
+        ``s1bursts.prepare_dem_for_snap``, which has already been converted
         to ellipsoidal heights. SNAP only applies EGM96, so preprocess DEMs in
         other vertical datums such as EGM2008 instead of enabling this option.
     """
@@ -1001,13 +993,13 @@ class GeocodingConfig(BaseModel):
 
         Parameters
         ----------
-        snap_version : tuple of int, optional
+        snap_version
             SNAP version the graph will run under, from
-            :func:`s1bursts.snap_client.snap_version`. The backscatter graph
+            ``s1bursts.snap_client.snap_version``. The backscatter graph
             does not vary with it; the interferogram graph names the stack
-            bands accordingly (see :func:`stack_band_suffixes`) and the
+            bands accordingly (see ``stack_band_suffixes``) and the
             coherence graph writes only the options that version has (see
-            :func:`supports_coherence_options`). Defaults to SNAP 13 and
+            ``supports_coherence_options``). Defaults to SNAP 13 and
             earlier.
         """
 
@@ -1016,8 +1008,8 @@ class GeocodingConfig(BaseModel):
 
         Parameters
         ----------
-        snap_version : tuple of int, optional
-            SNAP version the graph will run under, as for :meth:`to_xml`. No
+        snap_version
+            SNAP version the graph will run under, as for ``to_xml``. No
             diagram varies with it, but a config whose options need SNAP 14
             cannot build its graph without it.
         """
@@ -1027,15 +1019,15 @@ class GeocodingConfig(BaseModel):
 class BackscatterConfig(GeocodingConfig):
     """Configuration for the backscatter (RTC / GTC) pipeline.
 
-    Inherits every parameter of :class:`GeocodingConfig`.
+    Inherits every parameter of ``GeocodingConfig``.
 
     Parameters
     ----------
-    flatten_terrain : bool, default True
+    flatten_terrain
         Insert a ``Terrain-Flattening`` step and produce a radiometrically
         terrain-corrected (RTC, gamma0) product. ``False`` skips it and
         produces a geometrically terrain-corrected (GTC, beta0) product.
-    multilook : tuple of int or None, default (5, 1)
+    multilook
         ``(n_rg_looks, n_az_looks)`` applied after debursting, before terrain
         flattening; ``None`` skips the ``Multilook`` step. Multilooking here
         cuts runtime sharply, because the reduced raster passes through both
@@ -1044,12 +1036,12 @@ class BackscatterConfig(GeocodingConfig):
         SNAP's ``grSquarePixel`` option, which derives the azimuth looks from
         the range looks and the local geometry and discards the requested
         ``n_az_looks`` is pinned off. Therefore, the looks given are the looks applied.
-    dem_oversampling : float, default 1.0
+    dem_oversampling
         DEM oversampling factor used by ``Terrain-Flattening``. Must be positive.
-    additional_overlap : float, default 0.2
+    additional_overlap
         Additional overlap percentage used by ``Terrain-Flattening`` when
         searching for terrain contributions outside the tile.
-    replace_zeros_with_nan : bool, default True
+    replace_zeros_with_nan
         Convert SNAP's zero fill value to NaN, so no-data does not enter later
         averages as a valid low value.
     """
@@ -1064,8 +1056,8 @@ class BackscatterConfig(GeocodingConfig):
     def output_bands(self) -> list[str]:
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
         if self.flatten_terrain:
-            return ["Gamma0", "simulatedImage"]
-        return ["Beta0"]
+            return ["gamma0", "scattering_area"]
+        return ["beta0"]
 
     @override
     def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
@@ -1080,9 +1072,9 @@ class BackscatterConfig(GeocodingConfig):
 class CoherenceConfig(GeocodingConfig):
     """Configuration for the coherence pipeline.
 
-    Inherits every parameter of :class:`GeocodingConfig`.
+    Inherits every parameter of ``GeocodingConfig``.
 
-    No ``Multilook`` step is applied, unlike :class:`BackscatterConfig`. It
+    No ``Multilook`` step is applied, unlike ``BackscatterConfig``. It
     would save no runtime, since it can only sit after the coregistration and
     interferogram stages that dominate this graph, and placing it after the
     ``Coherence`` operator averages coherence magnitudes and so cannot reduce
@@ -1090,30 +1082,30 @@ class CoherenceConfig(GeocodingConfig):
 
     Parameters
     ----------
-    window : tuple of int, default (25, 5)
+    window
         Coherence estimation window ``(n_rg, n_az)`` in single-look samples.
         This is the only control over the number of looks entering the
         estimator.
-    subtract_flat_earth_phase : bool, default True
+    subtract_flat_earth_phase
         Remove the flat-earth phase before estimating coherence.
-    subtract_topographic_phase : bool, default True
+    subtract_topographic_phase
         Remove the topographic phase using ``dem``.
-    square_pixel : bool, default False
+    square_pixel
         Let SNAP's ``Coherence`` operator adjust the estimation window towards
         square ground pixels. Leave off: as with SNAP's ``grSquarePixel`` on
         the ``Multilook`` operator, enabling it means the applied window is not
         the requested one.
-    correct_coherence_bias : bool, default False
+    correct_coherence_bias
         Remove the positive bias a finite estimation window leaves in the
         coherence magnitude. Requires SNAP 14; building the graph for an older
         or undetermined version raises ``ConfigurationError``. Off by default,
         unlike SNAP's own default, so that the estimator stays the one the
         window describes and stays comparable across SNAP versions.
-    remove_local_phase_ramp : bool, default False
+    remove_local_phase_ramp
         Let SNAP estimate and remove a local phase ramp within each estimation
         window before averaging, which recovers coherence lost to residual
         fringes. Requires SNAP 14, as above.
-    replace_zeros_with_nan : bool, default True
+    replace_zeros_with_nan
         Convert SNAP's zero fill value to NaN.
     """
 
@@ -1128,7 +1120,7 @@ class CoherenceConfig(GeocodingConfig):
     @property
     def output_bands(self) -> list[str]:
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
-        return ["coh"]
+        return ["coherence"]
 
     @override
     def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
@@ -1146,18 +1138,18 @@ class CoherenceConfig(GeocodingConfig):
 class InterferogramConfig(GeocodingConfig):
     """Configuration for the interferogram pipeline.
 
-    Inherits every parameter of :class:`GeocodingConfig`. No ``Multilook`` step
+    Inherits every parameter of ``GeocodingConfig``. No ``Multilook`` step
     is inserted, so the output stays at single-look resolution.
 
     Parameters
     ----------
-    subtract_flat_earth_phase : bool, default True
+    subtract_flat_earth_phase
         Remove the flat-earth phase from the interferogram.
-    subtract_topographic_phase : bool, default True
+    subtract_topographic_phase
         Remove the topographic phase using ``dem``.
-    square_pixel : bool, default False
+    square_pixel
         Let SNAP adjust the interferogram window towards square ground pixels.
-    replace_zeros_with_nan : bool, default True
+    replace_zeros_with_nan
         Convert SNAP's zero fill value to NaN.
     """
 
@@ -1169,7 +1161,7 @@ class InterferogramConfig(GeocodingConfig):
     @property
     def output_bands(self) -> list[str]:
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
-        return ["ifg_i", "ifg_q", "intensity_1", "intensity_2"]
+        return ["ifg_real", "ifg_imag", "intensity_primary", "intensity_secondary"]
 
     @override
     def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:

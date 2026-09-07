@@ -72,7 +72,7 @@
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <targetBands>
         <targetBand>
-          <name>Beta0</name>
+          <name>beta0</name>
           <type>float32</type>
           <expression>Beta0_${swath}_${polarization} &gt; 0 ? Beta0_${swath}_${polarization} : -1099511627776.0</expression>
           <noDataValue>-1099511627776.0</noDataValue>

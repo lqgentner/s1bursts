@@ -1,4 +1,4 @@
-"""Provides class for downloading Sentinel-1 bursts from Copernicus Data Space Ecosystem (CDSE)."""
+"""Search and download Sentinel-1 bursts from the Copernicus Data Space Ecosystem (CDSE)."""
 
 from __future__ import annotations
 
@@ -29,6 +29,9 @@ if TYPE_CHECKING:
 
 
 TIMEOUT_DEFAULT = 30
+
+MAX_PAGE_SIZE = 1000
+"""Largest ``$top`` the CDSE catalog honours per request; longer results are paged."""
 
 _RESPONSE_COLS_KEEP = [
     "Id",
@@ -62,31 +65,27 @@ logger = logging.getLogger(__name__)
 
 
 class CDSEAuth(AuthBase):
-    """
-    CDSE authentication handler using OpenIDConnect bearer tokens.
+    """CDSE authentication handler using OpenIDConnect bearer tokens.
 
     Automatically refreshes access tokens when expired.
+
+    Parameters
+    ----------
+    username
+        CDSE username used to request the initial token. If not provided, falls
+        back to the ``CDSE_USERNAME`` environment variable.
+    password
+        CDSE password used to request the initial token. If not provided, falls
+        back to the ``CDSE_PASSWORD`` environment variable.
+
+    Raises
+    ------
+    ValueError
+        If credentials are not provided as arguments and not found in the
+        environment.
     """
 
     def __init__(self, username: str | None = None, password: str | None = None) -> None:
-        """
-        Initialize the CDSE authentication handler.
-
-        Parameters
-        ----------
-        username : str, optional
-            CDSE username used to request the initial token. If not provided, falls
-            back to the ``CDSE_USERNAME`` environment variable.
-        password : str, optional
-            CDSE password used to request the initial token. If not provided, falls
-            back to the ``CDSE_PASSWORD`` environment variable.
-
-        Raises
-        ------
-        ValueError
-            If credentials are not provided as arguments and not found in the
-            environment.
-        """
         if username is None or password is None:
             cdse = get_settings().cdse
             if username is None:
@@ -112,19 +111,17 @@ class CDSEAuth(AuthBase):
         self._get_initial_tokens()
 
     def __call__(self, r: PreparedRequest) -> PreparedRequest:
-        """
-        Attach the current access token to the given HTTP request.
+        """Attach the current access token to the given HTTP request.
 
         Parameters
         ----------
-        r : requests.PreparedRequest
+        r
             The request object to modify.
 
         Returns
         -------
         requests.PreparedRequest
             The modified request with the `Authorization` header set.
-
         """
         if self._token_expired():
             with self._lock:
@@ -193,18 +190,16 @@ class CDSEAuth(AuthBase):
 
 @dataclass
 class CDSEResponse:
-    """
-    Response object for Sentinel-1 burst search operations.
+    """Response object for Sentinel-1 burst search operations.
 
     Parameters
     ----------
-    context : str
+    context
         OData context metadata string (usually includes entity type).
-    value : list of dict
+    value
         List of result items returned by the search.
-    count : int or None
+    count
         Total number of matches on the server (if requested).
-
     """
 
     context: str
@@ -213,19 +208,17 @@ class CDSEResponse:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CDSEResponse:
-        """
-        Create a CDSEResponse from a raw API response dictionary.
+        """Create a CDSEResponse from a raw API response dictionary.
 
         Parameters
         ----------
-        data : dict
+        data
             JSON response dictionary from the search API.
 
         Returns
         -------
         CDSEResponse
             Parsed CDSEResponse instance.
-
         """
         return cls(
             context=data["@odata.context"],
@@ -234,8 +227,7 @@ class CDSEResponse:
         )
 
     def to_geodataframe(self) -> gpd.GeoDataFrame:
-        """
-        Convert the search results to a GeoPandas GeoDataFrame.
+        """Convert the search results to a GeoPandas GeoDataFrame.
 
         Returns
         -------
@@ -246,7 +238,6 @@ class CDSEResponse:
         ------
         RuntimeError
             If an unknown EPSG code is found in the geometry definitions.
-
         """
         df_results = pd.DataFrame(self.value)
         geometry = gpd.GeoSeries([], crs=EPSG_WGS84, dtype="geometry")
@@ -268,26 +259,22 @@ class CDSEResponse:
         return clean_names(gdf, case_type="snake")
 
     def __len__(self) -> int:
-        """
-        Return the number of items in the search result.
+        """Return the number of items in the search result.
 
         Returns
         -------
         int
             Number of bursts returned.
-
         """
         return len(self.value)
 
     def __repr__(self) -> str:
-        """
-        Return a human-readable summary of the CDSEResponse.
+        """Return a human-readable summary of the CDSEResponse.
 
         Returns
         -------
         str
             A string representation showing count and entity type.
-
         """
         # Extract entity type from context (e.g., "Bursts" from "$metadata#Bursts")
         entity_type = self.context.split("#")[-1] if "#" in self.context else "Unknown"
@@ -310,7 +297,6 @@ class CDSEResponse:
         ------
         AttributeError
             If count is None.
-
         """
         if self.count is None:
             msg = (
@@ -322,25 +308,22 @@ class CDSEResponse:
 
 
 class CDSEBurstClient:
-    """
-    Client for searching and downloading Sentinel-1 bursts from CDSE using the OData API.
+    """Client for searching and downloading Sentinel-1 bursts from CDSE using the OData API.
 
-    Implemented according to the [CDSE API documentation][1].
+    Implemented according to the CDSE API documentation [1].
 
-    [1]: <https://documentation.dataspace.copernicus.eu/APIs/Sentinel-1%20SLC%20Burst.html>
+    Parameters
+    ----------
+    auth
+        Authentication instance. Required for downloading bursts.
 
+    References
+    ----------
+    .. [1] Sentinel-1 SLC Burst API. Copernicus Data Space Ecosystem documentation.
+       https://documentation.dataspace.copernicus.eu/APIs/Sentinel-1%20SLC%20Burst.html
     """
 
     def __init__(self, auth: CDSEAuth | None = None) -> None:
-        """
-        Initialize the Sentinel-1 burst client.
-
-        Parameters
-        ----------
-        auth : CDSEAuth or None, optional
-            Authentication instance. Required for downloading bursts.
-
-        """
         self.auth = auth
         self.catalog_endpoint = "https://catalogue.dataspace.copernicus.eu/odata/v1/Bursts"
         self.download_endpoint = "https://bursts.dataspace.copernicus.eu/v1/product"
@@ -354,27 +337,7 @@ class CDSEBurstClient:
         ascending: bool = True,
         count: bool | None = None,
     ) -> dict[str, Any]:
-        """
-        Construct OData query parameters from filter expressions.
-
-        Parameters
-        ----------
-        filters : iterable of str, optional
-            List of OData filter expressions to apply.
-        top : int, optional
-            Maximum number of results to return.
-        ascending : bool, optional
-            Whether to sort results by start time in ascending
-            or descending order.
-        count : bool or None, optional
-            Whether to include a total result count in the response.
-
-        Returns
-        -------
-        dict
-            OData-compatible query parameter dictionary.
-
-        """
+        """Construct OData query parameters from filter expressions."""
         params: dict[str, Any] = {}
         if filters is not None:
             params["$filter"] = " and ".join(filters)
@@ -395,19 +358,23 @@ class CDSEBurstClient:
         ascending: bool = True,
         count: bool | None = None,
     ) -> CDSEResponse:
-        """
-        Search for Sentinel-1 bursts matching specified criteria.
+        """Search for Sentinel-1 bursts matching specified criteria.
+
+        The catalog serves at most ``MAX_PAGE_SIZE`` items per request, so a
+        larger ``top`` is collected by following the response's next-link
+        pages until ``top`` items are gathered or the results end.
 
         Parameters
         ----------
-        filters : iterable of str, optional
+        filters
             List of OData filter expressions to apply.
-        top : int, optional
-            Maximum number of results to return.
-        ascending : bool, optional
+        top
+            Maximum number of results to return. ``None`` returns the
+            catalog's default single page.
+        ascending
             Whether to sort results by start time in ascending
             or descending order.
-        count : bool or None, optional
+        count
             Whether to include a total result count in the response.
 
         Returns
@@ -421,20 +388,27 @@ class CDSEBurstClient:
             If the API response is malformed or invalid.
         requests.HTTPError
             If the search request fails.
-
         """
         query = self._build_query_params(
             filters=filters,
-            top=top,
+            top=min(top, MAX_PAGE_SIZE) if top is not None else None,
             ascending=ascending,
             count=count,
         )
+        first = self._get_page(self.catalog_endpoint, query)
+        values = list(first["value"])
+        next_link = first.get("@odata.nextLink")
+        while top is not None and len(values) < top and next_link:
+            page = self._get_page(next_link, None)
+            values.extend(page["value"])
+            next_link = page.get("@odata.nextLink")
+        first["value"] = values[:top] if top is not None else values
+        return CDSEResponse.from_dict(first)
+
+    def _get_page(self, url: str, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Fetch one page of the burst catalog and validate its shape."""
         # The catalog endpoint requires no authentication
-        response = requests.get(
-            url=self.catalog_endpoint,
-            params=query,
-            timeout=self.request_timeout,
-        )
+        response = requests.get(url=url, params=params, timeout=self.request_timeout)
         response.raise_for_status()
         content_type = response.headers.get("Content-Type", "")
         if not content_type.startswith("application/json"):
@@ -444,7 +418,7 @@ class CDSEBurstClient:
         if not isinstance(json_, dict) or json_.get("@odata.context") != "$metadata#Bursts":
             msg = f"Failed to query bursts: \n{json_}"
             raise RuntimeError(msg)
-        return CDSEResponse.from_dict(json_)
+        return json_
 
     def download_burst(
         self,
@@ -459,12 +433,12 @@ class CDSEBurstClient:
 
         Parameters
         ----------
-        cdse_id : str
+        cdse_id
             The burst's CDSE product ID.
-        save_path : Path or UPath
+        save_path
             Full destination path (including filename) for the downloaded file.
             Can be local or a remote UPath (e.g. S3).
-        progress : bool, optional
+        progress
             Whether to display download progress.
 
         Returns
@@ -478,7 +452,6 @@ class CDSEBurstClient:
             If the client has no valid CDSEAuth instance.
         requests.HTTPError
             If the download request fails.
-
         """
         url = f"{self.download_endpoint}/{cdse_id}"
         if not (isinstance(self.auth, CDSEAuth)):
@@ -505,21 +478,21 @@ class CDSEBurstClient:
     ) -> Path | UPath:
         """Download a single Sentinel-1 burst from CDSE S3.
 
-        Uses s3fs and GDAL to extract the burst, writing the result as a
-        ``.zip`` to ``save_path`` (local or remote).
+        Extracts the burst from the parent product with s3fs and rasterio,
+        writing the result as a ``.zip`` to ``save_path`` (local or remote).
 
         Parameters
         ----------
-        save_path : Path or UPath
+        save_path
             Full destination path (including filename) for the ``.zip``.
             Can be local or a remote UPath (e.g. S3).
-        parent_product_name : str
+        parent_product_name
             Name of the parent Sentinel-1 product.
-        polarization : str
+        polarization
             Polarization channels (e.g., 'VV', 'VH', 'HH', 'HV').
-        sub_swath : str
+        sub_swath
             Sub-swath identifier (e.g., 'IW1', 'IW2', 'IW3').
-        burst_id : int
+        burst_id
             Relative burst ID within the swath.
 
         Returns
@@ -530,8 +503,11 @@ class CDSEBurstClient:
         Raises
         ------
         ValueError
-            If credentials are missing or the product/burst cannot be found.
-
+            If ``sub_swath`` is not a recognised sub-swath identifier.
+        BurstNotFoundError
+            If the parent product or the requested burst cannot be found.
+        ConfigurationError
+            If the CDSE S3 credentials are not configured.
         """
         return extract_burst_from_s3(
             save_path,

@@ -6,7 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is pre-1.0 (`0.x`), minor releases may contain breaking changes.
 
-## Unreleased
+## [0.4.0] - 2026-09-07
+
+### Added
+
+- Exact band statistics (`STATISTICS_MINIMUM`, `_MAXIMUM`, `_MEAN`, `_STDDEV`,
+  `_VALID_PERCENT`) on every composite and QA layer, written at creation. New
+  `product_tags.band_statistics()`.
+- `ResolutionWeighter(checksum=True)` records a multihash-encoded SHA-256 of
+  every written file in `ResolutionWeighter.checksums`, keyed by output path.
+- `BurstDatabase.search()` follows the catalog's next-link pages, so
+  `max_items` above the 1000 items CDSE serves per request now works.
+- Coherence and interferogram products carry a `LAYER_NAME` tag on every band.
+
+### Fixed
+
+- Per-burst coherence and interferogram products tagged `TEMPORAL_BASELINE_DAYS`
+  with the truncated timestamp difference, so a pair whose secondary was
+  acquired a fraction of a second earlier in the day was tagged 11 days under a
+  `S1_COH12` name. The tag now uses the rounded baseline the filename uses.
+- Missing CDSE S3 credentials aborted a whole download on the S3 endpoint
+  instead of being recorded per burst, so the OData fallback never ran.
+- A quantile `aggregation` outside `(0, 1)` was accepted and silently returned
+  the minimum or maximum; every `compose_*` call now rejects it.
+- `compose_*` rounded the read window to whole pixels, silently shifting an
+  input whose pixel corners do not coincide with the target grid's; such an
+  input is now refused like one in another CRS or at another pixel size.
+- The HyP3 validation campaign no longer fails under Python 3.14 on an
+  unclosed file left behind by `hyp3_sdk`'s download helper.
+
+### Changed
+
+- **Breaking:** `median` and quantile aggregation now exclude observations
+  carrying zero resolution weight, which were previously interpolated into the
+  result. `mean` is unaffected. Regenerate composites built with `median` (the
+  default) or a quantile.
+- **Breaking:** `QA-CQM` now applies the composite's own aggregation to the
+  scattering area instead of always the weighted mean, and ignores
+  observations that did not enter the composite. `mean` is unchanged.
+  Regenerate `QA-CQM` products built with `median` or a quantile.
+- **Breaking:** per-burst products name their bands in snake case, and the
+  GeoTIFF band description, the graph's band and the `LAYER_NAME` band tag now
+  agree: RTC `gamma0` and `scattering_area` (was `Gamma0`, `simulatedImage`),
+  GTC `beta0` (was `Beta0`), coherence `coherence` (was `coh`), interferogram
+  `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` (was
+  `ifg_i`, `ifg_q`, `intensity_1`, `intensity_2`). Code reading bands by
+  description must use the new names.
+- The area SNAP writes as `simulatedImage` is called the *local scattering
+  area* throughout, the CEOS-ARD term; `s1bursts` 0.3.0 and Small et al. use
+  *local contributing area*, OPERA uses *area normalization factor*; all terms
+  are the same quantity.
+- Requires `freezebase[s3]>=0.7,<0.8` for `write_cog(checksum=...)`.
+
+## [0.3.0] - 2026-08-31
 
 ### Added
 
@@ -30,11 +82,6 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - Per-product composite codec profiles through
   `ResolutionWeighter.rasterio_profile`, with an optional `"default"` profile.
   Flat profiles retain their previous behavior.
-- Exact band statistics (`STATISTICS_MINIMUM`, `_MAXIMUM`, `_MEAN`, `_STDDEV`,
-  `_VALID_PERCENT`) on every composite and QA layer, written at creation. New
-  `product_tags.band_statistics()`.
-- `ResolutionWeighter(checksum=True)` records a multihash-encoded SHA-256 of
-  every written file in `ResolutionWeighter.checksums`, keyed by output path.
 
 ### Fixed
 
@@ -64,14 +111,6 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   its values are now `"Ascending"` and `"Descending"` (instead of `"ASCENDING"`
   and `"DESCENDING"`). This aligns the wording with the
   [CEOS-ARD SAR metadata specification](https://ceos.org/ard/) v1.3.
-- **Breaking:** `median` and quantile aggregation now exclude observations
-  carrying zero resolution weight, which were previously interpolated into the
-  result. `mean` is unaffected. Regenerate composites built with `median` (the
-  default) or a quantile.
-- **Breaking:** `QA-CQM` now applies the composite's own aggregation to the
-  contributing area instead of always the weighted mean, and ignores
-  observations that did not enter the composite. `mean` is unchanged.
-  Regenerate `QA-CQM` products built with `median` or a quantile.
 - **Breaking:** The `QA-NUM` layer of an LRW composite now counts the
   observations that carry a non-zero resolution weight, rather than those
   holding a finite value, matching the CEOS-ARD *Contributing Observations
@@ -82,8 +121,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   shift and vertical datum conversion of an external DEM for SNAP.
 - The area SNAP writes as `simulatedImage` is now called the *local
   contributing area*, following CEOS-ARD terminology.
-- Requires `freezebase[s3]>=0.7,<0.8` for product metadata, composite codec
-  profiles, `write_cog(checksum=...)`, and context handling of burst downloads.
+- Requires `freezebase[s3]>=0.6.1,<0.7` for product metadata, composite codec
+  profiles, and context handling of burst downloads.
 - **Breaking:** `GeocodingConfig` is now abstract and cannot be instantiated. It
   remains the base for shared Terrain-Correction parameters; concrete configs
   implement `to_xml()`.
@@ -160,7 +199,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   library's behaviour until now), SNAP derives `nAzLooks` from `nRgLooks` and
   the local geometry and **silently discards the requested azimuth looks**, so a
   `(5, 1)` multilook was applied as `(5, 2)` for Sentinel-1 IW. Non-square pixels
-  are a correctly resampled to `grid_spacing` in geocoding (terrain correction).
+  are correctly resampled to `grid_spacing` in geocoding (terrain correction).
 - **Breaking:** the graph configs now reject unknown fields (`extra="forbid"`)
   instead of ignoring them.
 - **Breaking:** the coherence graphs no longer contain a `Multilook` node and
@@ -223,7 +262,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `full_burst_id` document the `FileNotFoundError` they raise when the value was
   not propagated and the burst map has not been downloaded.
 
-## Removed
+### Removed
 
 - **Breaking:** removed `CDSES3Settings.s3_env`, a legacy context manager that
   injected `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` for an external script.

@@ -11,7 +11,7 @@ from shapely.geometry import box
 
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.database import BurstDatabase
-from s1bursts.errors import BurstDownloadError, BurstNotFoundError
+from s1bursts.errors import BurstDownloadError, BurstNotFoundError, ConfigurationError
 from s1bursts.query import SearchQuery
 from s1bursts.summary import ErrorResult, OkResult
 
@@ -235,6 +235,30 @@ class TestEndpointWrappers:
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, BurstDownloadError)
         assert "endpoint='s3'" in str(result.error)
+
+    def test_s3_without_credentials_returns_clear_error(self) -> None:
+        """Missing S3 credentials surface per burst, so the OData fallback still runs.
+
+        Previously the ConfigurationError propagated and aborted the whole batch.
+        """
+        db = _make_database()
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            parent_product_name="S1A_IW_SLC__1SDV",
+        )
+        db.client = MagicMock()
+        db.client.download_burst_from_s3.side_effect = ConfigurationError(
+            "CDSE S3 credentials not configured",
+        )
+
+        result = db._download_burst_s3(burst)
+
+        assert isinstance(result, ErrorResult)
+        assert isinstance(result.error, BurstDownloadError)
+        assert "endpoint='odata'" in str(result.error)
 
     def test_s3_requires_parent_product_name(self) -> None:
         db = _make_database()

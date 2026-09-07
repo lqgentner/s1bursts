@@ -34,7 +34,7 @@ class BurstFootprintMixin:
     Each attribute returns an authoritative value stored on the instance
     (propagated from the CDSE response or an SLC filename) when available, and
     otherwise falls back to the Sentinel-1 burst-ID map lookup table. The LUT is
-    an opt-in ~500 MB download (see :func:`s1bursts.burstmap.download_burst_map`);
+    an opt-in ~500 MB download (see ``s1bursts.burstmap.download_burst_map``);
     it is consulted only when a footprint value was not propagated.
 
     Requires subclasses to declare ``burst_id: int`` and ``sub_swath: SubSwath``.
@@ -71,23 +71,7 @@ class BurstFootprintMixin:
         return cast("Mode", self.sub_swath[:2])
 
     def _lut_lookup[T](self, lut: dict[tuple[int, SubSwath], T]) -> T:
-        """Look up this burst in a LUT keyed by (burst_id, sub_swath).
-
-        Parameters
-        ----------
-        lut : dict[tuple[int, str], T]
-            Lookup table keyed by ``(burst_id, sub_swath)``.
-
-        Returns
-        -------
-        T
-            Value from the lookup table.
-
-        Raises
-        ------
-        KeyError
-            If the burst is not found in the map.
-        """
+        """Look up this burst in a LUT keyed by (burst_id, sub_swath)."""
         key = (self.burst_id, self.sub_swath)
         try:
             return lut[key]
@@ -100,7 +84,7 @@ class BurstFootprintMixin:
 
     @property
     def rel_orbit_number(self) -> int:
-        """Relative orbit number looked up from the Sentinel-1 burst map.
+        """Relative orbit number, propagated from CDSE or looked up from the burst map.
 
         Returns
         -------
@@ -111,7 +95,7 @@ class BurstFootprintMixin:
         ------
         FileNotFoundError
             If the value was not propagated and the burst map has not been
-            downloaded (see :func:`s1bursts.burstmap.download_burst_map`).
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
         KeyError
             If the burst is not found in the map.
         """
@@ -121,7 +105,7 @@ class BurstFootprintMixin:
 
     @property
     def pass_direction(self) -> PassDirection:
-        """Pass direction looked up from the Sentinel-1 burst map.
+        """Pass direction, propagated from CDSE or looked up from the burst map.
 
         Returns
         -------
@@ -132,7 +116,7 @@ class BurstFootprintMixin:
         ------
         FileNotFoundError
             If the value was not propagated and the burst map has not been
-            downloaded (see :func:`s1bursts.burstmap.download_burst_map`).
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
         KeyError
             If the burst is not found in the map.
         """
@@ -153,7 +137,7 @@ class BurstFootprintMixin:
         ------
         FileNotFoundError
             If the geometry was not propagated and the burst map has not been
-            downloaded (see :func:`s1bursts.burstmap.download_burst_map`).
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
         KeyError
             If the burst is not found in the map.
         """
@@ -176,7 +160,7 @@ class BurstFootprintMixin:
         ------
         FileNotFoundError
             If ``rel_orbit_number`` was not propagated and the burst map has not
-            been downloaded (see :func:`s1bursts.burstmap.download_burst_map`).
+            been downloaded (see ``s1bursts.burstmap.download_burst_map``).
         KeyError
             If the burst is not found in the burst map.
         """
@@ -203,8 +187,7 @@ _FOOTPRINT_ALIASES = {
 
 @dataclass(frozen=True, slots=True, eq=False)
 class Burst(BurstFootprintMixin):
-    """
-    Represents a single Sentinel-1 burst.
+    """Represents a single Sentinel-1 burst.
 
     A burst is a segment of SAR data acquisition characterized by its spatial location,
     temporal acquisition time, and imaging parameters.
@@ -277,7 +260,7 @@ class Burst(BurstFootprintMixin):
 
         Parameters
         ----------
-        data : dict[str, Any]
+        data
             Mapping of field names to values. Extra keys and ``init=False``
             fields are filtered before construction.
 
@@ -293,8 +276,7 @@ class Burst(BurstFootprintMixin):
 
 @dataclass(slots=True)
 class BurstPair:
-    """
-    Represents a pair of Sentinel-1 bursts for interferometric processing.
+    """Represents a pair of Sentinel-1 bursts for interferometric processing.
 
     The primary burst is typically the earlier acquisition, and the secondary
     is the later acquisition. The pair must have matching burst parameters.
@@ -448,6 +430,16 @@ class _BaseBurstCollection[TEntry]:
     """Base class for burst collections with shared functionality.
 
     Subclasses define their column metadata and implement ``_row_to_entry``.
+
+    Parameters
+    ----------
+    df
+        DataFrame with burst data. If ``None``, an empty collection is created.
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing from the dataframe.
     """
 
     _UNIQUE_COLUMNS: ClassVar[list[str]]
@@ -470,19 +462,6 @@ class _BaseBurstCollection[TEntry]:
         ...
 
     def __init__(self, df: gpd.GeoDataFrame | None = None) -> None:
-        """Initialize the collection from a GeoDataFrame.
-
-        Parameters
-        ----------
-        df : gpd.GeoDataFrame | None
-            DataFrame with burst data. If ``None``, an empty collection is created.
-
-        Raises
-        ------
-        ValueError
-            If required columns are missing from the dataframe.
-
-        """
         if df is None:
             df = gpd.GeoDataFrame(
                 {col: [] for col in self._ALL_COLUMNS},
@@ -598,11 +577,22 @@ class _BaseBurstCollection[TEntry]:
 
 
 class BurstCollection(_BaseBurstCollection[Burst]):
-    """
-    Collection of Sentinel-1 bursts with geospatial and temporal data.
+    """Collection of Sentinel-1 bursts with geospatial and temporal data.
 
     Provides methods for working with multiple bursts, including finding
     interferometric pairs, filtering, and visualization.
+
+    Parameters
+    ----------
+    df
+        DataFrame with burst data. If ``None``, an empty collection is created.
+
+    Raises
+    ------
+    TypeError
+        If df is not a GeoDataFrame.
+    ValueError
+        If required columns are missing.
     """
 
     # Columns that make a burst unique
@@ -640,35 +630,12 @@ class BurstCollection(_BaseBurstCollection[Burst]):
     _ENTRY_NAME_PLURAL: ClassVar[str] = "Bursts"
 
     def __init__(self, df: gpd.GeoDataFrame | None = None) -> None:
-        """Initialize BurstCollection from a GeoDataFrame.
-
-        Calls base class validation and deduplication, then removes bursts
-        with nearly identical timestamps (CDSE API artefact).
-
-        Parameters
-        ----------
-        df : gpd.GeoDataFrame | None
-            DataFrame with burst data. If ``None``, an empty collection is created.
-
-        Raises
-        ------
-        TypeError
-            If df is not a GeoDataFrame.
-        ValueError
-            If required columns are missing.
-        """
         super().__init__(df)
         self._remove_timestamp_duplicates()
 
     @staticmethod
     def _validate_pair_search(baseline: Timedelta, max_delta: Timedelta) -> None:
-        """Reject baselines that cannot describe an interferometric pair.
-
-        Raises
-        ------
-        ValueError
-            If ``baseline`` is not positive or ``max_delta`` is negative.
-        """
+        """Reject baselines that cannot describe an interferometric pair."""
         if baseline <= Timedelta(0):
             msg = f"`baseline` must be a positive duration, received {baseline}."
             raise ValueError(msg)
@@ -681,15 +648,14 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         baseline: Timedelta | int,
         max_delta: Timedelta | int = 24,
     ) -> BurstPairCollection:
-        """
-        Find interferometric burst pairs with a specified temporal baseline.
+        """Find interferometric burst pairs with a specified temporal baseline.
 
         Parameters
         ----------
-        baseline : pandas.Timedelta | int
+        baseline
             Temporal baseline between primary and secondary bursts.
             If integer is provided, the assumed unit is days.
-        max_delta : pandas.Timedelta | int
+        max_delta
             Maximum allowed deviation from baseline.
             If integer is provided, the assumed unit is hours.
             Default is 24 hours.
@@ -777,19 +743,17 @@ class BurstCollection(_BaseBurstCollection[Burst]):
 
     @classmethod
     def from_bursts(cls, bursts: Collection[Burst]) -> Self:
-        """
-        Create a BurstCollection from a collection of Burst objects.
+        """Create a BurstCollection from a collection of Burst objects.
 
         Parameters
         ----------
-        bursts : Collection[Burst]
+        bursts
             Collection of Burst instances.
 
         Returns
         -------
         BurstCollection
             New BurstCollection instance.
-
         """
         if len(bursts) == 0:
             return cls()
@@ -798,19 +762,17 @@ class BurstCollection(_BaseBurstCollection[Burst]):
 
     @classmethod
     def from_cdse_response(cls, response: CDSEResponse) -> Self:
-        """
-        Create a BurstCollection directly from a CDSEResponse.
+        """Create a BurstCollection directly from a CDSEResponse.
 
         Parameters
         ----------
-        response : CDSEResponse
+        response
             CDSE API response containing burst data.
 
         Returns
         -------
         BurstCollection
             New BurstCollection instance.
-
         """
         # Get the GeoDataFrame from the response
         cdse_df = response.to_geodataframe()
@@ -841,20 +803,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
 
     @staticmethod
     def _bursts_to_dataframe(bursts: Collection[Burst]) -> gpd.GeoDataFrame:
-        """
-        Convert a collection of Burst objects to a GeoDataFrame.
-
-        Parameters
-        ----------
-        bursts : Collection[Burst]
-            Collection of Burst instances.
-
-        Returns
-        -------
-        gpd.GeoDataFrame
-            GeoDataFrame with burst data.
-
-        """
+        """Convert a collection of Burst objects to a GeoDataFrame."""
         data = [
             {
                 "date": burst.date,
@@ -884,12 +833,6 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         The two products may differ in extent, so the most complete one (largest
         ``lines_per_burst * samples_per_burst``) is kept, falling back to the most
         recent acquisition when the size is equal or unknown.
-
-        Parameters
-        ----------
-        threshold : Timedelta | None, optional
-            Maximum time difference to consider bursts as duplicates.
-            Default is 1 hour.
         """
         if threshold is None:
             threshold = Timedelta(hours=1)
@@ -939,8 +882,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
 
 
 class BurstPairCollection(_BaseBurstCollection[BurstPair]):
-    """
-    Collection of Sentinel-1 burst pairs for interferometric processing.
+    """Collection of Sentinel-1 burst pairs for interferometric processing.
 
     Each entry contains a primary and secondary burst with matching spatial
     parameters but different acquisition times.
@@ -954,7 +896,7 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         "date_1",
         "date_2",
     ]
-    # All valid fields from Burst dataclass
+    # Both bursts' fields, suffixed _1 (primary) and _2 (secondary) where they differ
     _ALL_COLUMNS: ClassVar[list[str]] = [
         "burst_id",
         "sub_swath",
@@ -1025,19 +967,17 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
 
     @classmethod
     def from_pairs(cls, pairs: Collection[BurstPair]) -> Self:
-        """
-        Create a BurstPairCollection from a collection of BurstPair objects.
+        """Create a BurstPairCollection from a collection of BurstPair objects.
 
         Parameters
         ----------
-        pairs : Collection[BurstPair]
-            Collection of Burst instances.
+        pairs
+            Collection of BurstPair instances.
 
         Returns
         -------
         BurstPairCollection
             New BurstPairCollection instance.
-
         """
         if len(pairs) == 0:
             return cls()
@@ -1046,20 +986,7 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
 
     @staticmethod
     def _pairs_to_dataframe(pairs: Collection[BurstPair]) -> gpd.GeoDataFrame:
-        """
-        Convert a collection of BurstPair objects to a GeoDataFrame.
-
-        Parameters
-        ----------
-        pairs : Collection[BurstPair]
-            Collection of BurstPair instances.
-
-        Returns
-        -------
-        gpd.GeoDataFrame
-            GeoDataFrame with burst pair data.
-
-        """
+        """Convert a collection of BurstPair objects to a GeoDataFrame."""
         data = [
             {
                 "burst_id": pair.burst_id,
@@ -1083,8 +1010,7 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         return gpd.GeoDataFrame(data, geometry="geometry")
 
     def unpair(self) -> BurstCollection:
-        """
-        Convert burst pairs back into individual bursts.
+        """Convert burst pairs back into individual bursts.
 
         Separates each burst pair into its primary and secondary bursts,
         creating a BurstCollection containing all individual bursts.
@@ -1093,7 +1019,6 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         -------
         BurstCollection
             Collection containing all primary and secondary bursts from the pairs.
-
         """
         df_pairs = self.df
 

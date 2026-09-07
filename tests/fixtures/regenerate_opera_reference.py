@@ -260,7 +260,7 @@ def compare_scene(scene: Scene, work: Path, session: ASFSession) -> dict[str, An
         ours, theirs, (mask,), alignment = read_aligned(
             ours_path,
             opera_tif,
-            "Gamma0",
+            "gamma0",
             companions=(acquisition_mask,),
         )
         # OPERA's mask: 0 = clear, 1/2/3 = shadow/layover, 255 = nodata.
@@ -281,7 +281,7 @@ def compare_scene(scene: Scene, work: Path, session: ASFSession) -> dict[str, An
     ours, theirs, (mask,), alignment = read_aligned(
         ours_path,
         files["static:rtc_anf_gamma0_to_beta0.tif"],
-        "simulatedImage",
+        "scattering_area",
         companions=(files["static:mask.tif"],),
     )
     clear = (mask == 0) & np.isfinite(ours) & np.isfinite(theirs)

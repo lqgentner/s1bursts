@@ -96,7 +96,7 @@ class TestDownloadBurstMap:
 class TestModeValidation:
     @pytest.mark.parametrize("mode", ["SM", "iw", "", "IW1"])
     def test_rejects_an_unsupported_mode(self, tmp_path: Path, mode: str) -> None:
-        with pytest.raises(ValueError, match="Invalid product"):
+        with pytest.raises(ValueError, match="Invalid mode"):
             # pyrefly: ignore [bad-argument-type]
             burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode=mode)
 

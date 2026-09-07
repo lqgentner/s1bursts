@@ -34,9 +34,10 @@ from pathlib import Path
 import re
 import shutil
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 import zipfile
 
+from freezebase.download import HTTPDownloader
 import pyproj
 import rasterio
 import rasterio.crs
@@ -218,7 +219,8 @@ def reference_job(
     if job.succeeded():
         return job
 
-    job = hyp3.watch(job, timeout=WATCH_TIMEOUT_S)
+    # `watch` is typed to return a Batch or a Job, whichever it was given.
+    job = cast("Job", hyp3.watch(job, timeout=WATCH_TIMEOUT_S))
     if not job.succeeded():
         msg = f"{scene.name}: HyP3 job {job.job_id} finished as {job.status_code}"
         raise RuntimeError(msg)
@@ -294,7 +296,15 @@ def fetch_coherence(job: Job, destination: Path) -> tuple[Path, dict[str, str]]:
     if coherence.exists() and extracted is not None:
         return coherence, _reference_versions(extracted)
 
-    [downloaded] = job.download_files(destination)
+    # Fetched with this package's downloader rather than `job.download_files()`,
+    # whose progress-bar wrapper leaves the file object to the garbage collector;
+    # under Python 3.14 that surfaces as an unraisable-exception warning, which
+    # the test suite treats as a failure.
+    [archive_entry] = [item for item in job.files or [] if item["filename"] == archives[0]]
+    with HTTPDownloader(progress=False) as download:
+        downloaded = Path(
+            download(url=archive_entry["url"], save_dir=destination, filename=archives[0]),
+        )
     with zipfile.ZipFile(downloaded) as archive:
         names = archive.namelist()
         if member not in names:
@@ -415,7 +425,7 @@ def compare_scene(
     _check_projection(coherence, scene)
 
     ours_path = process(scene, work)
-    ours, theirs, _, alignment = read_aligned(ours_path, coherence, "coh")
+    ours, theirs, _, alignment = read_aligned(ours_path, coherence, "coherence")
     valid = valid_mask(ours, theirs)
 
     baseline = date.fromisoformat(scene.secondary_date) - date.fromisoformat(scene.reference_date)

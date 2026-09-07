@@ -1,4 +1,4 @@
-"""File management for Sentinel-1 products with xarray integration."""
+"""Deterministic paths and discovery for Sentinel-1 products, local or on S3."""
 
 from __future__ import annotations
 
@@ -143,7 +143,19 @@ class FileManager:
 
     All filename generation logic is centralized here.  Storage directories
     (``base_dir``, ``slc_dir``, …) may point to either local paths or S3
-    locations via :class:`~upath.UPath`.
+    locations via ``upath.UPath``.
+
+    Parameters
+    ----------
+    base_dir
+        Root directory for all products.  May be a local ``Path`` or a
+        ``UPath`` pointing to an S3 bucket.
+    slc_dir
+        Directory for SLC burst files. Defaults to ``base_dir/s1-slc``.
+    prod_dir
+        Directory for processed products. Defaults to ``base_dir/s1-prod``.
+    comp_dir
+        Directory for composites. Defaults to ``base_dir/s1-comp``.
     """
 
     base_dir: Path | UPath
@@ -162,20 +174,6 @@ class FileManager:
         prod_dir: Path | UPath | None = None,
         comp_dir: Path | UPath | None = None,
     ) -> None:
-        """Initialize FileManager with directory structure.
-
-        Parameters
-        ----------
-        base_dir : Path or UPath
-            Root directory for all products.  May be a local ``Path`` or a
-            ``UPath`` pointing to an S3 bucket.
-        slc_dir : Path or UPath, optional
-            Directory for SLC burst files. Defaults to ``base_dir/s1-slc``.
-        prod_dir : Path or UPath, optional
-            Directory for processed products. Defaults to ``base_dir/s1-prod``.
-        comp_dir : Path or UPath, optional
-            Directory for composites. Defaults to ``base_dir/s1-comp``.
-        """
         self.base_dir = base_dir
 
         # Set default subdirectories if not provided
@@ -194,7 +192,7 @@ class FileManager:
 
         Parameters
         ----------
-        burst : Burst
+        burst
             Burst to generate the path for.
 
         Returns
@@ -227,13 +225,13 @@ class FileManager:
 
         Parameters
         ----------
-        rel_orbit_number : int, optional
+        rel_orbit_number
             Filter by relative orbit number.
-        burst_id : int, optional
+        burst_id
             Filter by burst ID.
-        sub_swath : str, optional
+        sub_swath
             Filter by sub-swath.
-        polarization : str, optional
+        polarization
             Filter by polarization.
 
         Returns
@@ -262,24 +260,7 @@ class FileManager:
         suffix: str = ".tif",
         **values: Any,
     ) -> str:
-        """Build a glob pattern string from a prefix and field spec.
-
-        Parameters
-        ----------
-        prefix : str
-            Product type prefix (e.g. ``"S1_RTC"``).
-        spec : list[FieldSpec]
-            Ordered list of field specs for the filename segments after the prefix.
-        suffix : str, default ".tif"
-            File suffix, including the leading dot.
-        **values
-            Known field values; missing keys produce ``"*"`` wildcard segments.
-
-        Returns
-        -------
-        str
-            Glob pattern with the given suffix.
-        """
+        """Build a glob pattern from a prefix and field spec; a missing value becomes ``*``."""
         parts = [prefix]
         for f in spec:
             v = values.get(f.name)
@@ -295,28 +276,7 @@ class FileManager:
         *,
         suffix: str = ".tif",
     ) -> dict[str, Any] | None:
-        """Parse a product filename using a prefix regex and field spec.
-
-        Parameters
-        ----------
-        prefix_re : str
-            Regex for the prefix portion of the filename (may contain named groups).
-        spec : list[FieldSpec]
-            Ordered list of field specs for the segments after the prefix.
-        filename : str
-            Filename to parse (basename only, including extension).
-        prefix_captures : list of (group_name, field_name, converter), optional
-            Extra named groups captured inside ``prefix_re`` that should be
-            included in the result dict.  Each tuple is
-            ``(regex_group_name, output_key, converter_callable)``.
-        suffix : str, default ".tif"
-            File suffix, including the leading dot.
-
-        Returns
-        -------
-        dict | None
-            Parsed field values, or ``None`` if the filename does not match.
-        """
+        """Parse a filename into field values, or ``None`` if it does not match the spec."""
         groups = "_".join(f"(?P<{f.group or f.name}>{f.pattern})" for f in spec)
         match = re.fullmatch(rf"{prefix_re}_{groups}{re.escape(suffix)}", filename)
         if not match:
@@ -335,24 +295,7 @@ class FileManager:
         *,
         suffix: str = ".tif",
     ) -> list[T]:
-        """Glob a directory, parse matching filenames, and instantiate products.
-
-        Parameters
-        ----------
-        directory : Path | UPath
-            Directory to search.
-        pattern : str
-            Glob pattern (filename only, no directory).
-        cls : type[_Parseable]
-            Metadata class to instantiate; must have an entry in ``_PARSERS``.
-        suffix : str, default ".tif"
-            File suffix used to anchor the parser regex.
-
-        Returns
-        -------
-        list[_Parseable]
-            Sorted list of metadata instances.
-        """
+        """Glob a directory, parse matching filenames, and instantiate products."""
         prefix_re, spec, prefix_captures = _PARSERS[cls]
         matches: list[Path | UPath] = list(directory.glob(pattern))
         files = sorted(matches, key=attrgetter("name"))
@@ -366,18 +309,7 @@ class FileManager:
     # ============ RTC Product Operations ============
 
     def _get_rtc_path(self, product: RTCProduct) -> Path | UPath:
-        """Generate the file path for an RTC backscatter product.
-
-        Parameters
-        ----------
-        product : RTCProduct
-            RTC product metadata.
-
-        Returns
-        -------
-        Path
-            Expected path to the RTC GeoTIFF file.
-        """
+        """Generate the file path for an RTC backscatter product."""
         return self.prod_dir / self._build_pattern("S1_RTC", _BACKSCATTER_SPEC, **asdict(product))
 
     def find_rtc_products(
@@ -395,15 +327,15 @@ class FileManager:
 
         Parameters
         ----------
-        rel_orbit_number : int, optional
+        rel_orbit_number
             Filter by relative orbit number.
-        burst_id : int, optional
+        burst_id
             Filter by burst ID.
-        sub_swath : str, optional
+        sub_swath
             Filter by sub-swath.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        crs : CRSLike, optional
+        crs
             Filter by coordinate reference system (UTM zone).
 
         Returns
@@ -425,18 +357,7 @@ class FileManager:
     # ============ GTC Product Operations ============
 
     def _get_gtc_path(self, product: GTCProduct) -> Path | UPath:
-        """Generate the file path for a GTC backscatter product.
-
-        Parameters
-        ----------
-        product : GTCProduct
-            GTC product metadata.
-
-        Returns
-        -------
-        Path
-            Expected path to the GTC GeoTIFF file.
-        """
+        """Generate the file path for a GTC backscatter product."""
         return self.prod_dir / self._build_pattern("S1_GTC", _BACKSCATTER_SPEC, **asdict(product))
 
     def find_gtc_products(
@@ -454,15 +375,15 @@ class FileManager:
 
         Parameters
         ----------
-        rel_orbit_number : int, optional
+        rel_orbit_number
             Filter by relative orbit number.
-        burst_id : int, optional
+        burst_id
             Filter by burst ID.
-        sub_swath : str, optional
+        sub_swath
             Filter by sub-swath.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        crs : CRSLike, optional
+        crs
             Filter by coordinate reference system (UTM zone).
 
         Returns
@@ -484,18 +405,7 @@ class FileManager:
     # ============ Coherence Product Operations ============
 
     def _get_coherence_path(self, product: CoherenceProduct) -> Path | UPath:
-        """Generate the file path for a coherence product.
-
-        Parameters
-        ----------
-        product : CoherenceProduct
-            Coherence product metadata.
-
-        Returns
-        -------
-        Path
-            Expected path to the coherence GeoTIFF file.
-        """
+        """Generate the file path for a coherence product."""
         prefix = f"S1_COH{product.baseline_days:02d}"
         return self.prod_dir / self._build_pattern(prefix, _COREGISTERED_SPEC, **asdict(product))
 
@@ -515,17 +425,17 @@ class FileManager:
 
         Parameters
         ----------
-        rel_orbit_number : int, optional
+        rel_orbit_number
             Filter by relative orbit number.
-        burst_id : int, optional
+        burst_id
             Filter by burst ID.
-        sub_swath : str, optional
+        sub_swath
             Filter by sub-swath.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        baseline_days : int, optional
+        baseline_days
             Filter by temporal baseline.
-        crs : CRSLike, optional
+        crs
             Filter by coordinate reference system (UTM zone).
 
         Returns
@@ -548,18 +458,7 @@ class FileManager:
     # ============ Interferogram Product Operations ============
 
     def _get_interferogram_path(self, product: InterferogramProduct) -> Path | UPath:
-        """Generate the file path for an interferogram product.
-
-        Parameters
-        ----------
-        product : InterferogramProduct
-            Interferogram product metadata.
-
-        Returns
-        -------
-        Path
-            Expected path to the interferogram GeoTIFF file.
-        """
+        """Generate the file path for an interferogram product."""
         prefix = f"S1_IFG{product.baseline_days:02d}_CMPLX"
         return self.prod_dir / self._build_pattern(prefix, _COREGISTERED_SPEC, **asdict(product))
 
@@ -579,17 +478,17 @@ class FileManager:
 
         Parameters
         ----------
-        rel_orbit_number : int, optional
+        rel_orbit_number
             Filter by relative orbit number.
-        burst_id : int, optional
+        burst_id
             Filter by burst ID.
-        sub_swath : str, optional
+        sub_swath
             Filter by sub-swath.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        baseline_days : int, optional
+        baseline_days
             Filter by temporal baseline.
-        crs : CRSLike, optional
+        crs
             Filter by coordinate reference system (UTM zone).
 
         Returns
@@ -612,18 +511,7 @@ class FileManager:
     # ============ LRW Product Operations ============
 
     def _get_rtc_lrw_path(self, product: RTCLRWComposite) -> Path | UPath:
-        """Generate the file path for an RTC LRW intensity composite product.
-
-        Parameters
-        ----------
-        product : RTCLRWComposite
-            RTC LRW product metadata.
-
-        Returns
-        -------
-        Path
-            Expected path to the RTC LRW GeoTIFF file.
-        """
+        """Generate the file path for an RTC LRW intensity composite product."""
         return self.comp_dir / self._build_pattern(
             "S1_RTC_LRW",
             _MGRS_BASE_SPEC,
@@ -639,9 +527,9 @@ class FileManager:
 
         Parameters
         ----------
-        mgrs_code : str, optional
+        mgrs_code
             Filter by MGRS grid cell identifier.
-        polarization : str, optional
+        polarization
             Filter by polarization.
 
         Returns
@@ -658,18 +546,7 @@ class FileManager:
         return self._find_products(self.comp_dir, pattern, RTCLRWComposite)
 
     def _get_coh_lrw_path(self, product: CohLRWComposite) -> Path | UPath:
-        """Generate the file path for a coherence LRW composite product.
-
-        Parameters
-        ----------
-        product : CohLRWComposite
-            Coherence LRW product metadata.
-
-        Returns
-        -------
-        Path
-            Expected path to the coherence LRW GeoTIFF file.
-        """
+        """Generate the file path for a coherence LRW composite product."""
         prefix = f"S1_COH{product.baseline_days:02d}_LRW"
         return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
@@ -683,11 +560,11 @@ class FileManager:
 
         Parameters
         ----------
-        mgrs_code : str, optional
+        mgrs_code
             Filter by MGRS grid cell identifier.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        baseline_days : int, optional
+        baseline_days
             Filter by temporal baseline in days.
 
         Returns
@@ -707,18 +584,7 @@ class FileManager:
     # ============ Pass-Composite Product Operations ============
 
     def _get_rtc_pass_composite_path(self, product: RTCPassComposite) -> Path | UPath:
-        """Generate the file path for an RTC pass-composite product.
-
-        Parameters
-        ----------
-        product : RTCPassComposite
-            RTC pass-composite product metadata.
-
-        Returns
-        -------
-        Path
-            Expected path to the RTC pass-composite GeoTIFF file.
-        """
+        """Generate the file path for an RTC pass-composite product."""
         prefix = f"S1_RTC_COMP_{product.pass_direction[0]}"
         return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
@@ -732,11 +598,11 @@ class FileManager:
 
         Parameters
         ----------
-        mgrs_code : str, optional
+        mgrs_code
             Filter by MGRS grid cell identifier.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        pass_direction : str, optional
+        pass_direction
             Filter by pass direction (``"Ascending"`` or ``"Descending"``).
 
         Returns
@@ -754,18 +620,7 @@ class FileManager:
         return self._find_products(self.comp_dir, pattern, RTCPassComposite)
 
     def _get_coh_pass_composite_path(self, product: CohPassComposite) -> Path | UPath:
-        """Generate the file path for a coherence pass-composite product.
-
-        Parameters
-        ----------
-        product : CohPassComposite
-            Coherence pass-composite product metadata.
-
-        Returns
-        -------
-        Path
-            Expected path to the coherence pass-composite GeoTIFF file.
-        """
+        """Generate the file path for a coherence pass-composite product."""
         prefix = f"S1_COH{product.baseline_days:02d}_COMP_{product.pass_direction[0]}"
         return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
@@ -780,13 +635,13 @@ class FileManager:
 
         Parameters
         ----------
-        mgrs_code : str, optional
+        mgrs_code
             Filter by MGRS grid cell identifier.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        pass_direction : str, optional
+        pass_direction
             Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-        baseline_days : int, optional
+        baseline_days
             Filter by temporal baseline in days.
 
         Returns
@@ -836,11 +691,11 @@ class FileManager:
 
         Parameters
         ----------
-        mgrs_code : str, optional
+        mgrs_code
             Filter by MGRS grid cell identifier.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        qa_metric : QaMetric, optional
+        qa_metric
             Filter by quality metric (number of observations or CQM).
 
         Returns
@@ -868,13 +723,13 @@ class FileManager:
 
         Parameters
         ----------
-        mgrs_code : str, optional
+        mgrs_code
             Filter by MGRS grid cell identifier.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        baseline_days : int, optional
+        baseline_days
             Filter by temporal baseline in days.
-        qa_metric : QaMetric, optional
+        qa_metric
             Filter by quality metric (number of observations or CQM).
 
         Returns
@@ -902,11 +757,11 @@ class FileManager:
 
         Parameters
         ----------
-        mgrs_code : str, optional
+        mgrs_code
             Filter by MGRS grid cell identifier.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        pass_direction : str, optional
+        pass_direction
             Filter by pass direction (``"Ascending"`` or ``"Descending"``).
 
         Returns
@@ -934,13 +789,13 @@ class FileManager:
 
         Parameters
         ----------
-        mgrs_code : str, optional
+        mgrs_code
             Filter by MGRS grid cell identifier.
-        polarization : str, optional
+        polarization
             Filter by polarization.
-        pass_direction : str, optional
+        pass_direction
             Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-        baseline_days : int, optional
+        baseline_days
             Filter by temporal baseline in days.
 
         Returns
@@ -961,12 +816,11 @@ class FileManager:
     # ============ Generic Product Path Getter ============
 
     def get_product_path(self, product: BaseProduct) -> Path | UPath:  # noqa: C901, PLR0912
-        """
-        Get path for any product type.
+        """Get path for any product type.
 
         Parameters
         ----------
-        product : BaseProduct
+        product
             Product to get path for.
 
         Returns
@@ -1014,7 +868,7 @@ class FileManager:
 
         Parameters
         ----------
-        product : BaseProduct
+        product
             Product to check.
 
         Returns

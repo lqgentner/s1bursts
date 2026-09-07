@@ -28,10 +28,10 @@ practical.
   (`BurstCollection.find_pairs`)
 - **Process** with dynamically generated SNAP GPT graphs:
   - Radiometrically terrain corrected (RTC) gamma-nought backscatter,
-    including the simulated-area band for resolution weighting
+    including the local scattering area band for resolution weighting
   - Geometrically terrain corrected (GTC) beta-nought backscatter
   - Coherence and interferograms
-- **Composite** bursts into 110 km MGRS tiles with locally resolution weighted
+- **Composite** bursts into 10 km MGRS grid squares with locally resolution weighted
   (LRW) or per-pass aggregation (`ResolutionWeighter`)
 - Local filesystem or S3 storage for all products (`FileManager` + UPath)
 
@@ -70,7 +70,7 @@ processor.create_coherences(pairs, crs=crs)
 `BurstDatabase` / `BurstProcessor` / `ResolutionWeighter` services, and the
 configs they take (`SearchQuery`, `SNAPConfig`, `BackscatterConfig`,
 `CoherenceConfig`, `InterferogramConfig`, `GeocodingConfig`), plus
-`download_burst_map`.
+`download_burst_map` and `prepare_dem_for_snap`.
 
 What a pipeline *produces* is returned by those services and imported from the
 module it belongs to:
@@ -97,6 +97,8 @@ s1bursts call, or export the variables (e.g. `uv run --env-file .env`):
 | `SNAP_BIN` | Path to a SNAP installation's `bin` directory; its `gpt` executable is used for processing. Falls back to `gpt` on `PATH` if unset |
 | `SNAP_MAX_WORKERS` | Parallel GPT processes (default: 1) |
 | `SNAP_MAX_RAM_GB` | Total RAM budget across GPT processes in GB (default: 4) |
+| `SNAP_THREADS_PER_JOB` | Threads per GPT process (default: CPU count divided by `SNAP_MAX_WORKERS`) |
+| `SNAP_CACHE_RATIO` | Fraction of each GPT process's heap used as tile cache (default: 0.7) |
 | `SNAP_AUXDATA_PATH` | Shared DEM/orbit cache (default: `~/.snap/auxdata`) |
 | `SNAP_DEM_CACHE` | Where `prepare_dem_for_snap()` caches SNAP-ready external DEMs (default: `~/.s1bursts/dem`) |
 
@@ -134,9 +136,9 @@ search → download → process → composite workflow needs no extra data.
 These attributes are only looked up in the [SAR-MPC Sentinel-1 burst-ID
 map](https://sar-mpc.eu/sar-mpc-products/) for a burst that was **not** obtained
 from a search or a filename (e.g. a hand-constructed `Burst`). Download it
-(~500 MB per aquisition mode) once when you need it:
+(~500 MB per acquisition mode) once when you need it:
 
-```pythons
+```python
 from s1bursts import download_burst_map
 
 download_burst_map(mode="IW")
@@ -144,14 +146,17 @@ download_burst_map(mode="IW")
 
 ## Installation
 
-Not yet on PyPI; install from GitHub:
-
 ```bash
-uv add "s1bursts @ git+ssh://git@github.com/lqgentner/s1bursts.git"
+uv add s1bursts
+# or
+pip install s1bursts
 ```
 
+Processing needs a local [ESA SNAP](https://step.esa.int/main/download/snap-download/)
+installation (version 13 or 14); searching and downloading do not.
+
 For the domain background (product hierarchy, LRW compositing design), see
-[`SENTINEL1_LRW_PIPELINE.md`](SENTINEL1_LRW_PIPELINE.md).
+[`docs/SENTINEL1_LRW_PIPELINE.md`](https://github.com/lqgentner/s1bursts/blob/main/docs/SENTINEL1_LRW_PIPELINE.md).
 
 ## Development
 
@@ -165,4 +170,4 @@ uv run pyrefly check
 
 ## License
 
-MIT
+[MIT](https://github.com/lqgentner/s1bursts/blob/main/LICENSE)
