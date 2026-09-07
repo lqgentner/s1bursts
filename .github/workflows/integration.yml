@@ -92,7 +92,7 @@ jobs:
       # uv ships in the image, so there is no setup-uv step. Only the resolved
       # wheels are cached, keyed on the lockfile.
       - name: Cache uv downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /root/.cache/uv
           key: uv-integration-${{ matrix.leg.snap }}-${{ hashFiles('uv.lock') }}
