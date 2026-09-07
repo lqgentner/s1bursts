@@ -6,7 +6,7 @@ See ``fixtures/REFERENCE.md`` for reference details and run requirements.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
@@ -78,7 +78,7 @@ requires_prerequisites = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="session")
-def campaign(tmp_path_factory: pytest.TempPathFactory) -> Callable[[Scene], dict]:
+def campaign(tmp_path_factory: pytest.TempPathFactory) -> Callable[[Scene], dict[str, Any]]:
     """Run each scene comparison once per test session."""
     for module in ("hyp3_sdk", "asf_search"):
         pytest.importorskip(module, reason="install the `validation` dependency group")
@@ -93,9 +93,9 @@ def campaign(tmp_path_factory: pytest.TempPathFactory) -> Callable[[Scene], dict
     work = workdir(tmp_path_factory, "insar-validation")
     hyp3 = login()
     allow_submit = os.environ.get("S1BURSTS_HYP3_SUBMIT") == "1"
-    cache: dict[str, dict] = {}
+    cache: dict[str, dict[str, Any]] = {}
 
-    def run(scene: Scene) -> dict:
+    def run(scene: Scene) -> dict[str, Any]:
         if scene.name not in cache:
             try:
                 cache[scene.name] = compare_scene(
@@ -124,7 +124,7 @@ class TestCoherenceContract:
     def test_the_offset_between_the_estimators_has_the_expected_sign_and_size(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """Check that HyP3 reads higher at each quantile, within the limit."""
         quantiles = campaign(scene)["quantiles"]
@@ -141,7 +141,7 @@ class TestCoherenceContract:
     def test_the_median_offset_stays_bounded(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """Scene-wide, the two products must describe the same burst."""
         stats = campaign(scene)[BLOCK_KEY]
@@ -161,7 +161,7 @@ class TestPatternContract:
     def test_the_reference_varies_across_the_burst(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """The premise the other claims in this class rest on."""
         spread = campaign(scene)["reference_spread"]
@@ -175,7 +175,7 @@ class TestPatternContract:
     def test_coherence_ranks_the_scene_like_isce2(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """Check that both processors rank the burst the same way."""
         stats = campaign(scene)[BLOCK_KEY]
@@ -189,7 +189,7 @@ class TestPatternContract:
     def test_the_two_products_sit_on_the_same_ground(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """Check that the products align on the ground."""
         geolocation = campaign(scene)["geolocation"]
@@ -221,7 +221,7 @@ class TestSaturatedReferenceContract:
     def test_a_scene_the_reference_calls_coherent_reads_coherent(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """Check that this package also finds the burst coherent."""
         results = campaign(scene)

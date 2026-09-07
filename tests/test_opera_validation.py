@@ -11,7 +11,7 @@ See ``fixtures/REFERENCE.md`` for reference details and run requirements.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
@@ -64,7 +64,7 @@ requires_prerequisites = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="session")
-def campaign(tmp_path_factory: pytest.TempPathFactory) -> Callable[[Scene], dict]:
+def campaign(tmp_path_factory: pytest.TempPathFactory) -> Callable[[Scene], dict[str, Any]]:
     """Run each scene comparison once per test session."""
     pytest.importorskip("asf_search", reason="install the `validation` dependency group")
     # Imported lazily so that collecting this module does not require the
@@ -73,9 +73,9 @@ def campaign(tmp_path_factory: pytest.TempPathFactory) -> Callable[[Scene], dict
 
     work = workdir(tmp_path_factory, "opera-validation")
     session = login()
-    cache: dict[str, dict] = {}
+    cache: dict[str, dict[str, Any]] = {}
 
-    def run(scene: Scene) -> dict:
+    def run(scene: Scene) -> dict[str, Any]:
         if scene.name not in cache:
             cache[scene.name] = compare_scene(scene, work, session)
         return cache[scene.name]
@@ -117,7 +117,7 @@ class TestRadiometricContract:
     def test_gamma0_bias_is_within_a_quarter_db_of_opera(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """Check block-averaged gamma-0 bias against OPERA."""
         results = campaign(scene)
@@ -136,7 +136,7 @@ class TestRadiometricContract:
     def test_low_backscatter_offset_stays_bounded(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """Check the low-backscatter offset against its limit."""
         results = campaign(scene)
@@ -156,7 +156,7 @@ class TestRadiometricContract:
     def test_gamma0_tracks_opera_spatially(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """A correct geocoding reproduces OPERA's spatial pattern, not just its mean."""
         results = campaign(scene)
@@ -182,7 +182,7 @@ class TestGeometryContract:
     def test_simulated_image_matches_operas_area_normalization_factor(
         self,
         scene: Scene,
-        campaign: Callable[[Scene], dict],
+        campaign: Callable[[Scene], dict[str, Any]],
     ) -> None:
         """Compare SNAP's ``simulatedImage`` with OPERA's ANF."""
         stats = campaign(scene)["anf"]["layover_shadow_excluded"]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 from pandas import Timestamp
@@ -124,7 +124,7 @@ class TestCoregisteredProducts:
 
 
 class TestMGRSTileProducts:
-    KWARGS: dict = {  # noqa: RUF012
+    KWARGS: dict[str, Any] = {  # noqa: RUF012
         "mgrs_code": "32TMS",
         "start_date": Timestamp("2022-01-01"),
         "end_date": Timestamp("2022-12-31"),
@@ -169,7 +169,8 @@ class TestMGRSTileProducts:
         product = RTCLRWComposite(**self.KWARGS)
 
         with pytest.raises(AttributeError):
-            product.mgrs_code = "33TUN"  # type: ignore[misc]
+            # pyrefly: ignore [read-only]
+            product.mgrs_code = "33TUN"
 
     def test_repr_formats_timestamps(self) -> None:
         text = repr(RTCLRWComposite(**self.KWARGS))

@@ -50,7 +50,8 @@ class TestCDSEAuth:
         assert auth.access_token == "access-1"
 
         request = MagicMock()
-        request.headers = {}
+        headers: dict[str, str] = {}
+        request.headers = headers
         auth(request)
         assert request.headers["Authorization"] == "Bearer access-1"
 
@@ -71,7 +72,8 @@ class TestCDSEAuth:
             return_value=refreshed,
         ) as mock_post:
             request = MagicMock()
-            request.headers = {}
+            headers: dict[str, str] = {}
+            request.headers = headers
             auth(request)
 
         assert mock_post.call_args.kwargs["data"]["grant_type"] == "refresh_token"
@@ -92,7 +94,8 @@ class TestCDSEAuth:
             return_value=make_token_response(),
         ) as mock_post:
             request = MagicMock()
-            request.headers = {}
+            headers: dict[str, str] = {}
+            request.headers = headers
             auth(request)
 
         assert mock_post.call_args.kwargs["data"]["grant_type"] == "password"
@@ -161,6 +164,7 @@ class TestCDSEResponse:
         # Column names are converted to snake_case
         assert "burst_id" in gdf.columns
         assert "parent_product_name" in gdf.columns
+        assert gdf.crs is not None
         assert gdf.crs.to_epsg() == 4326
         assert gdf.geometry.iloc[0].bounds == (7.0, 46.0, 8.0, 47.0)
 
@@ -259,7 +263,8 @@ class TestCDSEBurstClient:
         client = CDSEBurstClient()
         http_response = MagicMock()
         http_response.headers = {"Content-Type": "application/json"}
-        http_response.json.return_value = {"@odata.context": "$metadata#Products", "value": []}
+        payload: dict[str, Any] = {"@odata.context": "$metadata#Products", "value": []}
+        http_response.json.return_value = payload
 
         with (
             patch("s1bursts.cdse.requests.get", return_value=http_response),

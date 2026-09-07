@@ -6,7 +6,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/s1bursts.svg)](https://pypi.org/project/s1bursts/)
 [![SNAP](https://img.shields.io/badge/SNAP-13%20%7C%2014-blue)](https://step.esa.int/main/download/snap-download/)
 [![License](https://img.shields.io/pypi/l/s1bursts.svg)](https://github.com/lqgentner/s1bursts/blob/main/LICENSE)
-[![mypy](https://img.shields.io/badge/type_checked-mypy-blue.svg)](https://mypy-lang.org/)
+[![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 Sentinel-1 SLC **burst** download, SAR and InSAR processing, built on the
@@ -160,7 +160,7 @@ uv sync                # set up environment
 uv run pytest          # offline unit tests
 uv run pytest -m integration  # network/SNAP tests (needs credentials + SNAP)
 uv run ruff format && uv run ruff check --fix
-uv run dmypy run src/s1bursts
+uv run pyrefly check
 ```
 
 ## License

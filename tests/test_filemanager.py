@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from pyproj import CRS
@@ -312,7 +312,7 @@ class TestParseFilename:
         fm: FileManager,
         cls: type[BaseProduct],
         filename: str,
-        expected: dict,
+        expected: dict[str, Any],
     ) -> None:
         """Each expected field value must appear in the parsed result."""
         prefix_re, spec, prefix_captures = _PARSERS[cls]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import logging
+from operator import attrgetter
 import re
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, Self
 
@@ -81,7 +82,7 @@ _MGRS_BASE_SPEC = [_MGRS, _POL, _SDATE, _EDATE]
 # Maps each metadata class to its parse arguments: (prefix_re, spec, prefix_captures).
 _PARSERS: dict[
     type[_Parseable],
-    tuple[str, list[FieldSpec], list[tuple[str, str, Callable]] | None],
+    tuple[str, list[FieldSpec], list[tuple[str, str, Callable[[str], Any]]] | None],
 ] = {
     Burst: ("S1_SLC", _SLC_SPEC, None),
     RTCProduct: ("S1_RTC", _BACKSCATTER_SPEC, None),
@@ -290,10 +291,10 @@ class FileManager:
         prefix_re: str,
         spec: list[FieldSpec],
         filename: str,
-        prefix_captures: list[tuple[str, str, Callable]] | None = None,
+        prefix_captures: list[tuple[str, str, Callable[[str], Any]]] | None = None,
         *,
         suffix: str = ".tif",
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Parse a product filename using a prefix regex and field spec.
 
         Parameters
@@ -353,7 +354,8 @@ class FileManager:
             Sorted list of metadata instances.
         """
         prefix_re, spec, prefix_captures = _PARSERS[cls]
-        files: list[Path | UPath] = sorted(directory.glob(pattern), key=lambda p: p.name)
+        matches: list[Path | UPath] = list(directory.glob(pattern))
+        files = sorted(matches, key=attrgetter("name"))
         return [
             cls.from_dict(m)
             for f in files

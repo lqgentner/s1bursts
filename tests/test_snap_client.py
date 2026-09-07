@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from textwrap import dedent
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -38,12 +38,12 @@ if TYPE_CHECKING:
 def _snap_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    **overrides: object,
+    **overrides: Any,
 ) -> SNAPSettings:
     """Build a ``SNAPSettings`` isolated from the ambient environment/.env file."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("SNAP_BIN", raising=False)
-    return SNAPSettings(**overrides)  # type: ignore[arg-type]
+    return SNAPSettings(**overrides)
 
 
 def _make_executable(path: Path) -> Path:
@@ -369,7 +369,7 @@ class TestCreateBackscatter:
         assert result.result.product_type == "GTC"
 
     def test_skips_existing_product(self, client: SNAPClient) -> None:
-        client.manager.product_exists.return_value = True
+        cast("MagicMock", client.manager).product_exists.return_value = True
 
         with patch.object(client, "_run_gpt") as mock_gpt:
             result = client.create_backscatter(
@@ -569,7 +569,7 @@ class TestResourceBudget:
         gpt.chmod(0o755)
         return tmp_path
 
-    def _config(self, snap_bin: Path, **kwargs: object) -> SNAPConfig:
+    def _config(self, snap_bin: Path, **kwargs: Any) -> SNAPConfig:
         return SNAPConfig(bin=snap_bin, auxdata_path=snap_bin / "auxdata", **kwargs)
 
     @pytest.mark.parametrize(
@@ -830,7 +830,7 @@ class TestStageSlc:
         """A local path needs no copy, so the original is handed straight to GPT."""
         local = tmp_path / "slc.zip"
         local.write_bytes(b"burst")
-        client.manager.get_slc_path.return_value = local
+        cast("MagicMock", client.manager).get_slc_path.return_value = local
 
         assert client._stage_slc(_make_burst("2022-08-25"), tmp_path / "work") == local
 
@@ -843,7 +843,7 @@ class TestStageSlc:
         remote = UPath("memory://slcs/S1_SLC_remote.zip")
         remote.parent.mkdir(parents=True, exist_ok=True)
         remote.write_bytes(b"remote burst")
-        client.manager.get_slc_path.return_value = remote
+        cast("MagicMock", client.manager).get_slc_path.return_value = remote
         work = tmp_path / "work"
         work.mkdir()
 

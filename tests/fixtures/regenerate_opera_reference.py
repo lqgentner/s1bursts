@@ -120,7 +120,9 @@ def fetch_opera(
     for level, (window, suffixes) in wanted.items():
         # The static granule is dated by the mission, not by an acquisition, so
         # only the per-acquisition search takes a time window.
-        window_arguments = {} if window is None else {"start": window[0], "end": window[1]}
+        window_arguments: dict[str, Any] = (
+            {} if window is None else {"start": window[0], "end": window[1]}
+        )
         granules = asf_search.search(
             dataset=asf_search.DATASET.OPERA_S1,
             processingLevel=level,
@@ -229,7 +231,7 @@ def process(scene: Scene, acquisition: str, polarization: Polarization, work: Pa
     return product
 
 
-def compare_scene(scene: Scene, work: Path, session: ASFSession) -> dict:
+def compare_scene(scene: Scene, work: Path, session: ASFSession) -> dict[str, Any]:
     """Run both comparisons for one scene and return its record entry."""
     files, static_sources = fetch_opera(scene, work / "opera", session)
     block_key = f"block_{BLOCK}x{BLOCK}_{int(BLOCK * GRID_SPACING)}m"

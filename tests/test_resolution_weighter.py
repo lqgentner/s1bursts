@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, override
 import warnings as _warnings
 
 from affine import Affine
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from numpy.typing import NDArray
+    from upath import UPath
 
 # ---------------------------------------------------------------------------
 # Lightweight product stubs for _stitch_by_orbit_date
@@ -68,7 +69,9 @@ def _make_weighter() -> ResolutionWeighter:
     Safe to use for methods that never touch ``self._fm``.
     """
     w: ResolutionWeighter = object.__new__(ResolutionWeighter)
-    w._fm = None  # type: ignore[assignment]
+    # `_fm` is unused by the methods under test.
+    # pyrefly: ignore [bad-assignment]
+    w._fm = None
     w._n_workers = 1
     return w
 
@@ -326,7 +329,8 @@ class TestAggregateUnweighted:
         """An unknown string aggregation must raise ValueError."""
         values = np.array([[[1.0]]])
         with pytest.raises(ValueError, match="Unknown aggregation"):
-            _make_weighter()._aggregate_unweighted(values, "mode")  # type: ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            _make_weighter()._aggregate_unweighted(values, "mode")
 
     def test_all_nan_column_yields_nan_without_warning(self) -> None:
         """All-NaN slices must produce NaN and must not raise RuntimeWarning."""
@@ -400,6 +404,8 @@ class TestStitchByOrbitDate:
         arr2 = np.array([[9.0, 5.0]])
         loaded = [(p1, arr1), (p2, arr2)]
 
+        # Stub carries only the fields read here.
+        # pyrefly: ignore [bad-argument-type]
         result = self._weighter()._stitch_by_orbit_date(loaded)
 
         assert len(result) == 1
@@ -416,6 +422,8 @@ class TestStitchByOrbitDate:
         arr2 = np.array([[2.0]])
         loaded = [(p1, arr1), (p2, arr2)]
 
+        # Stub carries only the fields read here.
+        # pyrefly: ignore [bad-argument-type]
         result = self._weighter()._stitch_by_orbit_date(loaded)
 
         assert len(result) == 2
@@ -428,6 +436,8 @@ class TestStitchByOrbitDate:
         arr2 = np.array([[2.0]])
         loaded = [(p1, arr1), (p2, arr2)]
 
+        # Stub carries only the fields read here.
+        # pyrefly: ignore [bad-argument-type]
         result = self._weighter()._stitch_by_orbit_date(loaded)
 
         assert len(result) == 2
@@ -439,6 +449,8 @@ class TestStitchByOrbitDate:
         arr = np.array([[1.0]])
         loaded = [(p_late, arr), (p_early, arr)]
 
+        # Stub carries only the fields read here.
+        # pyrefly: ignore [bad-argument-type]
         result = self._weighter()._stitch_by_orbit_date(loaded)
 
         keys = list(result.keys())
@@ -459,7 +471,10 @@ class TestStitchByOrbitDate:
         # Since CoherenceProduct is frozen we cannot setattr safely for a
         # property backed by LUT.  Use a trivial subclass instead.
         class _CohNoLUT(CoherenceProduct):
-            @property  # type: ignore[override]
+            @property
+            @override
+            # Frozen fields are read-only; the base declares it read-write.
+            # pyrefly: ignore [bad-override]
             def rel_orbit_number(self) -> int:
                 return 99
 
@@ -503,7 +518,9 @@ class TestAcquisitionDate:
         class _FakeRTC:
             date = Timestamp("2023-06-15")
 
-        result = ResolutionWeighter._acquisition_date(_FakeRTC())  # type: ignore[arg-type]
+        # Stub carries only the date.
+        # pyrefly: ignore [bad-argument-type]
+        result = ResolutionWeighter._acquisition_date(_FakeRTC())
         assert result == Timestamp("2023-06-15")
 
     def test_coherence_product_returns_date_primary(self) -> None:
@@ -536,13 +553,17 @@ class TestCheckPolarization:
         """Returns the common polarization when all products agree."""
         p1 = _RTCStub(rel_orbit_number=1, date=Timestamp("2023-01-01"), polarization="VV")
         p2 = _RTCStub(rel_orbit_number=2, date=Timestamp("2023-01-12"), polarization="VV")
-        result = ResolutionWeighter._check_polarization([p1, p2])  # type: ignore[arg-type]
+        # Stub carries only the polarization.
+        # pyrefly: ignore [bad-argument-type]
+        result = ResolutionWeighter._check_polarization([p1, p2])
         assert result == "VV"
 
     def test_single_product_returns_its_polarization(self) -> None:
         """A list with one product must return that product's polarization."""
         p = _RTCStub(rel_orbit_number=1, date=Timestamp("2023-01-01"), polarization="HH")
-        result = ResolutionWeighter._check_polarization([p])  # type: ignore[arg-type]
+        # Stub carries only the polarization.
+        # pyrefly: ignore [bad-argument-type]
+        result = ResolutionWeighter._check_polarization([p])
         assert result == "HH"
 
     def test_mismatched_polarizations_raise(self) -> None:
@@ -550,7 +571,8 @@ class TestCheckPolarization:
         p1 = _RTCStub(rel_orbit_number=1, date=Timestamp("2023-01-01"), polarization="VV")
         p2 = _RTCStub(rel_orbit_number=2, date=Timestamp("2023-01-12"), polarization="VH")
         with pytest.raises(ValueError, match="polarization"):
-            ResolutionWeighter._check_polarization([p1, p2])  # type: ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            ResolutionWeighter._check_polarization([p1, p2])
 
 
 # ---------------------------------------------------------------------------
@@ -592,7 +614,9 @@ class TestAggregateWeighted:
             self._weighter()._aggregate_weighted(
                 self._values,
                 self._weights,
-                "mode",  # type: ignore[arg-type]
+                # Deliberately invalid aggregation.
+                # pyrefly: ignore [bad-argument-type]
+                "mode",
             )
 
 
@@ -606,7 +630,7 @@ class TestCheckSimCoverage:
 
     def test_full_coverage_passes(self) -> None:
         """No error is raised when every observation group has a sim group."""
-        arr = np.zeros((1, 1))
+        arr: NDArray[np.floating[Any]] = np.zeros((1, 1))
         key_a = (10, Timestamp("2024-01-01"))
         key_b = (10, Timestamp("2024-01-13"))
         obs = {key_a: arr, key_b: arr}
@@ -616,7 +640,7 @@ class TestCheckSimCoverage:
 
     def test_missing_group_raises(self) -> None:
         """A missing sim group raises ValueError naming the orbit/date."""
-        arr = np.zeros((1, 1))
+        arr: NDArray[np.floating[Any]] = np.zeros((1, 1))
         key_a = (10, Timestamp("2024-01-01"))
         key_b = (10, Timestamp("2024-01-13"))
         obs = {key_a: arr, key_b: arr}
@@ -860,14 +884,21 @@ class TestComposeReturns:
         power: dict[int, np.ndarray],
         area: dict[int, np.ndarray] | None = None,
     ) -> None:
-        def fake_load(products: list, geobox: object, band: int = 1) -> list:  # noqa: ARG001
+        def fake_load(
+            products: list[Any],
+            geobox: object,  # noqa: ARG001
+            band: int = 1,
+        ) -> list[tuple[Any, np.ndarray]]:
             src = power if band == 1 else area
             assert src is not None
             return [(p, src[id(p)]) for p in products]
 
-        weighter._load_band = fake_load  # type: ignore[method-assign]
+        # Stands in for the real windowed reader.
+        # pyrefly: ignore [bad-assignment]
+        weighter._load_band = fake_load
         # The stubs have no file to inherit provenance tags from.
-        weighter._input_tags = lambda _product: {}  # type: ignore[method-assign]
+        # pyrefly: ignore [bad-assignment]
+        weighter._input_tags = lambda _product: {}
 
     def test_rtc_lrw_without_qa_returns_bare_composite(self, tmp_path: Path) -> None:
         """``write_qa=False`` returns just the composite (unchanged)."""
@@ -880,6 +911,8 @@ class TestComposeReturns:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         self._patch_load(weighter, power, area)
 
+        # Stubs stand in for real RTC products.
+        # pyrefly: ignore [no-matching-overload]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
         assert isinstance(result, RTCLRWComposite)
         assert fm.get_product_path(result).exists()
@@ -895,6 +928,8 @@ class TestComposeReturns:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         self._patch_load(weighter, power, area)
 
+        # Stubs stand in for real RTC products.
+        # pyrefly: ignore [no-matching-overload]
         composite, (qa_num, qa_cqm) = weighter.compose_rtc_lrw(
             [p1, p2],
             geobox,
@@ -917,6 +952,8 @@ class TestComposeReturns:
         }
         self._patch_load(weighter, power)
 
+        # Stubs stand in for real RTC products.
+        # pyrefly: ignore [bad-argument-type]
         result = weighter.compose_rtc_by_pass([asc, desc], geobox)
         assert set(result) == {"Ascending", "Descending"}
         assert all(isinstance(v, RTCPassComposite) for v in result.values())
@@ -931,6 +968,8 @@ class TestComposeReturns:
         }
         self._patch_load(weighter, power)
 
+        # Stubs stand in for real RTC products.
+        # pyrefly: ignore [no-matching-overload]
         result = weighter.compose_rtc_by_pass([asc, desc], geobox, write_qa=True)
         composite, qa_num = result["Ascending"]
         assert isinstance(composite, RTCPassComposite)
@@ -952,6 +991,8 @@ class TestSaveStatisticsAndChecksum:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
 
+        # Stubs stand in for real RTC products.
+        # pyrefly: ignore [no-matching-overload]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
 
         with rasterio.open(fm.get_product_path(result)) as ds:
@@ -971,6 +1012,8 @@ class TestSaveStatisticsAndChecksum:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
 
+        # Stubs stand in for real RTC products.
+        # pyrefly: ignore [no-matching-overload]
         _composite, (qa_num, _qa_cqm) = weighter.compose_rtc_lrw(
             [p1, p2],
             geobox,
@@ -994,6 +1037,8 @@ class TestSaveStatisticsAndChecksum:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
 
+        # Stubs stand in for real RTC products.
+        # pyrefly: ignore [no-matching-overload]
         weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
 
         assert weighter.checksums == {}
@@ -1016,6 +1061,8 @@ class TestSaveStatisticsAndChecksum:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
 
+        # Stubs stand in for real RTC products.
+        # pyrefly: ignore [no-matching-overload]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
 
         path = fm.get_product_path(result)
@@ -1046,7 +1093,11 @@ def _geobox() -> MGRSGeoBox:
     )
 
 
-def _write_raster(path: Path, bands: list[NDArray], tags: dict[str, str] | None = None) -> None:
+def _write_raster(
+    path: Path | UPath,
+    bands: list[NDArray[np.floating[Any]]],
+    tags: dict[str, str] | None = None,
+) -> None:
     """Write a small georeferenced GeoTIFF aligned to the test geobox."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(
@@ -1122,7 +1173,7 @@ def scene(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Scene:
     return _Scene(ResolutionWeighter(manager, n_workers=2), manager, _geobox())
 
 
-def _full(value: float) -> NDArray:
+def _full(value: float) -> NDArray[np.float32]:
     return np.full((_TILE, _TILE), value, dtype="float32")
 
 
@@ -1661,7 +1712,7 @@ class TestPerProductProfiles:
     """Composites and their QA auxiliaries can take different codec settings."""
 
     @staticmethod
-    def _weighter(tmp_path: Path, profile: dict | None) -> ResolutionWeighter:
+    def _weighter(tmp_path: Path, profile: dict[str, Any] | None) -> ResolutionWeighter:
         return ResolutionWeighter(
             FileManager(base_dir=tmp_path),
             rasterio_profile=profile,
@@ -1669,7 +1720,7 @@ class TestPerProductProfiles:
 
     @staticmethod
     def _product(qa_metric: QaMetric | None = None) -> RTCLRWComposite | RTCLRWQA:
-        common = {
+        common: dict[str, Any] = {
             "mgrs_code": "32TMS03",
             "start_date": Timestamp("2023-07-18"),
             "end_date": Timestamp("2023-10-15"),

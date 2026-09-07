@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from pandas import Timestamp
 import pyproj
+import pyproj.datadir
 import pytest
 import rasterio
 
@@ -260,9 +261,9 @@ class TestReferenceConformance:
         ``tests/safe_conformance._diff_gcps``).
         """
         reference = database.file_manager.get_slc_path(downloaded_bursts[0])
-        assert Path(reference).exists(), "OData reference burst was not downloaded"
+        assert Path(str(reference)).exists(), "OData reference burst was not downloaded"
 
-        differences = compare_burst_safes(s3_extracted_burst, Path(reference))
+        differences = compare_burst_safes(s3_extracted_burst, Path(str(reference)))
         unexpected = [d for d in differences if not d.startswith("KNOWN DEVIATION:")]
 
         assert unexpected == [], "\n".join(unexpected)
@@ -354,7 +355,7 @@ class TestSnapProcessing:
         """
         bursts = database.search(query)[0:1]
         file_manager = FileManager(base_dir=tmp_path_factory.mktemp("s3-snap"))
-        slc_path = Path(file_manager.get_slc_path(bursts[0]))
+        slc_path = Path(str(file_manager.get_slc_path(bursts[0])))
         slc_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(s3_extracted_burst, slc_path)
 

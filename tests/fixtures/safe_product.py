@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 import textwrap
+from typing import Any
 import warnings
 
 import numpy as np
@@ -143,13 +144,13 @@ def _format_epoch(seconds: Decimal) -> str:
     return datetime.fromtimestamp(float(seconds), tz=UTC).strftime(_XML_TIME_FMT)
 
 
-def _geolocation_points(spec: ProductSpec) -> list[dict[str, object]]:
+def _geolocation_points(spec: ProductSpec) -> list[dict[str, Any]]:
     """Build the geolocation grid.
 
     Rows sit on burst boundaries, as in a real product: one row at each burst's
     first line plus a closing row at the end of the last burst.
     """
-    points: list[dict[str, object]] = []
+    points: list[dict[str, Any]] = []
     for row in range(spec.n_bursts + 1):
         line = row * spec.lines_per_burst
         for col in range(_GRID_COLUMNS):
@@ -168,7 +169,7 @@ def _geolocation_points(spec: ProductSpec) -> list[dict[str, object]]:
     return points
 
 
-def _annotation_xml(spec: ProductSpec, product: dict[str, object]) -> str:
+def _annotation_xml(spec: ProductSpec, product: dict[str, Any]) -> str:
     """Render the swath annotation document."""
     bursts = []
     for i, (sensing, azimuth) in enumerate(
@@ -246,7 +247,7 @@ def _annotation_xml(spec: ProductSpec, product: dict[str, object]) -> str:
 """
 
 
-def _calibration_xml(spec: ProductSpec, product: dict[str, object]) -> str:
+def _calibration_xml(spec: ProductSpec, product: dict[str, Any]) -> str:
     """Render the calibration annotation, with one vector per burst boundary."""
     vectors = [
         f"""    <calibrationVector>
@@ -279,7 +280,7 @@ def _calibration_xml(spec: ProductSpec, product: dict[str, object]) -> str:
 """
 
 
-def _noise_xml(spec: ProductSpec, product: dict[str, object]) -> str:
+def _noise_xml(spec: ProductSpec, product: dict[str, Any]) -> str:
     """Render the noise annotation, with one range vector per burst boundary."""
     vectors = [
         f"""    <noiseRangeVector>
@@ -306,7 +307,7 @@ def _noise_xml(spec: ProductSpec, product: dict[str, object]) -> str:
 """
 
 
-def _rfi_xml(spec: ProductSpec, product: dict[str, object]) -> str:
+def _rfi_xml(spec: ProductSpec, product: dict[str, Any]) -> str:
     """Render the RFI annotation."""
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <rfi>
@@ -328,14 +329,14 @@ def _rfi_xml(spec: ProductSpec, product: dict[str, object]) -> str:
 """
 
 
-def _manifest_xml(spec: ProductSpec, product: dict[str, object]) -> str:
+def _manifest_xml(spec: ProductSpec, product: dict[str, Any]) -> str:
     """Render the XFDU manifest.
 
     Namespace usage matches a real product: the root and content units are
     ``xfdu``-prefixed while ``metadataSection`` and ``dataObjectSection`` sit in
     no namespace, which is what the extractor's XPaths assume.
     """
-    stem: str = product["annotation_stem"]  # type: ignore[assignment]
+    stem: str = product["annotation_stem"]
     short = stem.replace("-", "")
     all_swaths = (
         ["IW1", "IW2", "IW3"] if spec.mode == "IW" else ["EW1", "EW2", "EW3", "EW4", "EW5"]
@@ -593,7 +594,7 @@ def build_product(
         f"_{spec.abs_orbit_number:06d}_{spec.datatake_id:06X}_5132.SAFE"
     )
 
-    fields: dict[str, object] = {
+    fields: dict[str, Any] = {
         "start_time": start_time,
         "stop_time": stop_time,
         "sensing_times": sensing_times,

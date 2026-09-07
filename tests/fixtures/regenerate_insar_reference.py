@@ -39,6 +39,7 @@ import zipfile
 
 import pyproj
 import rasterio
+import rasterio.crs
 
 # Run as a script from anywhere: make the repository root importable so that the
 # `tests` package resolves the same way it does under pytest.
@@ -403,7 +404,7 @@ def compare_scene(
     hyp3: HyP3,
     *,
     allow_submit: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Run the comparison for one scene and return its record entry."""
     granules = (
         burst_granule(scene, scene.reference_date),

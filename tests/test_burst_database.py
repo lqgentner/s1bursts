@@ -82,13 +82,15 @@ class TestDownloadDispatch:
         db = _make_database()
 
         with pytest.raises(TypeError, match="Expected `bursts` of type"):
-            db.download(["not-a-burst"])  # type: ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            db.download(["not-a-burst"])
 
     def test_rejects_unknown_endpoint(self) -> None:
         db = _make_database()
 
         with pytest.raises(ValueError, match="must be 'odata' or 's3'"):
-            db._download_single_burst(_make_burst(), "ftp")  # type: ignore[arg-type]
+            # pyrefly: ignore [bad-argument-type]
+            db._download_single_burst(_make_burst(), "ftp")
 
     def test_skips_existing_files_without_auth(self) -> None:
         file_manager = MagicMock()

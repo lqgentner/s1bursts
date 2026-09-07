@@ -24,10 +24,10 @@ uv run pytest
 uv run ruff format
 uv run ruff check --fix
 uv run ruff format
-uv run mypy src/s1bursts
+uv run pyrefly check
 ```
 
-After every code change, run tests, Ruff formatting and linting, and mypy. Rerun affected
+After every code change, run tests, Ruff formatting and linting, and Pyrefly. Rerun affected
 checks after fixes. Add or update tests for behavior changes; bug fixes should include a
 regression test.
 
@@ -197,8 +197,10 @@ bibliography in each one.
 
 - Python 3.12+ annotations: `type X = ...` instead of `TypeVar`, `collections.abc` instead of
   `typing` for collection types, `X | None` instead of `Optional[X]`.
-- Keep ignores and casts to a minimum.
-- Only annotate what mypy cannot infer on its own (function arguments, return values, empty
+- Pyrefly runs under the `strict` preset on `src/s1bursts` and `tests`. Keep casts and
+  `# pyrefly: ignore[code]` suppressions to a minimum, and give each one a comment
+  saying why.
+- Only annotate what Pyrefly cannot infer on its own (function arguments, return values, empty
   collections).
 
 ### Imports

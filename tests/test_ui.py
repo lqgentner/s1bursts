@@ -51,6 +51,8 @@ class TestCreateFootprintSvg:
         assert "No geometries to display" in svg
 
     def test_all_nan_geometries_returns_placeholder(self) -> None:
+        # An all-missing geometry column is the case under test.
+        # pyrefly: ignore [bad-argument-type]
         gdf = gpd.GeoDataFrame({"burst_id": [1]}, geometry=[None])
 
         svg = ui.create_footprint_svg(gdf)

@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 import warnings
 
 import numpy as np
 import pytest
 import rasterio
 from rasterio.errors import NotGeoreferencedWarning
+from upath import UPath
 
 from s1bursts.burst_extractor import _extract_tiff, _parse_xml, _resolve_burst
 from tests.fixtures.safe_product import ProductSpec, build_product
@@ -38,7 +39,7 @@ BURST_INDEX = 2
 
 
 def _geolocation_points(
-    annotation_root: object,
+    annotation_root: Any,
     starting_line: int,
 ) -> list[tuple[float, float, float, float, float]]:
     """Return grid points as (pixel, shifted line, lon, lat, height), as the port does."""
@@ -50,14 +51,14 @@ def _geolocation_points(
             float(p.findtext("latitude")),
             float(p.findtext("height")),
         )
-        for p in annotation_root.findall(  # type: ignore[attr-defined]
+        for p in annotation_root.findall(
             "geolocationGrid/geolocationGridPointList/geolocationGridPoint",
         )
     ]
 
 
 @pytest.fixture(scope="module")
-def extraction(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
+def extraction(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     """Extract one burst twice: once with the port, once with gdal_translate."""
     tmp_path = tmp_path_factory.mktemp("gdal-diff")
     product: SyntheticProduct = build_product(tmp_path, ProductSpec())
@@ -76,7 +77,7 @@ def extraction(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
     source = product.root / "measurement" / f"{product.annotation_name[:-4]}.tiff"
 
     ours = tmp_path / "ours.tiff"
-    _extract_tiff(source, ours, geoloc_pts=points, meta=meta)
+    _extract_tiff(UPath(source), ours, geoloc_pts=points, meta=meta)
 
     # One `gcp=` per grid point with the line already shifted, then a `srcwin`
     # over the burst's rows.
@@ -116,44 +117,44 @@ def _read(path: Path) -> tuple[np.ndarray, list[tuple[float, float, float, float
 
 
 class TestAgainstGdalTranslate:
-    def test_pixels_are_identical(self, extraction: dict[str, object]) -> None:
+    def test_pixels_are_identical(self, extraction: dict[str, Any]) -> None:
         """The windowed rasterio read must return exactly what gdal_translate's srcwin does."""
-        ours, _, _ = _read(extraction["ours"])  # type: ignore[arg-type]
-        reference, _, _ = _read(extraction["reference"])  # type: ignore[arg-type]
+        ours, _, _ = _read(extraction["ours"])
+        reference, _, _ = _read(extraction["reference"])
 
         assert ours.shape == reference.shape
         assert np.array_equal(ours, reference)
 
-    def test_dimensions_match_the_burst(self, extraction: dict[str, object]) -> None:
-        ours, _, _ = _read(extraction["ours"])  # type: ignore[arg-type]
+    def test_dimensions_match_the_burst(self, extraction: dict[str, Any]) -> None:
+        ours, _, _ = _read(extraction["ours"])
         meta = extraction["meta"]
 
-        assert ours.shape == (meta.number_of_lines, meta.number_of_samples)  # type: ignore[attr-defined]
+        assert ours.shape == (meta.number_of_lines, meta.number_of_samples)
 
-    def test_gcps_are_identical(self, extraction: dict[str, object]) -> None:
+    def test_gcps_are_identical(self, extraction: dict[str, Any]) -> None:
         """Same points, same order, same shifted rows."""
-        _, ours, _ = _read(extraction["ours"])  # type: ignore[arg-type]
-        _, reference, _ = _read(extraction["reference"])  # type: ignore[arg-type]
+        _, ours, _ = _read(extraction["ours"])
+        _, reference, _ = _read(extraction["reference"])
 
         assert ours == pytest.approx(reference)
 
-    def test_gcps_match_the_shifted_grid(self, extraction: dict[str, object]) -> None:
+    def test_gcps_match_the_shifted_grid(self, extraction: dict[str, Any]) -> None:
         """Guards the previous test: both could agree on a wrong set of points."""
-        _, ours, _ = _read(extraction["ours"])  # type: ignore[arg-type]
+        _, ours, _ = _read(extraction["ours"])
         expected = extraction["points"]
 
         assert ours == pytest.approx(expected)
 
-    def test_sample_dtype_is_preserved(self, extraction: dict[str, object]) -> None:
+    def test_sample_dtype_is_preserved(self, extraction: dict[str, Any]) -> None:
         """SLC pixels are CInt16; neither path may promote them."""
-        _, _, ours = _read(extraction["ours"])  # type: ignore[arg-type]
-        _, _, reference = _read(extraction["reference"])  # type: ignore[arg-type]
+        _, _, ours = _read(extraction["ours"])
+        _, _, reference = _read(extraction["reference"])
 
         assert ours == reference == "complex_int16"
 
     def test_port_attaches_a_gcp_crs_that_gdal_leaves_unset(
         self,
-        extraction: dict[str, object],
+        extraction: dict[str, Any],
     ) -> None:
         """The port declares the GCP CRS used by CDSE burst products.
 
@@ -162,9 +163,9 @@ class TestAgainstGdalTranslate:
         """
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
-            with rasterio.open(extraction["ours"]) as src:  # type: ignore[arg-type]
+            with rasterio.open(extraction["ours"]) as src:
                 ours_crs = src.gcps[1]
-            with rasterio.open(extraction["reference"]) as src:  # type: ignore[arg-type]
+            with rasterio.open(extraction["reference"]) as src:
                 reference_crs = src.gcps[1]
 
         assert ours_crs is not None

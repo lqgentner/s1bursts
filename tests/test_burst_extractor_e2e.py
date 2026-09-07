@@ -45,7 +45,7 @@ GOLDEN_PATH = Path(__file__).parent / "fixtures" / "golden_burst.json"
 def extract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> Callable[..., tuple[SyntheticProduct, Path]]:
+) -> Callable[..., tuple[SyntheticProduct, Path | UPath]]:
     """Return a helper that builds a product and extracts one burst from it."""
     builds = count()
 
@@ -54,7 +54,7 @@ def extract(
         *,
         burst_index: int = 0,
         save_path: Path | UPath | None = None,
-    ) -> tuple[SyntheticProduct, Path]:
+    ) -> tuple[SyntheticProduct, Path | UPath]:
         # Variants of one spec can share a product name, so each build gets its
         # own directory.
         source = tmp_path / f"source-{next(builds)}"
