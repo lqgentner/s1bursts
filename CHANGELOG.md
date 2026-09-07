@@ -14,8 +14,10 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   compositing window the product is named and tagged with, so all tiles built
   from one search carry the same dates. The observed span moves to the new
   `FIRST_ACQUISITION_DATE` and `LAST_ACQUISITION_DATE` tags, which are always
-  written. An input outside the window is refused. Without `time_range`
-  nothing changes.
+  written. Dates are compared as UTC calendar days, so a burst found through
+  CDSE, which carries its acquisition time, counts on the window's last day.
+  Each pass composite carries the span of its own direction. An input outside
+  the window is refused. Without `time_range` nothing changes.
 
 ## [0.4.0] - 2026-09-07
 

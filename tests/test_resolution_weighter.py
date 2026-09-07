@@ -1410,6 +1410,27 @@ class TestComposeByPass:
         with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
             assert (src.read(1) == 1).all()
 
+    def test_coherence_pass_composite_carries_window_and_span(self, scene: _Scene) -> None:
+        product = _coh("2022-08-01", "2022-08-13")
+        _write_raster(scene.manager.get_product_path(product), [_full(0.4)])
+        window = (Timestamp("2022-07-15"), Timestamp("2022-10-12"))
+
+        result = scene.weighter.compose_coherence_by_pass(
+            [product], scene.geobox, write_qa=True, time_range=window
+        )
+
+        for written in result[product.pass_direction]:
+            with rasterio.open(scene.manager.get_product_path(written)) as src:
+                tags = src.tags()
+            assert (tags["COMPOSITE_START_DATE"], tags["COMPOSITE_END_DATE"]) == (
+                "2022-07-15",
+                "2022-10-12",
+            )
+            assert (tags["FIRST_ACQUISITION_DATE"], tags["LAST_ACQUISITION_DATE"]) == (
+                "2022-08-01",
+                "2022-08-01",
+            )
+
     def test_skips_existing_per_pass_composites(self, scene: _Scene) -> None:
         product = _rtc("2022-08-13")
         _write_raster(scene.manager.get_product_path(product), [_full(7.0), _full(1.0)])
@@ -1925,3 +1946,63 @@ class TestComposeTimeRange:
     def test_an_input_outside_the_window_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="outside the time range"):
             self._compose(tmp_path, time_range=(Timestamp("2020-01-01"), Timestamp("2020-01-20")))
+
+    def test_timezone_aware_acquisitions_are_compared_by_calendar_day(
+        self, tmp_path: Path
+    ) -> None:
+        """CDSE bursts carry a UTC time of day; an acquisition on the window's last day counts."""
+        fm, weighter, geobox = TestComposeReturns._setup(tmp_path)
+        p1, p2 = _rtc_stub(10, 12), _rtc_stub(20, 24)
+        p1.date = Timestamp("2020-01-12T05:31:07", tz="UTC")
+        p2.date = Timestamp("2020-01-24T17:12:44", tz="UTC")
+        power = {
+            id(p1): np.full((2, 2), 1.0, np.float32),
+            id(p2): np.full((2, 2), 2.0, np.float32),
+        }
+        area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
+        TestComposeReturns._patch_load(weighter, power, area)
+        window = (Timestamp("2020-01-12"), Timestamp("2020-01-24"))
+        # pyrefly: ignore [no-matching-overload]
+        product = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean", time_range=window)
+        assert isinstance(product, RTCLRWComposite)
+        with rasterio.open(fm.get_product_path(product)) as src:
+            tags = src.tags()
+        assert (tags["FIRST_ACQUISITION_DATE"], tags["LAST_ACQUISITION_DATE"]) == (
+            "2020-01-12",
+            "2020-01-24",
+        )
+
+    def test_pass_composites_tag_each_direction_with_its_own_span(self, tmp_path: Path) -> None:
+        fm, weighter, geobox = TestComposeReturns._setup(tmp_path)
+        asc = [_rtc_stub(10, 3, "Ascending"), _rtc_stub(10, 15, "Ascending")]
+        desc = [_rtc_stub(20, 9, "Descending"), _rtc_stub(20, 27, "Descending")]
+        power = {id(p): np.full((2, 2), 1.0, np.float32) for p in [*asc, *desc]}
+        TestComposeReturns._patch_load(weighter, power)
+        window = (Timestamp("2020-01-01"), Timestamp("2020-01-31"))
+        # pyrefly: ignore [no-matching-overload]
+        result = weighter.compose_rtc_by_pass(
+            [*asc, *desc],
+            geobox,
+            aggregation="mean",
+            write_qa=True,
+            time_range=window,
+        )
+        spans = {}
+        for direction, (composite, qa_num) in result.items():
+            for product in (composite, qa_num):
+                with rasterio.open(fm.get_product_path(product)) as src:
+                    tags = src.tags()
+                spans[(direction, type(product).__name__)] = (
+                    tags["COMPOSITE_START_DATE"],
+                    tags["COMPOSITE_END_DATE"],
+                    tags["FIRST_ACQUISITION_DATE"],
+                    tags["LAST_ACQUISITION_DATE"],
+                )
+        for key, (start, end, first, last) in spans.items():
+            assert (start, end) == ("2020-01-01", "2020-01-31"), key
+            expected = (
+                ("2020-01-03", "2020-01-15")
+                if key[0] == "Ascending"
+                else ("2020-01-09", "2020-01-27")
+            )
+            assert (first, last) == expected, key

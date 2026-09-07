@@ -68,6 +68,15 @@ type RTCPassResult = tuple[RTCPassComposite, RTCPassQA]
 type CohPassResult = tuple[CohPassComposite, CohPassQA]
 
 _OrbitDateKey = tuple[int, Timestamp]
+
+
+def _calendar_day(value: Timestamp) -> Timestamp:
+    """``value`` as a naive midnight timestamp of its UTC calendar day."""
+    if value.tzinfo is not None:
+        value = value.tz_convert("UTC").tz_localize(None)
+    return value.normalize()
+
+
 _LoadedEntry = tuple[ComposableProduct, NDArray[np.float32]]
 
 _DEFAULT_PROFILE_KEY = "default"
@@ -652,6 +661,8 @@ class ResolutionWeighter:
             if decibel:
                 composite = self._to_decibel(composite)
             source_tags = self._input_tags([prod for prod, _ in subset])
+            # This file holds one direction, so its span is that direction's.
+            acquisitions = self._acquisition_span([prod for prod, _ in subset])
             self._save(
                 composite,
                 product,
@@ -662,6 +673,7 @@ class ResolutionWeighter:
                     n_observations=len(rtc_obs),
                     decibel=decibel,
                     source_tags=source_tags,
+                    acquisitions=acquisitions,
                 ),
                 overwrite=overwrite,
             )
@@ -815,6 +827,7 @@ class ResolutionWeighter:
             coh_obs = np.stack(list(groups.values()))  # (N, H, W)
             composite = self._aggregate_unweighted(coh_obs, aggregation)
             source_tags = self._input_tags([prod for prod, _ in subset])
+            acquisitions = self._acquisition_span([prod for prod, _ in subset])
             self._save(
                 composite,
                 product,
@@ -825,6 +838,7 @@ class ResolutionWeighter:
                     n_observations=len(coh_obs),
                     statistics=product_tags.coherence_statistics(composite),
                     source_tags=source_tags,
+                    acquisitions=acquisitions,
                 ),
                 overwrite=overwrite,
             )
@@ -1116,9 +1130,14 @@ class ResolutionWeighter:
     def _acquisition_span(
         cls, products: Collection[ComposableProduct]
     ) -> product_tags.Acquisitions:
-        """First and last acquisition date among ``products``."""
-        dates = [cls._acquisition_date(p) for p in products]
-        return min(dates), max(dates)
+        """First and last acquisition date among ``products``, as calendar days.
+
+        A burst found through CDSE carries its UTC acquisition time; one indexed
+        from a filename carries midnight. Both name the same day, which is the
+        resolution every date tag and every window is expressed at.
+        """
+        days = [_calendar_day(cls._acquisition_date(p)) for p in products]
+        return min(days), max(days)
 
     @staticmethod
     def _composite_dates(
@@ -1141,7 +1160,7 @@ class ResolutionWeighter:
             return acquisitions
         start, end = time_range
         first, last = acquisitions
-        if first < start or last > end:
+        if first < _calendar_day(start) or last > _calendar_day(end):
             msg = (
                 f"inputs span {first.date()}..{last.date()}, outside the time range "
                 f"{start.date()}..{end.date()}"
