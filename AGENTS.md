@@ -17,6 +17,11 @@ from PyPI like any other dependency.
 uv sync
 ```
 
+The `Programming Language :: Python` classifiers are the source of truth for the supported
+versions (PyPI and the README badge are built from them). `tests/test_supported_python_versions.py`
+fails if the CI test matrix, `requires-python`, the lowest-bound job, Pyrefly's `python-version`
+or the SNAP image's `PYTHON_VERSION` drift from them, so change them together.
+
 ## Required checks
 
 ```bash

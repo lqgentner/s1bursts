@@ -231,6 +231,7 @@ project-includes = ["src/s1bursts", "tests"]
 # Repo root, so `tests.*` helper modules resolve the way pytest imports them.
 search-path = [".", "src"]
 preset = "strict"
+python-version = "3.12"
 ignore-missing-imports = ["asf_search", "hyp3_sdk"]
 
 # Monkeypatch stubs give a lambda no context to infer from, so annotating each one
