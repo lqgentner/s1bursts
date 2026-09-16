@@ -3380,7 +3380,7 @@ dev = [
     { name = "types-geopandas", specifier = ">=1.1" },
     { name = "types-requests", specifier = ">=2.33" },
 ]
-docs = [{ name = "great-docs", specifier = ">=0.16" }]
+docs = [{ name = "great-docs", specifier = ">=0.17" }]
 validation = [
     { name = "asf-search", specifier = ">=8" },
     { name = "hyp3-sdk", specifier = ">=7" },

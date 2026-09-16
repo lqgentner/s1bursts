@@ -87,7 +87,7 @@ validation = [
 # Documentation toolchain. `great-docs` renders the site via Quarto,
 # installed separately.
 docs = [
-    "great-docs>=0.16",
+    "great-docs>=0.17",
 ]
 
 [build-system]
