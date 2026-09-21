@@ -452,7 +452,7 @@ wheels = [
 
 [[package]]
 name = "freezebase"
-version = "0.7.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "affine" },
@@ -471,15 +471,16 @@ dependencies = [
     { name = "tenacity" },
     { name = "universal-pathlib" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/17/07/3f1b6d61876e1b2e607d0979a1a3c86ab7c465ae4018f208a13d03a71538/freezebase-0.7.0.tar.gz", hash = "sha256:42ffc500da6011ddb2961f68d3e365a92cefcea3c0365b63eab25b1a3948e38f", size = 74052, upload-time = "2026-09-04T12:24:47.752Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/c7/40db2f556c7a60a6ae937d62665026b357ba0cea6e1db775855412a0c87e/freezebase-0.8.0.tar.gz", hash = "sha256:3df4932fc1bd5d72d5c22aabc586cffe484f2d834f33b06c2d7cd3c2d68080b0", size = 88248, upload-time = "2026-09-21T12:15:38.816Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/dd/b5/b8d33052644617f90042ece8f4693939b82bc6805d50e86d0c43733eb96b/freezebase-0.7.0-py3-none-any.whl", hash = "sha256:6464c602ba289bcc7c62052e59563f7f10def2c2f5c336e544dc02857ff78502", size = 40137, upload-time = "2026-09-04T12:24:46.36Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/82/8a83ab4c0c52720e46cce67c7625d9f2fd8fed679885debd5cc6f7706023/freezebase-0.8.0-py3-none-any.whl", hash = "sha256:3600620a89fc45d3bf1d7ba5c4d9de84bb4bd13325fe613f81cdf61a73e65799", size = 46732, upload-time = "2026-09-21T12:15:37.563Z" },
 ]
 
 [package.optional-dependencies]
 s3 = [
     { name = "boto3" },
     { name = "fsspec" },
+    { name = "pydantic-settings" },
     { name = "s3fs" },
 ]
 
@@ -1766,7 +1767,7 @@ validation = [
 [package.metadata]
 requires-dist = [
     { name = "affine", specifier = ">=3" },
-    { name = "freezebase", extras = ["s3"], specifier = ">=0.7,<0.8" },
+    { name = "freezebase", extras = ["s3"], specifier = ">=0.8,<0.9" },
     { name = "geopandas", specifier = ">=1.1" },
     { name = "lxml", specifier = ">=5" },
     { name = "numpy", specifier = ">=2.0" },
