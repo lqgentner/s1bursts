@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is pre-1.0 (`0.x`), minor releases may contain breaking changes.
 
+## [0.5.1] - 2026-09-21
+
+### Changed
+
+- Requires freezebase 0.8 (`freezebase[s3]>=0.8,<0.9`).
+
+### Fixed
+
+- Products and composites written to S3 are uploaded through freezebase's
+  s3fs path instead of GDAL's `/vsis3/`, which a gateway could refuse
+  without raising an error. A backscatter or coherence product that fails to
+  upload is now a failed operation: the summary counts it in `n_failed`, where
+  it used to be logged as created.
+- A burst `.zip` extracted to a remote `save_path` is uploaded with
+  `upload_object`, which checks the stored size.
+
 ## [0.5.0] - 2026-09-07
 
 ### Added

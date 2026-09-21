@@ -40,7 +40,7 @@ import warnings
 
 from freezebase.download import retry_request
 from freezebase.raster import rasterio_open
-from freezebase.s3 import make_s3_upath
+from freezebase.s3 import make_s3_upath, upload_object
 from lxml import etree
 import rasterio
 from rasterio.control import GroundControlPoint
@@ -698,8 +698,8 @@ def extract_burst_from_s3(  # noqa: PLR0915
         if isinstance(save_upath, Path):
             shutil.move(zip_path, save_upath)
         else:
-            with zip_path.open("rb") as src, save_upath.open("wb") as out:
-                shutil.copyfileobj(src, out)
+            # One verified put: a refused or truncated upload raises here.
+            upload_object(zip_path, save_upath)
 
     logger.info("Burst extracted to: %s", save_upath)
     return save_upath
