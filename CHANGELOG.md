@@ -14,8 +14,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   s3fs path instead of GDAL's `/vsis3/`, which a gateway could refuse
   without raising an error. A backscatter or coherence product that fails to
   upload is now a failed operation: the summary counts it in `n_failed`, where
-  it used to be logged as created. This needs a freezebase release with
-  `upload_object`.
+  it used to be logged as created. This needs freezebase 0.8.0.
 - A burst `.zip` extracted to a remote `save_path` is uploaded with
   `upload_object`, which checks the stored size.
 
