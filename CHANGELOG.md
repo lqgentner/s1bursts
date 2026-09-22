@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is pre-1.0 (`0.x`), minor releases may contain breaking changes.
 
+## Unreleased
+
+### Changed
+
+- **Breaking:** `BurstCollection.find_pairs()` defaults to `max_delta=6`
+  hours (was 24) and raises `ValueError` for a `max_delta` of 12 hours or
+  more, or a `baseline` that is not a whole number of days. A coherence
+  product is named by its baseline rounded to whole days, so the wider
+  tolerance could select pairs of neighbouring baselines (a 12-day S1A and a
+  13-day S1A/S1C pair for `baseline=12`) that `ResolutionWeighter` then
+  refused to composite together. Below half a day every pair found is named by
+  the requested baseline. `find_pairs(12)` now selects pairs within 12 d ± 6 h
+  instead of 12 d ± 24 h; a caller that passed `max_delta=24` must pass a value
+  below 12, such as `find_pairs(12, max_delta=6)`.
+
 ## [0.5.1] - 2026-09-21
 
 ### Changed

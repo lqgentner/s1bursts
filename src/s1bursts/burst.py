@@ -176,6 +176,10 @@ def _scalar_or_none[T](value: T) -> T | None:
     return value
 
 
+# Pair baselines are rounded half-to-even to whole days, so below half a day
+# every pair found rounds back to the baseline it was searched for.
+_MAX_PAIR_DELTA = Timedelta(hours=12)
+
 # Public footprint keys mapped to the private fields they populate, so
 # ``Burst.from_dict`` accepts parsed-filename/response dicts.
 _FOOTPRINT_ALIASES = {
@@ -635,30 +639,47 @@ class BurstCollection(_BaseBurstCollection[Burst]):
 
     @staticmethod
     def _validate_pair_search(baseline: Timedelta, max_delta: Timedelta) -> None:
-        """Reject baselines that cannot describe an interferometric pair."""
+        """Reject searches whose pairs would not be named by the requested baseline."""
         if baseline <= Timedelta(0):
             msg = f"`baseline` must be a positive duration, received {baseline}."
             raise ValueError(msg)
+        if baseline % Timedelta(days=1) != Timedelta(0):
+            msg = (
+                f"`baseline` must be a whole number of days, received {baseline}. "
+                "Products are named by their baseline in whole days."
+            )
+            raise ValueError(msg)
         if max_delta < Timedelta(0):
             msg = f"`max_delta` must not be negative, received {max_delta}."
+            raise ValueError(msg)
+        if max_delta >= _MAX_PAIR_DELTA:
+            msg = (
+                f"`max_delta` must be less than 12 hours, received {max_delta}. "
+                "Products are named by their baseline rounded to whole days, so only "
+                "a tolerance below half a day guarantees that every pair found is "
+                "named by the requested baseline."
+            )
             raise ValueError(msg)
 
     def find_pairs(
         self,
         baseline: Timedelta | int,
-        max_delta: Timedelta | int = 24,
+        max_delta: Timedelta | int = 6,
     ) -> BurstPairCollection:
         """Find interferometric burst pairs with a specified temporal baseline.
 
         Parameters
         ----------
         baseline
-            Temporal baseline between primary and secondary bursts.
-            If integer is provided, the assumed unit is days.
+            Temporal baseline between primary and secondary bursts, a positive
+            whole number of days. If integer is provided, the assumed unit is days.
         max_delta
-            Maximum allowed deviation from baseline.
-            If integer is provided, the assumed unit is hours.
-            Default is 24 hours.
+            Maximum allowed deviation from baseline, less than 12 hours.
+            If integer is provided, the assumed unit is hours. Default is 6 hours:
+            a repeat pass lands within seconds of the baseline, but CDSE has
+            reported burst times hours off their product's sensing time. Products
+            are named by their baseline rounded to whole days, so a tolerance below
+            half a day ensures every pair is named by the requested baseline.
 
         Returns
         -------
@@ -669,7 +690,8 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         Raises
         ------
         ValueError
-            If ``baseline`` is not positive or ``max_delta`` is negative.
+            If ``baseline`` is not a positive whole number of days, or
+            ``max_delta`` is negative or 12 hours or more.
         """
         if not isinstance(baseline, Timedelta):
             baseline = Timedelta(baseline, unit="days")
