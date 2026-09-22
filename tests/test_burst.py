@@ -471,6 +471,19 @@ class TestFindPairsValidation:
         with pytest.raises(ValueError, match="`max_delta` must be less than 12 hours"):
             self._collection().find_pairs(6, max_delta=max_delta)
 
+    def test_rejects_half_a_day_for_an_odd_baseline(self) -> None:
+        """The bound is ``>=`` because half-to-even rounding breaks odd baselines at 12 h.
+
+        An even baseline would survive exactly 12 h (12 d +- 12 h both round to
+        12), but an odd one does not: 13 d + 12 h rounds to 14, 13 d - 12 h to 12.
+        """
+        assert Timedelta(days=12, hours=12).round("D") == Timedelta(days=12)
+        assert Timedelta(days=11, hours=12).round("D") == Timedelta(days=12)
+        assert Timedelta(days=13, hours=12).round("D") == Timedelta(days=14)
+
+        with pytest.raises(ValueError, match="`max_delta` must be less than 12 hours"):
+            self._collection().find_pairs(13, max_delta=12)
+
     def test_accepts_max_delta_just_below_half_a_day(self) -> None:
         pairs = self._collection().find_pairs(6, max_delta=Timedelta(hours=11.9))
 
@@ -497,10 +510,17 @@ class TestFindPairsValidation:
 
         assert len(collection.find_pairs(12)) == 1
 
+    def test_default_max_delta_includes_a_pair_exactly_six_hours_off(self) -> None:
+        """The default tolerance is inclusive at its upper bound."""
+        collection = make_collection(["2022-01-01 00:00", "2022-01-13 06:00"])
+
+        assert len(collection.find_pairs(12)) == 1
+
 
 # S1A on a 12-day repeat with jitter of seconds, one burst two hours off its
 # nominal time (as CDSE reported on orbit 088 in 2019) and one five hours off,
-# plus S1C a day out of phase, which forms 13-day pairs with S1A.
+# plus S1C a day out of phase, which forms 13-day pairs with S1A. The last S1C
+# burst is 11 h 30 m late, so it pairs with its predecessor close to 12 d + 12 h.
 JITTERED_DATES = [
     "2026-06-01 05:50:00",
     "2026-06-13 05:50:03",
@@ -511,7 +531,9 @@ JITTERED_DATES = [
     "2026-06-14 05:50:02",
     "2026-06-26 05:49:57",
     "2026-07-08 05:50:04",
+    "2026-07-20 17:20:00",
 ]
+EDGE_PAIR = (Timestamp("2026-07-08 05:50:04"), Timestamp("2026-07-20 17:20:00"))
 
 
 class TestFindPairsBaselineNaming:
@@ -549,3 +571,13 @@ class TestFindPairsBaselineNaming:
             product = CoherenceProduct.from_burst_pair(pair, crs=CRS("EPSG:32632"))
             assert product.baseline_days == baseline
             assert pair.baseline_days == baseline
+
+    def test_the_edge_pair_is_found_at_the_widest_tolerance(self) -> None:
+        """A pair 11 h 30 m off the baseline is still accepted and named by it."""
+        collection = make_collection(JITTERED_DATES)
+
+        pairs = collection.find_pairs(12, max_delta=Timedelta(hours=11, minutes=59, seconds=59))
+
+        found = [(pair.primary.date, pair.secondary.date) for pair in pairs]
+        assert EDGE_PAIR in found
+        assert EDGE_PAIR[1] - EDGE_PAIR[0] == Timedelta(days=12, hours=11, minutes=29, seconds=56)
