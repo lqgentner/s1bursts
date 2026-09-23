@@ -519,8 +519,10 @@ class TestFindPairsValidation:
 
 # S1A on a 12-day repeat with jitter of seconds, one burst two hours off its
 # nominal time (as CDSE reported on orbit 088 in 2019) and one five hours off,
-# plus S1C a day out of phase, which forms 13-day pairs with S1A. The last S1C
-# burst is 11 h 30 m late, so it pairs with its predecessor close to 12 d + 12 h.
+# plus S1C a day out of phase, which forms 13-day pairs with S1A. The last entry
+# is not observed jitter but a synthetic boundary probe: 11 h 30 m late, so it
+# pairs with its predecessor close to 12 d + 12 h, just inside the widest
+# tolerance a caller may ask for.
 JITTERED_DATES = [
     "2026-06-01 05:50:00",
     "2026-06-13 05:50:03",
@@ -588,6 +590,9 @@ class TestFindPairsBaselineNaming:
         Spacings grow with the lag, so a lag whose shortest spacing is just past
         the baseline can still be followed by one inside the tolerance.
         """
+        # Two acquisitions per day, two hours apart: a synthetic probe of the
+        # lag arithmetic, and the gap has to exceed the one hour at which
+        # ``_remove_timestamp_duplicates`` would collapse them.
         dates = [
             "2026-01-01 00:00",
             "2026-01-01 02:00",

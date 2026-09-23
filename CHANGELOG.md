@@ -8,14 +8,6 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ## Unreleased
 
-### Fixed
-
-- `BurstCollection.find_pairs()` widens its lag until no spacing at that lag
-  can still reach the tolerance, instead of stopping at the baseline itself.
-  It previously stopped one lag early whenever every spacing at a lag was just
-  past the baseline but still inside `max_delta`, dropping pairs at the next
-  lag that were inside it too.
-
 ### Changed
 
 - **Breaking:** `BurstCollection.find_pairs()` defaults to `max_delta=6`
@@ -323,3 +315,12 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - **Breaking:** removed `CDSES3Settings.s3_env`, a legacy context manager that
   injected `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` for an external script.
   S3 credentials now flow through the S3 `UPath` and `freezecore.s3.s3_env`.
+
+### Fixed
+
+- `BurstCollection.find_pairs()` widens its lag until no spacing at that lag
+  can still reach the tolerance, instead of stopping at the baseline itself.
+  It previously stopped widening as soon as every spacing at a lag was past
+  the baseline, even when that lag was still inside `max_delta`, dropping
+  every later lag along with the pairs inside the tolerance there.
+
