@@ -581,3 +581,25 @@ class TestFindPairsBaselineNaming:
         found = [(pair.primary.date, pair.secondary.date) for pair in pairs]
         assert EDGE_PAIR in found
         assert EDGE_PAIR[1] - EDGE_PAIR[0] == Timedelta(days=12, hours=11, minutes=29, seconds=56)
+
+    def test_finds_a_pair_at_a_lag_past_the_first_over_long_one(self) -> None:
+        """Widening the lag must not stop at the first lag whose spacings all exceed the baseline.
+
+        Spacings grow with the lag, so a lag whose shortest spacing is just past
+        the baseline can still be followed by one inside the tolerance.
+        """
+        dates = [
+            "2026-01-01 00:00",
+            "2026-01-01 02:00",
+            "2026-01-13 01:00",
+            "2026-01-13 05:00",
+        ]
+        collection = make_collection(dates)
+
+        pairs = collection.find_pairs(12, max_delta=6)
+
+        found = [(pair.primary.date, pair.secondary.date) for pair in pairs]
+        # Lag 3, reached only after lag 2, whose spacings are 12 d 1 h and 12 d 3 h.
+        assert (Timestamp(dates[0]), Timestamp(dates[3])) in found
+        for pair in pairs:
+            assert pair.baseline_days == 12

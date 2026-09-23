@@ -729,7 +729,9 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         for _, group in df_bursts.groupby(self._INSAR_MATCH_COLUMNS):
             periods = 1
             pairs.append(match_pairs(group, periods))
-            while (-group.date.diff(-periods) <= baseline).any():
+            # Stop only once no spacing at this lag can still reach the tolerance;
+            # spacings grow with the lag, so a later lag may yet land inside it.
+            while (-group.date.diff(-periods) <= baseline + max_delta).any():
                 periods += 1
                 pairs.append(match_pairs(group, periods))
         if not pairs:

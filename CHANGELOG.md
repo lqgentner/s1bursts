@@ -8,6 +8,14 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ## Unreleased
 
+### Fixed
+
+- `BurstCollection.find_pairs()` widens its lag until no spacing at that lag
+  can still reach the tolerance, instead of stopping at the baseline itself.
+  It previously stopped one lag early whenever every spacing at a lag was just
+  past the baseline but still inside `max_delta`, dropping pairs at the next
+  lag that were inside it too.
+
 ### Changed
 
 - **Breaking:** `BurstCollection.find_pairs()` defaults to `max_delta=6`
