@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is pre-1.0 (`0.x`), minor releases may contain breaking changes.
 
+## [0.6.0] - 2026-09-24
+
+### Changed
+
+- **Breaking:** `BurstCollection.find_pairs(12)` now selects 12 d ± 6 h
+  (was ± 24 h). The old default mixed 12- and 13-day pairs that
+  `ResolutionWeighter` refused to composite.
+- **Breaking:** a `max_delta` of 12 hours or more, and a `baseline` that is
+  not a whole number of days, now raise `ValueError`. Replace
+  `find_pairs(12, max_delta=24)` with e.g. `find_pairs(12, max_delta=6)`.
+  Coherence names round pair spacing to whole days; only a tolerance below
+  12 hours guarantees the requested baseline.
+
+### Fixed
+
+- `find_pairs()` stopped widening the lag when every spacing exceeded the
+  baseline, dropping in-tolerance pairs at later lags. It now stops only
+  when every spacing exceeds `baseline + max_delta`.
+
 ## [0.5.1] - 2026-09-21
 
 ### Changed

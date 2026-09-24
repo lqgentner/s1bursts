@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import geopandas as gpd
 from pandas import Timedelta, Timestamp
+from pyproj import CRS
 import pytest
 from shapely.geometry import box
 
@@ -17,6 +18,7 @@ from s1bursts.burst import (
     BurstPairCollection,
 )
 from s1bursts.cdse import CDSEResponse
+from s1bursts.product import CoherenceProduct
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -459,3 +461,150 @@ class TestFindPairsValidation:
         pairs = self._collection().find_pairs(baseline=6, max_delta=0)
 
         assert len(pairs) == 2
+
+    @pytest.mark.parametrize(
+        "max_delta",
+        [12, Timedelta(hours=12), Timedelta(hours=12, microseconds=1), 13, 24, 48],
+    )
+    def test_rejects_max_delta_of_half_a_day_or_more(self, max_delta: Timedelta | int) -> None:
+        """From half a day on, an accepted pair can round to a neighbouring whole day."""
+        with pytest.raises(ValueError, match="`max_delta` must be less than 12 hours"):
+            self._collection().find_pairs(6, max_delta=max_delta)
+
+    def test_rejects_half_a_day_for_an_odd_baseline(self) -> None:
+        """The bound is ``>=`` because half-to-even rounding breaks odd baselines at 12 h.
+
+        An even baseline would survive exactly 12 h (12 d +- 12 h both round to
+        12), but an odd one does not: 13 d + 12 h rounds to 14, 13 d - 12 h to 12.
+        """
+        assert Timedelta(days=12, hours=12).round("D") == Timedelta(days=12)
+        assert Timedelta(days=11, hours=12).round("D") == Timedelta(days=12)
+        assert Timedelta(days=13, hours=12).round("D") == Timedelta(days=14)
+
+        with pytest.raises(ValueError, match="`max_delta` must be less than 12 hours"):
+            self._collection().find_pairs(13, max_delta=12)
+
+    def test_accepts_max_delta_just_below_half_a_day(self) -> None:
+        pairs = self._collection().find_pairs(6, max_delta=Timedelta(hours=11.9))
+
+        assert len(pairs) == 2
+
+    @pytest.mark.parametrize(
+        "baseline",
+        [Timedelta(days=12, hours=12), Timedelta(hours=6), Timedelta(days=6, seconds=1)],
+    )
+    def test_rejects_a_baseline_that_is_not_whole_days(self, baseline: Timedelta) -> None:
+        """Products are named by whole days, so a fractional baseline has no name."""
+        with pytest.raises(ValueError, match="`baseline` must be a whole number of days"):
+            self._collection().find_pairs(baseline)
+
+    def test_default_max_delta_is_six_hours(self) -> None:
+        """A pair 7 h off the baseline is outside the default tolerance but not a wider one."""
+        collection = make_collection(["2022-01-01 00:00", "2022-01-13 07:00"])
+
+        assert len(collection.find_pairs(12)) == 0
+        assert len(collection.find_pairs(12, max_delta=8)) == 1
+
+    def test_default_max_delta_includes_a_pair_five_hours_off(self) -> None:
+        collection = make_collection(["2022-01-01 00:00", "2022-01-13 05:00"])
+
+        assert len(collection.find_pairs(12)) == 1
+
+    def test_default_max_delta_includes_a_pair_exactly_six_hours_off(self) -> None:
+        """The default tolerance is inclusive at its upper bound."""
+        collection = make_collection(["2022-01-01 00:00", "2022-01-13 06:00"])
+
+        assert len(collection.find_pairs(12)) == 1
+
+
+# S1A on a 12-day repeat with jitter of seconds, one burst two hours off its
+# nominal time (as CDSE reported on orbit 088 in 2019) and one five hours off,
+# plus S1C a day out of phase, which forms 13-day pairs with S1A. The last entry
+# is not observed jitter but a synthetic boundary probe: 11 h 30 m late, so it
+# pairs with its predecessor close to 12 d + 12 h, just inside the widest
+# tolerance a caller may ask for.
+JITTERED_DATES = [
+    "2026-06-01 05:50:00",
+    "2026-06-13 05:50:03",
+    "2026-06-25 05:49:58",
+    "2026-07-07 07:50:00",
+    "2026-07-19 05:50:01",
+    "2026-07-31 10:49:59",
+    "2026-06-14 05:50:02",
+    "2026-06-26 05:49:57",
+    "2026-07-08 05:50:04",
+    "2026-07-20 17:20:00",
+]
+EDGE_PAIR = (Timestamp("2026-07-08 05:50:04"), Timestamp("2026-07-20 17:20:00"))
+
+
+class TestFindPairsBaselineNaming:
+    """Every pair `find_pairs` selects is named by the baseline it was selected for."""
+
+    @pytest.mark.parametrize(
+        "max_delta",
+        [
+            None,
+            Timedelta(seconds=10),
+            1,
+            3,
+            6,
+            8,
+            11,
+            Timedelta(hours=11, minutes=59, seconds=59),
+        ],
+    )
+    @pytest.mark.parametrize("baseline", [12, 13, 24])
+    def test_every_pair_is_named_by_the_requested_baseline(
+        self,
+        baseline: int,
+        max_delta: Timedelta | int | None,
+    ) -> None:
+        collection = make_collection(JITTERED_DATES)
+
+        pairs = (
+            collection.find_pairs(baseline)
+            if max_delta is None
+            else collection.find_pairs(baseline, max_delta=max_delta)
+        )
+
+        assert len(pairs) > 0
+        for pair in pairs:
+            product = CoherenceProduct.from_burst_pair(pair, crs=CRS("EPSG:32632"))
+            assert product.baseline_days == baseline
+            assert pair.baseline_days == baseline
+
+    def test_the_edge_pair_is_found_at_the_widest_tolerance(self) -> None:
+        """A pair 11 h 30 m off the baseline is still accepted and named by it."""
+        collection = make_collection(JITTERED_DATES)
+
+        pairs = collection.find_pairs(12, max_delta=Timedelta(hours=11, minutes=59, seconds=59))
+
+        found = [(pair.primary.date, pair.secondary.date) for pair in pairs]
+        assert EDGE_PAIR in found
+        assert EDGE_PAIR[1] - EDGE_PAIR[0] == Timedelta(days=12, hours=11, minutes=29, seconds=56)
+
+    def test_finds_a_pair_at_a_lag_past_the_first_over_long_one(self) -> None:
+        """Widening the lag must not stop at the first lag whose spacings all exceed the baseline.
+
+        Spacings grow with the lag, so a lag whose shortest spacing is just past
+        the baseline can still be followed by one inside the tolerance.
+        """
+        # Two acquisitions per day, two hours apart: a synthetic probe of the
+        # lag arithmetic, and the gap has to exceed the one hour at which
+        # ``_remove_timestamp_duplicates`` would collapse them.
+        dates = [
+            "2026-01-01 00:00",
+            "2026-01-01 02:00",
+            "2026-01-13 01:00",
+            "2026-01-13 05:00",
+        ]
+        collection = make_collection(dates)
+
+        pairs = collection.find_pairs(12, max_delta=6)
+
+        found = [(pair.primary.date, pair.secondary.date) for pair in pairs]
+        # Lag 3, reached only after lag 2, whose spacings are 12 d 1 h and 12 d 3 h.
+        assert (Timestamp(dates[0]), Timestamp(dates[3])) in found
+        for pair in pairs:
+            assert pair.baseline_days == 12
