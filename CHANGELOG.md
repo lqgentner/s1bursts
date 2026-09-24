@@ -10,16 +10,20 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Changed
 
-- **Breaking:** `BurstCollection.find_pairs()` defaults to `max_delta=6`
-  hours (was 24) and raises `ValueError` for a `max_delta` of 12 hours or
-  more, or a `baseline` that is not a whole number of days. A coherence
-  product is named by its baseline rounded to whole days, so the wider
-  tolerance could select pairs of neighbouring baselines (a 12-day S1A and a
-  13-day S1A/S1C pair for `baseline=12`) that `ResolutionWeighter` then
-  refused to composite together. Below half a day every pair found is named by
-  the requested baseline. `find_pairs(12)` now selects pairs within 12 d ± 6 h
-  instead of 12 d ± 24 h; a caller that passed `max_delta=24` must pass a value
-  below 12, such as `find_pairs(12, max_delta=6)`.
+- **Breaking:** `BurstCollection.find_pairs(12)` now selects 12 d ± 6 h
+  (was ± 24 h). The old default mixed 12- and 13-day pairs that
+  `ResolutionWeighter` refused to composite.
+- **Breaking:** a `max_delta` of 12 hours or more, and a `baseline` that is
+  not a whole number of days, now raise `ValueError`. Replace
+  `find_pairs(12, max_delta=24)` with e.g. `find_pairs(12, max_delta=6)`.
+  Coherence names round pair spacing to whole days; only a tolerance below
+  12 hours guarantees the requested baseline.
+
+### Fixed
+
+- `find_pairs()` stopped widening the lag when every spacing exceeded the
+  baseline, dropping in-tolerance pairs at later lags. It now stops only
+  when every spacing exceeds `baseline + max_delta`.
 
 ## [0.5.1] - 2026-09-21
 
@@ -315,12 +319,3 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - **Breaking:** removed `CDSES3Settings.s3_env`, a legacy context manager that
   injected `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` for an external script.
   S3 credentials now flow through the S3 `UPath` and `freezecore.s3.s3_env`.
-
-### Fixed
-
-- `BurstCollection.find_pairs()` widens its lag until no spacing at that lag
-  can still reach the tolerance, instead of stopping at the baseline itself.
-  It previously stopped widening as soon as every spacing at a lag was past
-  the baseline, even when that lag was still inside `max_delta`, dropping
-  every later lag along with the pairs inside the tolerance there.
-

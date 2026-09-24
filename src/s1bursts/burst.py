@@ -653,12 +653,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
             msg = f"`max_delta` must not be negative, received {max_delta}."
             raise ValueError(msg)
         if max_delta >= _MAX_PAIR_DELTA:
-            msg = (
-                f"`max_delta` must be less than 12 hours, received {max_delta}. "
-                "Products are named by their baseline rounded to whole days, so only "
-                "a tolerance below half a day guarantees that every pair found is "
-                "named by the requested baseline."
-            )
+            msg = f"`max_delta` must be less than 12 hours, received {max_delta}."
             raise ValueError(msg)
 
     def find_pairs(
@@ -674,12 +669,10 @@ class BurstCollection(_BaseBurstCollection[Burst]):
             Temporal baseline between primary and secondary bursts, a positive
             whole number of days. If integer is provided, the assumed unit is days.
         max_delta
-            Maximum allowed deviation from baseline, less than 12 hours.
-            If integer is provided, the assumed unit is hours. Default is 6 hours:
-            a repeat pass lands within seconds of the baseline, but CDSE has
-            reported burst times hours off their product's sensing time. Products
-            are named by their baseline rounded to whole days, so a tolerance below
-            half a day ensures every pair is named by the requested baseline.
+            Maximum allowed deviation from baseline, less than 12 hours. If
+            integer is provided, the assumed unit is hours. Pairs are named by
+            their spacing rounded to whole days, so a smaller tolerance keeps
+            every pair at the requested baseline.
 
         Returns
         -------
