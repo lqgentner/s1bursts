@@ -702,7 +702,11 @@ def qa_metadata(
     tags |= {
         "QA_LAYER": "Composite Quality Map Image",
         "LAYER_NAME": "cqm",
-        "LAYER_DESCRIPTION": "Composite local resolution, 1/sum(W_i * A_i); dimensionless.",
+        "LAYER_DESCRIPTION": (
+            "Composite local resolution: the reciprocal of the local scattering areas A_i, "
+            "aggregated with the composite's weights and statistic; higher is better "
+            "resolved; dimensionless."
+        ),
     }
     # <CQMdBScaling>: the declaration of a conversion, on linear data.
     tags["CQM_CONVERSION_EQ"] = CONVERSION_EQ
@@ -811,7 +815,9 @@ def backscatter_metadata(
             {"LAYER_NAME": "gamma0"},
             {
                 "LAYER_NAME": "scattering_area",
-                "LAYER_DESCRIPTION": ("Local scattering area relative to a flat reference facet."),
+                "LAYER_DESCRIPTION": (
+                    "Local scattering area that terrain flattening divides beta-0 by"
+                ),
             },
         ],
     )

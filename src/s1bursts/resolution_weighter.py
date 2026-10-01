@@ -6,11 +6,13 @@ Product Family Specification for Synthetic Aperture Radar adopts as its
 Composite Backscatter (CB) product.
 
 The weights come from the local scattering area ``A``, the area terrain
-flattening divides beta nought by, so ``A = 1`` is a flat reference facet.
-That is the CEOS-ARD term; the same quantity is the local contributing area
-of Small et al., the area normalization factor (ANF) of OPERA, and the
+flattening divides beta nought by, so that gamma nought is ``beta0 / A``. That
+is the CEOS-ARD term; the same quantity is the local contributing area of Small
+et al., the area normalization factor (ANF) of OPERA, and the
 ``simulatedImage`` band SNAP's Terrain-Flattening writes. This package stores
-it as the ``scattering_area`` band of every RTC product.
+it as the ``scattering_area`` band of every RTC product. ``A = 1`` is a facet
+at 45° local incidence; flat terrain has ``A = cot(θ)`` at incidence angle
+``θ``, about 1.0 to 1.7 across the IW swath.
 """
 
 from __future__ import annotations
@@ -196,7 +198,8 @@ class ResolutionWeighter:
             ``(0, 1)`` to compute a weighted quantile at that level.
         clip_max_resolution
             Upper limit for $W = 1/A$, used to suppress extreme weights in
-            radar shadow. ``1.0`` is the weight of a flat reference facet.
+            radar shadow. ``1.0`` is the weight of a facet at 45° local
+            incidence; flat terrain weighs ``tan(θ)``, about 0.6 to 1.0.
         write_qa
             If ``True``, also write the two QA layers: a
             contributing-observations map (``Layer.QA_NUM``) and a composite
@@ -381,7 +384,8 @@ class ResolutionWeighter:
             ``(0, 1)`` to compute a weighted quantile at that level.
         clip_max_resolution
             Upper limit for $W = 1/A$, used to suppress extreme weights in
-            radar shadow. ``1.0`` is the weight of a flat reference facet.
+            radar shadow. ``1.0`` is the weight of a facet at 45° local
+            incidence; flat terrain weighs ``tan(θ)``, about 0.6 to 1.0.
         write_qa
             If ``True``, also write the two QA layers: a
             contributing-observations map (``Layer.QA_NUM``) and a composite

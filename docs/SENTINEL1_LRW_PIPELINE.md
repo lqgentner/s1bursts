@@ -36,7 +36,7 @@ BaseProduct
 - **RTC**: Gamma nought backscatter with terrain flattening (radiometric correction applied by SNAP); the local scattering area is stored as the second band (`scattering_area`) of the same GeoTIFF and used for LRW weighting
 - **Footprint**: Unique spatial location defined by `burst_id` + `sub_swath` (stationary over time)
 - **Grid cell**: MGRS 10 km grid square; defines height/width, affine transform, and CRS (UTM zone)
-- **Local scattering area** (`A`): the area of all terrain facets within a pixel, expressed in the plane perpendicular to slant range. Terrain flattening divides beta nought by it, so `A = 1` is a flat reference facet and `1/A` is the local resolution that LRW weights by. This is the CEOS-ARD term (layer `scatteringArea`); Small et al. (2022) call it the *local contributing area*, OPERA the *area normalization factor* (`rtc_anf_gamma0_to_beta0`), and SNAP's Terrain-Flattening writes it as `simulatedImage`. All four are the same quantity
+- **Local scattering area** (`A`): the area of all terrain facets within a pixel, expressed in the plane perpendicular to slant range. Terrain flattening divides beta nought by it (gamma nought is `beta0 / A`), and `1/A` is the local resolution that LRW weights by. `A = 1` is a facet at 45° local incidence; flat terrain has `A = cot(θ)` at incidence angle `θ`, about 1.0 to 1.7 across the IW swath. This is the CEOS-ARD term (layer `scatteringArea`); Small et al. (2022) call it the *local contributing area*, OPERA the *area normalization factor* (`rtc_anf_gamma0_to_beta0`), and SNAP's Terrain-Flattening writes it as `simulatedImage`. All four are the same quantity
 
 ### Borrowed vocabulary
 
