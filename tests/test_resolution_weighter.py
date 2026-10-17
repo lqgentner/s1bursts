@@ -17,6 +17,7 @@ import pytest
 import rasterio
 
 from s1bursts import product_tags
+from s1bursts.errors import EmptyCompositeError
 from s1bursts.filemanager import FileManager
 from s1bursts.product import (
     RTCLRWQA,
@@ -1309,6 +1310,95 @@ class TestComposeRtcLrw:
         """A catalogued product whose raster was never written must fail loudly."""
         with pytest.raises(FileNotFoundError, match="product file not found"):
             scene.weighter.compose_rtc_lrw([_rtc("2022-08-25")], scene.geobox)
+
+
+class TestEmptyObservations:
+    """A burst can touch a cell's footprint without reaching any of its pixels."""
+
+    def test_an_rtc_cell_no_input_reaches_writes_nothing(
+        self, scene: _Scene, tmp_path: Path
+    ) -> None:
+        product = _rtc("2022-08-13")
+        _write_raster(scene.manager.get_product_path(product), [_full(np.nan), _full(np.nan)])
+        before = set(tmp_path.rglob("*.tif"))
+
+        with pytest.raises(EmptyCompositeError, match="no input observation"):
+            scene.weighter.compose_rtc_lrw([product], scene.geobox, write_qa=True)
+
+        assert set(tmp_path.rglob("*.tif")) == before
+
+    def test_a_coherence_cell_no_input_reaches_writes_nothing(
+        self, scene: _Scene, tmp_path: Path
+    ) -> None:
+        coh, rtc = _coh("2022-08-01", "2022-08-13"), _rtc("2022-08-01")
+        _write_raster(scene.manager.get_product_path(coh), [_full(np.nan)])
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(1.0)])
+        before = set(tmp_path.rglob("*.tif"))
+
+        with pytest.raises(EmptyCompositeError):
+            scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, write_qa=True)
+
+        assert set(tmp_path.rglob("*.tif")) == before
+
+    def test_the_tags_count_and_date_only_inputs_that_reach_the_cell(self, scene: _Scene) -> None:
+        empty, valid = _rtc("2022-08-01", orbit=66), _rtc("2022-08-13")
+        _write_raster(scene.manager.get_product_path(empty), [_full(np.nan), _full(np.nan)])
+        _write_raster(scene.manager.get_product_path(valid), [_full(2.0), _full(4.0)])
+
+        composite = scene.weighter.compose_rtc_lrw([empty, valid], scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            tags = src.tags()
+        assert tags["CONTRIBUTING_OBSERVATIONS"] == "1"
+        assert tags["FIRST_ACQUISITION_DATE"] == "2022-08-13"
+        assert tags["LAST_ACQUISITION_DATE"] == "2022-08-13"
+
+    def test_the_tagged_span_matches_a_composite_of_the_reaching_inputs_alone(
+        self, scene: _Scene, tmp_path: Path
+    ) -> None:
+        """Dropping an empty input must date the rest as if it had never been passed.
+
+        The acquisition carries a UTC offset, so a span taken from the group
+        keys (local midnight) would differ from one taken from the products.
+        """
+        empty = _rtc("2022-08-01T10:00+02:00", orbit=66)
+        valid = _rtc("2022-08-13T12:00+02:00")
+        _write_raster(scene.manager.get_product_path(empty), [_full(np.nan), _full(np.nan)])
+        _write_raster(scene.manager.get_product_path(valid), [_full(2.0), _full(4.0)])
+        alone = _Scene(
+            ResolutionWeighter(FileManager(base_dir=tmp_path / "alone"), n_workers=2),
+            FileManager(base_dir=tmp_path / "alone"),
+            scene.geobox,
+        )
+        _write_raster(alone.manager.get_product_path(valid), [_full(2.0), _full(4.0)])
+
+        mixed = scene.weighter.compose_rtc_lrw([empty, valid], scene.geobox)
+        single = alone.weighter.compose_rtc_lrw([valid], alone.geobox)
+
+        tags = {}
+        for name, (manager, product) in {
+            "mixed": (scene.manager, mixed),
+            "single": (alone.manager, single),
+        }.items():
+            with rasterio.open(manager.get_product_path(product)) as src:
+                tags[name] = src.tags()
+        for key in ("FIRST_ACQUISITION_DATE", "LAST_ACQUISITION_DATE"):
+            assert tags["mixed"][key] == tags["single"][key]
+
+    def test_a_coherence_composite_counts_only_pairs_that_reach_the_cell(
+        self, scene: _Scene
+    ) -> None:
+        empty, valid = _coh("2022-08-01", "2022-08-13", orbit=66), _coh("2022-08-13", "2022-08-25")
+        rtcs = [_rtc("2022-08-01", orbit=66), _rtc("2022-08-13")]
+        _write_raster(scene.manager.get_product_path(empty), [_full(np.nan)])
+        _write_raster(scene.manager.get_product_path(valid), [_full(0.5)])
+        for rtc in rtcs:
+            _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(1.0)])
+
+        composite = scene.weighter.compose_coherence_lrw([empty, valid], rtcs, scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            assert src.tags()["CONTRIBUTING_OBSERVATIONS"] == "1"
 
 
 class TestComposeCohLrw:
