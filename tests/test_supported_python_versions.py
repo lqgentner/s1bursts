@@ -3,7 +3,8 @@
 The ``Programming Language`` classifiers in ``pyproject.toml`` are the source of
 truth, and PyPI and the README badge are built from them. The CI matrix decides
 what runs, and the oldest supported version is the floor that ``requires-python``,
-the lowest-bound job and Pyrefly are held to.
+the lowest-bound job and Pyrefly are held to. The development interpreter pinned in
+``.python-version`` must be one of them.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ REPO_ROOT = Path(__file__).parent.parent
 PYPROJECT = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
 CI_WORKFLOW = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
 SNAP_DOCKERFILE = (REPO_ROOT / "containers" / "Dockerfile.snap").read_text()
+PINNED_PYTHON = (REPO_ROOT / ".python-version").read_text()
 
 _CLASSIFIER_PATTERN = re.compile(r"Programming Language :: Python :: (\d+\.\d+)")
 _MATRIX_PATTERN = re.compile(r"^\s*python-version:\s*\[(?P<versions>[^\]]*)\]", re.MULTILINE)
@@ -81,3 +83,7 @@ def test_snap_container_python_is_supported() -> None:
     assert match is not None, "no PYTHON_VERSION build argument in Dockerfile.snap"
 
     assert _parse(match.group(1)) in _supported()
+
+
+def test_pinned_development_python_is_supported() -> None:
+    assert _parse(PINNED_PYTHON) in _supported()
