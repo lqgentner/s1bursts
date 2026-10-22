@@ -16,6 +16,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `GTCPassComposite` (`S1_GTC_COMP_{A/D}_…`) and `GTCPassQA`, the
   `FileManager.find_gtc_pass_composites()` and `find_gtc_pass_qa()` lookups,
   and `product_tags.gtc_pass_metadata()`.
+- **Python 3.15 support**, verified in CI.
 
 ### Changed
 
