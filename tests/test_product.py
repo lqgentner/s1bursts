@@ -17,6 +17,8 @@ from s1bursts.product import (
     CohLRWComposite,
     CohPassComposite,
     CohPassQA,
+    GTCPassComposite,
+    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
     MGRSTileProduct,
@@ -177,3 +179,23 @@ class TestMGRSTileProducts:
 
         assert "start_date='2022-01-01'" in text
         assert isinstance(RTCLRWComposite(**self.KWARGS), MGRSTileProduct)
+
+
+def test_gtc_pass_composite_product_type() -> None:
+    product = GTCPassComposite(
+        mgrs_code="32TMS",
+        start_date=Timestamp("2019-01-01"),
+        end_date=Timestamp("2019-01-31"),
+        polarization="VV",
+        pass_direction="Descending",
+    )
+    assert product.product_type == "GTC_COMP_D"
+    assert product.crs.to_epsg() == 32632
+    qa = GTCPassQA(
+        mgrs_code="32TMS",
+        start_date=Timestamp("2019-01-01"),
+        end_date=Timestamp("2019-01-31"),
+        polarization="VV",
+        pass_direction="Ascending",
+    )
+    assert qa.product_type == "GTC_COMP_A_QA-NUM"

@@ -21,6 +21,8 @@ from s1bursts.product import (
     CohLRWQA,
     CohPassComposite,
     CohPassQA,
+    GTCPassComposite,
+    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
     QaMetric,
@@ -613,3 +615,33 @@ class TestFindCohPassComposites:
         assert len(results) == 1
         assert results[0].baseline_days == 12
         assert results[0].pass_direction == "Ascending"
+
+
+def test_gtc_pass_composite_path_round_trip(tmp_path: Path) -> None:
+    fm = FileManager(tmp_path)
+    product = GTCPassComposite(
+        mgrs_code="32TMS25",
+        start_date=pd.Timestamp("2019-01-01"),
+        end_date=pd.Timestamp("2019-01-31"),
+        polarization="VV",
+        pass_direction="Ascending",
+    )
+    path = fm.get_product_path(product)
+    assert path == fm.comp_dir / "S1_GTC_COMP_A_32TMS25_VV_20190101_20190131.tif"
+    path.touch()
+    assert fm.find_gtc_pass_composites(mgrs_code="32TMS25") == [product]
+    assert fm.find_gtc_pass_composites(pass_direction="Descending") == []
+    assert fm.find_rtc_pass_composites() == []
+
+    qa = GTCPassQA(
+        mgrs_code="32TMS25",
+        start_date=pd.Timestamp("2019-01-01"),
+        end_date=pd.Timestamp("2019-01-31"),
+        polarization="VV",
+        pass_direction="Ascending",
+    )
+    qa_path = fm.get_product_path(qa)
+    assert qa_path.name == "S1_GTC_COMP_A_QA-NUM_32TMS25_VV_20190101_20190131.tif"
+    qa_path.touch()
+    assert fm.find_gtc_pass_qa(pass_direction="Ascending") == [qa]
+    assert fm.find_gtc_pass_composites() == [product]

@@ -23,6 +23,8 @@ from s1bursts.product import (
     CohLRWQA,
     CohPassComposite,
     CohPassQA,
+    GTCPassComposite,
+    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
     QaMetric,
@@ -84,6 +86,16 @@ def _rtc_pass() -> RTCPassComposite:
         mgrs_code="32TMS03",
         start_date=_START,
         end_date=_END,
+        polarization="VV",
+        pass_direction="Ascending",
+    )
+
+
+def _gtc_pass() -> GTCPassComposite:
+    return GTCPassComposite(
+        mgrs_code="32TMS25",
+        start_date=Timestamp("2019-01-01"),
+        end_date=Timestamp("2019-01-31"),
         polarization="VV",
         pass_direction="Ascending",
     )
@@ -168,6 +180,7 @@ def _every_builder() -> dict[str, dict[str, str]]:
         "rtc_lrw": _lrw(),
         "coh_lrw": product_tags.coh_lrw_metadata(_coh_lrw(), **composite).tags,
         "rtc_pass": product_tags.rtc_pass_metadata(_rtc_pass(), decibel=False, **unweighted).tags,
+        "gtc_pass": product_tags.gtc_pass_metadata(_gtc_pass(), decibel=False, **unweighted).tags,
         "coh_pass": product_tags.coh_pass_metadata(_coh_pass(), **unweighted).tags,
         "qa_num": product_tags.qa_metadata(_qa(QaMetric.NUM), **composite).tags,
         "qa_cqm": product_tags.qa_metadata(_qa(QaMetric.CQM), **composite).tags,
@@ -287,6 +300,55 @@ class TestCompositingParameters:
         assert "COMPOSITING_METHOD_REFERENCE" not in tags
         assert "clip_max_resolution" not in tags["COMPOSITING_PARAMETERS"]
         assert tags["PASS_DIRECTION"] == "Ascending"
+
+
+class TestGTCPass:
+    def test_gtc_pass_metadata_is_beta0_power_and_unweighted(self) -> None:
+        source = {
+            "DEM": "Copernicus GLO-30 ellipsoidal",
+            "PROCESSING_SOFTWARE": "SNAP",
+            "PROCESSING_SOFTWARE_VERSION": "14.0",
+        }
+        meta = product_tags.gtc_pass_metadata(
+            _gtc_pass(),
+            aggregation="mean",
+            n_observations=5,
+            decibel=False,
+            source_tags=source,
+        )
+        tags = meta.tags
+        assert tags["PRODUCT_TYPE"] == "GTC_COMP_A"
+        assert tags["PRODUCT_FAMILY"] == "Composite Backscatter"
+        assert tags["BACKSCATTER_MEASUREMENT"] == "Beta-0"
+        assert tags["BACKSCATTER_CONVENTION"] == "Power"
+        assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
+        assert tags["COMPOSITING_PARAMETERS"] == "aggregation=mean"
+        assert tags["PASS_DIRECTION"] == "Ascending"
+        assert tags["CONTRIBUTING_OBSERVATIONS"] == "5"
+        assert tags["LAYER_NAME"] == "beta0"
+        assert tags["DEM"] == "Copernicus GLO-30 ellipsoidal"
+        assert meta.band_names == ["VV"]
+
+    def test_qa_metadata_accepts_gtc_pass_qa(self) -> None:
+        qa = GTCPassQA(
+            mgrs_code="32TMS25",
+            start_date=Timestamp("2019-01-01"),
+            end_date=Timestamp("2019-01-31"),
+            polarization="VV",
+            pass_direction="Descending",
+        )
+        source = {
+            "DEM": "x",
+            "PROCESSING_SOFTWARE": "SNAP",
+            "PROCESSING_SOFTWARE_VERSION": "14.0",
+        }
+        tags = product_tags.qa_metadata(
+            qa, aggregation="mean", n_observations=3, source_tags=source
+        ).tags
+        assert tags["PRODUCT_TYPE"] == "GTC_COMP_D_QA-NUM"
+        assert tags["PASS_DIRECTION"] == "Descending"
+        assert tags["LAYER_NAME"] == "num_obs"
+        assert "COMPOSITING_METHOD_REFERENCE" not in tags
 
 
 class TestTileIdentity:

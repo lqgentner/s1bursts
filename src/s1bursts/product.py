@@ -582,6 +582,60 @@ class RTCPassQA(MGRSTileProduct):
 
 
 @dataclass(repr=False, frozen=True)
+class GTCPassComposite(MGRSTileProduct):
+    """Unweighted temporal composite of GTC beta0 for a single pass direction.
+
+    Parameters
+    ----------
+    mgrs_code
+        MGRS grid cell identifier.
+    start_date
+        Start of the compositing period (inclusive).
+    end_date
+        End of the compositing period (inclusive).
+    polarization
+        The polarization.
+    pass_direction
+        Pass direction.
+    """
+
+    pass_direction: PassDirection
+
+    @property
+    @override
+    def product_type(self) -> str:
+        """Get product type identifier."""
+        return f"GTC_COMP_{self.pass_direction[0]}"
+
+
+@dataclass(repr=False, frozen=True)
+class GTCPassQA(MGRSTileProduct):
+    """Contributing-observations auxiliary for a GTC pass-composite.
+
+    Parameters
+    ----------
+    mgrs_code
+        MGRS grid cell identifier.
+    start_date
+        Start of the compositing period (inclusive).
+    end_date
+        End of the compositing period (inclusive).
+    polarization
+        The polarization.
+    pass_direction
+        Pass direction.
+    """
+
+    pass_direction: PassDirection
+
+    @property
+    @override
+    def product_type(self) -> str:
+        """Get product type identifier."""
+        return f"GTC_COMP_{self.pass_direction[0]}_QA-NUM"
+
+
+@dataclass(repr=False, frozen=True)
 class CohPassQA(MGRSTileProduct):
     """Contributing-observations auxiliary for a coherence pass-composite.
 

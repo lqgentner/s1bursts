@@ -21,6 +21,8 @@ from s1bursts.product import (
     CohPassComposite,
     CohPassQA,
     CRSLike,
+    GTCPassComposite,
+    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
     QaMetric,
@@ -100,6 +102,11 @@ _PARSERS: dict[
         _MGRS_BASE_SPEC,
         [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
     ),
+    GTCPassComposite: (
+        r"S1_GTC_COMP_(?P<orbit_letter>[AD])",
+        _MGRS_BASE_SPEC,
+        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
+    ),
     CohPassComposite: (
         r"S1_COH(?P<baseline_days>\d{2})_COMP_(?P<orbit_letter>[AD])",
         _MGRS_BASE_SPEC,
@@ -123,6 +130,11 @@ _PARSERS: dict[
     ),
     RTCPassQA: (
         r"S1_RTC_COMP_(?P<orbit_letter>[AD])_QA-NUM",
+        _MGRS_BASE_SPEC,
+        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
+    ),
+    GTCPassQA: (
+        r"S1_GTC_COMP_(?P<orbit_letter>[AD])_QA-NUM",
         _MGRS_BASE_SPEC,
         [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
     ),
@@ -619,6 +631,42 @@ class FileManager:
         )
         return self._find_products(self.comp_dir, pattern, RTCPassComposite)
 
+    def _get_gtc_pass_composite_path(self, product: GTCPassComposite) -> Path | UPath:
+        """Generate the file path for a GTC pass-composite product."""
+        prefix = f"S1_GTC_COMP_{product.pass_direction[0]}"
+        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
+
+    def find_gtc_pass_composites(
+        self,
+        mgrs_code: str | None = None,
+        polarization: str | None = None,
+        pass_direction: str | None = None,
+    ) -> list[GTCPassComposite]:
+        """Find GTC pass-composite products matching criteria.
+
+        Parameters
+        ----------
+        mgrs_code
+            Filter by MGRS grid cell identifier.
+        polarization
+            Filter by polarization.
+        pass_direction
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
+
+        Returns
+        -------
+        list[GTCPassComposite]
+            List of matching GTC pass-composite products.
+        """
+        od = pass_direction[0] if pass_direction is not None else "*"
+        pattern = self._build_pattern(
+            f"S1_GTC_COMP_{od}",
+            _MGRS_BASE_SPEC,
+            mgrs_code=mgrs_code,
+            polarization=polarization,
+        )
+        return self._find_products(self.comp_dir, pattern, GTCPassComposite)
+
     def _get_coh_pass_composite_path(self, product: CohPassComposite) -> Path | UPath:
         """Generate the file path for a coherence pass-composite product."""
         prefix = f"S1_COH{product.baseline_days:02d}_COMP_{product.pass_direction[0]}"
@@ -674,6 +722,11 @@ class FileManager:
     def _get_rtc_pass_qa_path(self, product: RTCPassQA) -> Path | UPath:
         """Generate the file path for an RTC pass-composite QA auxiliary product."""
         prefix = f"S1_RTC_COMP_{product.pass_direction[0]}_QA-NUM"
+        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
+
+    def _get_gtc_pass_qa_path(self, product: GTCPassQA) -> Path | UPath:
+        """Generate the file path for a GTC pass-composite QA auxiliary product."""
+        prefix = f"S1_GTC_COMP_{product.pass_direction[0]}_QA-NUM"
         return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
     def _get_coh_pass_qa_path(self, product: CohPassQA) -> Path | UPath:
@@ -778,6 +831,37 @@ class FileManager:
         )
         return self._find_products(self.comp_dir, pattern, RTCPassQA)
 
+    def find_gtc_pass_qa(
+        self,
+        mgrs_code: str | None = None,
+        polarization: str | None = None,
+        pass_direction: str | None = None,
+    ) -> list[GTCPassQA]:
+        """Find GTC pass-composite QA (contributing-observations) products matching criteria.
+
+        Parameters
+        ----------
+        mgrs_code
+            Filter by MGRS grid cell identifier.
+        polarization
+            Filter by polarization.
+        pass_direction
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
+
+        Returns
+        -------
+        list[GTCPassQA]
+            List of matching GTC pass-composite QA products.
+        """
+        od = pass_direction[0] if pass_direction is not None else "*"
+        pattern = self._build_pattern(
+            f"S1_GTC_COMP_{od}_QA-NUM",
+            _MGRS_BASE_SPEC,
+            mgrs_code=mgrs_code,
+            polarization=polarization,
+        )
+        return self._find_products(self.comp_dir, pattern, GTCPassQA)
+
     def find_coh_pass_qa(
         self,
         mgrs_code: str | None = None,
@@ -848,6 +932,8 @@ class FileManager:
                 path = self._get_coh_lrw_path(product)
             case RTCPassComposite():
                 path = self._get_rtc_pass_composite_path(product)
+            case GTCPassComposite():
+                path = self._get_gtc_pass_composite_path(product)
             case CohPassComposite():
                 path = self._get_coh_pass_composite_path(product)
             case RTCLRWQA():
@@ -856,6 +942,8 @@ class FileManager:
                 path = self._get_coh_lrw_qa_path(product)
             case RTCPassQA():
                 path = self._get_rtc_pass_qa_path(product)
+            case GTCPassQA():
+                path = self._get_gtc_pass_qa_path(product)
             case CohPassQA():
                 path = self._get_coh_pass_qa_path(product)
             case _:

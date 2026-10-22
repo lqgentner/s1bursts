@@ -25,10 +25,11 @@ BaseProduct
 └── MGRSTileProduct (MGRS 10 km grid cell composite)
     ├── RTCLRWComposite (LRW intensity composite)
     ├── CohLRWComposite (LRW coherence composite)
-    ├── RTCPassComposite (pass-direction intensity composite)
+    ├── RTCPassComposite (pass-direction gamma nought composite)
+    ├── GTCPassComposite (pass-direction beta nought composite)
     ├── CohPassComposite (pass-direction coherence composite)
     ├── RTCLRWQA, CohLRWQA (QA-NUM and QA-CQM layers of an LRW composite)
-    └── RTCPassQA, CohPassQA (QA-NUM layer of a pass composite)
+    └── RTCPassQA, GTCPassQA, CohPassQA (QA-NUM layer of a pass composite)
 ```
 
 ### Key Concepts
@@ -159,7 +160,7 @@ Products are frozen dataclasses holding identity only; `FileManager` derives eve
 
 - `BackscatterProduct` (abstract, `is_terrain_flattened`): `RTCProduct` (`product_type = "RTC"`, bands `gamma0`, `scattering_area`) and `GTCProduct` (`"GTC"`, band `beta0`).
 - `CoregisteredProduct` (abstract, `baseline_days`): `CoherenceProduct` (`"COH"`, band `coherence`) and `InterferogramProduct` (`"IFG"`, bands `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary`).
-- `MGRSTileProduct` (abstract, `crs` from the MGRS code): `RTCLRWComposite` (`"RTC_LRW"`), `CohLRWComposite` (`"COH_LRW"`), `RTCPassComposite` (`"RTC_COMP_{A/D}"`), `CohPassComposite` (`"COH_COMP_{A/D}"`), and the QA auxiliaries `RTCLRWQA`, `CohLRWQA` (`qa_metric` is `QaMetric.NUM` or `QaMetric.CQM`), `RTCPassQA`, `CohPassQA` (always `NUM`).
+- `MGRSTileProduct` (abstract, `crs` from the MGRS code): `RTCLRWComposite` (`"RTC_LRW"`), `CohLRWComposite` (`"COH_LRW"`), `RTCPassComposite` (`"RTC_COMP_{A/D}"`), `GTCPassComposite` (`"GTC_COMP_{A/D}"`), `CohPassComposite` (`"COH_COMP_{A/D}"`), and the QA auxiliaries `RTCLRWQA`, `CohLRWQA` (`qa_metric` is `QaMetric.NUM` or `QaMetric.CQM`), `RTCPassQA`, `GTCPassQA`, `CohPassQA` (always `NUM`).
 
 The band description, the band's name inside the SNAP graph and its `LAYER_NAME` band tag are one and the same name. Composites keep the polarization as their band description.
 
@@ -173,7 +174,7 @@ Deterministic paths and discovery, local or on S3 through `UPath`:
 
 - `FileManager(base_dir, slc_dir=None, prod_dir=None, comp_dir=None)`; the defaults are `base_dir/s1-slc`, `s1-prod`, `s1-comp`.
 - `get_slc_path(burst)`, `get_product_path(product)`, `product_exists(product)`.
-- Discovery by glob and regex: `find_slc_bursts`, `find_rtc_products`, `find_gtc_products`, `find_coherence_products`, `find_interferogram_products`, `find_rtc_lrw_products`, `find_coh_lrw_products`, `find_rtc_pass_composites`, `find_coh_pass_composites`, `find_rtc_lrw_qa`, `find_coh_lrw_qa`, `find_rtc_pass_qa`, `find_coh_pass_qa`. Date filtering is left to a list comprehension over the result.
+- Discovery by glob and regex: `find_slc_bursts`, `find_rtc_products`, `find_gtc_products`, `find_coherence_products`, `find_interferogram_products`, `find_rtc_lrw_products`, `find_coh_lrw_products`, `find_rtc_pass_composites`, `find_gtc_pass_composites`, `find_coh_pass_composites`, `find_rtc_lrw_qa`, `find_coh_lrw_qa`, `find_rtc_pass_qa`, `find_gtc_pass_qa`, `find_coh_pass_qa`. Date filtering is left to a list comprehension over the result.
 
 Every filename is built and parsed by one engine: each product class registers a prefix, an ordered `FieldSpec` list and a suffix in `_PARSERS`, so `get_slc_path(burst).exists()` is the existence check (one HEAD request on S3, no glob).
 
@@ -187,9 +188,10 @@ Every filename is built and parsed by one engine: each product class registers a
 | RTC LRW composite | `S1_RTC_LRW_{mgrs_code}_{polarization}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.tif` |
 | Coherence LRW composite | `S1_COH{baseline_days:02d}_LRW_{mgrs_code}_{polarization}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.tif` |
 | RTC pass composite | `S1_RTC_COMP_{A/D}_{mgrs_code}_{polarization}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.tif` |
+| GTC pass composite | `S1_GTC_COMP_{A/D}_{mgrs_code}_{polarization}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.tif` |
 | Coherence pass composite | `S1_COH{baseline_days:02d}_COMP_{A/D}_{mgrs_code}_{polarization}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.tif` |
 | LRW QA layers | `S1_RTC_LRW_QA-{NUM,CQM}_…` and `S1_COH{bb}_LRW_QA-{NUM,CQM}_…` with the composite's fields |
-| Pass QA layers | `S1_RTC_COMP_{A/D}_QA-NUM_…` and `S1_COH{bb}_COMP_{A/D}_QA-NUM_…` |
+| Pass QA layers | `S1_RTC_COMP_{A/D}_QA-NUM_…`, `S1_GTC_COMP_{A/D}_QA-NUM_…` and `S1_COH{bb}_COMP_{A/D}_QA-NUM_…` |
 
 The SAFE folder inside an SLC zip keeps ESA's `S1{A,B}_SLC_{sensingTime}_{burst_id}_{sub_swath}_{polarization}_{datatake_id}.SAFE` name, which preserves the platform and datatake and is what SNAP reads. `Burst.date` is CDSE's `BeginningDateTime`, the annotation's `sensingTime`.
 
@@ -211,6 +213,7 @@ Results (`summary.py`): `OkResult[T]` (`source`, `result`, `skipped`), `ErrorRes
 - `compose_rtc_lrw(rtc_products, geobox, *, aggregation="median", clip_max_resolution=None, decibel=False, write_qa=False, cqm_decibel=False, overwrite=False)` → `RTCLRWComposite`, or `(composite, (qa_num, qa_cqm))` with `write_qa=True`.
 - `compose_coherence_lrw(coh_products, rtc_products, geobox, *, aggregation="median", clip_max_resolution=None, write_qa=False, cqm_decibel=False, overwrite=False)` → `CohLRWComposite`; the RTC products supply the scattering area of the matching orbit and date.
 - `compose_rtc_by_pass(rtc_products, geobox, *, aggregation="median", decibel=False, write_qa=False, overwrite=False)` → `dict[PassDirection, RTCPassComposite]`, or `(composite, qa_num)` values with `write_qa=True`.
+- `compose_gtc_by_pass(gtc_products, geobox, *, aggregation="median", decibel=False, write_qa=False, overwrite=False)` → `dict[PassDirection, GTCPassComposite]`, the same unweighted composite of beta nought; with no scattering area there is nothing to weight by.
 - `compose_coherence_by_pass(coh_products, geobox, *, aggregation="median", write_qa=False, overwrite=False)` → `dict[PassDirection, CohPassComposite]`.
 
 `aggregation` is `"mean"`, `"median"` or a quantile level in `(0, 1)`. Within one relative orbit and acquisition date the bursts are mosaicked by first valid pixel, so seams are never averaged; the resulting orbit-date observations are then aggregated in time.
@@ -231,7 +234,7 @@ where $A_i$ is the local scattering area of observation $i$ and $x_i$ its intens
 1. Search and download      BurstDatabase.search → BurstCollection → .find_pairs → BurstDatabase.download
 2. Process                  BurstProcessor → SNAPClient → RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct
 3. Composite                ResolutionWeighter → RTCLRWComposite | CohLRWComposite (+ QA-NUM, QA-CQM)
-                                               → RTCPassComposite | CohPassComposite (+ QA-NUM)
+                                               → RTCPassComposite | GTCPassComposite | CohPassComposite (+ QA-NUM)
 ```
 
 ## Configuration
@@ -251,7 +254,7 @@ config = SNAPConfig(
 
 1. **Minimal metadata in filenames.** Only the identifiers a glob needs; everything else is a GeoTIFF tag.
 2. **The scattering area travels with its backscatter.** It is band 2 of every RTC GeoTIFF, never a separate product, so it is date-aligned with the acquisition by construction and a coherence composite can take it from the RTC product of the same orbit and date.
-3. **RTC only for LRW.** Terrain effects must be corrected before weighting; GTC products cannot be LRW-composited.
+3. **RTC only for LRW.** Terrain effects must be corrected before weighting; GTC products cannot be LRW-composited, only pass-composited.
 4. **Separate GTC and RTC classes** with `is_terrain_flattened` as the uniform check.
 5. **Composites are keyed by `mgrs_code`**, not by burst, because they combine several footprints.
 6. **Deterministic SLC filenames** from `(rel_orbit_number, burst_id, sub_swath, polarization, date)`. The relative orbit number is propagated from the search response or the SLC filename, so the normal workflow never opens the burst-ID map; the map is consulted only for a hand-built burst and must be downloaded first.

@@ -28,6 +28,8 @@ from s1bursts.product import (
     CohLRWQA,
     CohPassComposite,
     CohPassQA,
+    GTCPassComposite,
+    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
     QaMetric,
@@ -526,6 +528,58 @@ def rtc_pass_metadata(
     )
 
 
+def gtc_pass_metadata(
+    product: GTCPassComposite,
+    *,
+    aggregation: Aggregation,
+    n_observations: int,
+    decibel: bool,
+    source_tags: Mapping[str, str] | None = None,
+    acquisitions: Acquisitions | None = None,
+) -> RasterMetadata:
+    """Metadata for an unweighted GTC beta0 composite of a single pass direction.
+
+    Parameters
+    ----------
+    product
+        The product being written.
+    aggregation
+        Temporal aggregation actually applied.
+    n_observations
+        Number of orbit-date observations entering the composite.
+    decibel
+        Whether the stored values are decibels rather than linear power.
+    source_tags
+        Tags of one of the per-burst inputs.
+    acquisitions
+        First and last acquisition date that contributed; defaults to the
+        product's own dates.
+
+    Returns
+    -------
+    RasterMetadata
+        Tags, band description and unit for the composite.
+    """
+    tags = {
+        **_tile(product, family="Composite Backscatter", acquisitions=acquisitions),
+        **_backscatter(gamma0=False, decibel=decibel),
+        **_unweighted(aggregation),
+        "PASS_DIRECTION": product.pass_direction,
+        "CONTRIBUTING_OBSERVATIONS": str(n_observations),
+        "LAYER_NAME": "beta0",
+        "LAYER_DESCRIPTION": (
+            "Unweighted beta-0 backscatter composite of a single pass direction, "
+            "geometrically terrain corrected only."
+        ),
+        **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
+    }
+    return RasterMetadata(
+        tags=tags,
+        band_names=[product.polarization],
+        units=[_DECIBEL_UNIT if decibel else _LINEAR_POWER_UNIT],
+    )
+
+
 def coh_pass_metadata(
     product: CohPassComposite,
     *,
@@ -581,7 +635,7 @@ def coh_pass_metadata(
 
 
 def qa_metadata(
-    product: RTCLRWQA | CohLRWQA | RTCPassQA | CohPassQA,
+    product: RTCLRWQA | CohLRWQA | RTCPassQA | CohPassQA | GTCPassQA,
     *,
     aggregation: Aggregation,
     n_observations: int,
@@ -635,7 +689,7 @@ def qa_metadata(
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
     }
-    if isinstance(product, RTCPassQA | CohPassQA):
+    if isinstance(product, RTCPassQA | CohPassQA | GTCPassQA):
         tags["PASS_DIRECTION"] = product.pass_direction
 
     if metric is QaMetric.NUM:
@@ -921,6 +975,7 @@ __all__ = [
     "coh_pass_metadata",
     "coherence_metadata",
     "coherence_statistics",
+    "gtc_pass_metadata",
     "interferogram_metadata",
     "qa_metadata",
     "rtc_lrw_metadata",
