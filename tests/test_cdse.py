@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from s1bursts.cdse import CDSEAuth, CDSEBurstClient, CDSEResponse
 
@@ -99,6 +100,36 @@ class TestCDSEAuth:
             auth(request)
 
         assert mock_post.call_args.kwargs["data"]["grant_type"] == "password"
+
+    def test_rejected_refresh_token_reauthenticates(self) -> None:
+        with patch(
+            "s1bursts.cdse.requests.post",
+            return_value=make_token_response(),
+        ):
+            auth = CDSEAuth(username="user", password="pass")
+
+        # Access token expired, refresh token nominally valid but rejected by the server
+        auth.token_expires_at = time.time() - 1
+
+        rejected = MagicMock()
+        rejected.status_code = 400
+        rejected.raise_for_status.side_effect = requests.HTTPError(
+            "400 Client Error: Bad Request", response=rejected
+        )
+        fresh = make_token_response()
+        fresh.json.return_value["access_token"] = "access-3"
+        with patch(
+            "s1bursts.cdse.requests.post",
+            side_effect=[rejected, fresh],
+        ) as mock_post:
+            request = MagicMock()
+            headers: dict[str, str] = {}
+            request.headers = headers
+            auth(request)
+
+        grants = [c.kwargs["data"]["grant_type"] for c in mock_post.call_args_list]
+        assert grants == ["refresh_token", "password"]
+        assert request.headers["Authorization"] == "Bearer access-3"
 
 
 def make_response_value(footprint: str = f"SRID=4326;{POLYGON_WKT}") -> dict[str, Any]:
