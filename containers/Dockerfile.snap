@@ -11,14 +11,10 @@ FROM ubuntu:24.04
 #   fontconfig      - SNAP initialises AWT's font manager even with --nogui
 #   ca-certificates - SNAP fetches orbit files and DEM tiles over HTTPS
 #   git             - hatch-vcs derives the package version from the checkout
-#   gdal-bin        - tests compare the extractor's rasterio windowing against
-#                     an independent `gdal_translate` implementation. Not a
-#                     dependency of the package, which installs from wheels only.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         fontconfig \
-        gdal-bin \
         git \
         libgfortran5 \
         wget \

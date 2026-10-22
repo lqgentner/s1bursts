@@ -1,17 +1,15 @@
 """Cross-check raster extraction against GDAL.
 
 The extractor reads a window with rasterio and attaches GCPs itself. This test
-performs the equivalent operation with ``gdal_translate`` over the synthetic
-SAFE product and requires the two independent implementations to agree.
+has GDAL's VRT driver perform the equivalent operation over the synthetic SAFE
+product and requires the two independent implementations to agree.
 
-Offline and fast — no S3, no network. Skips where the GDAL CLI is absent; the
-container the integration workflow uses carries it.
+Offline and fast — no S3, no network, and no GDAL CLI: the reference is GDAL's
+own ``vrt://`` handling, run through the GDAL bundled with rasterio.
 """
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from typing import TYPE_CHECKING, Any
 import warnings
 
@@ -19,6 +17,7 @@ import numpy as np
 import pytest
 import rasterio
 from rasterio.errors import NotGeoreferencedWarning
+import rasterio.shutil
 from upath import UPath
 
 from s1bursts.burst_extractor import _extract_tiff, _parse_xml, _resolve_burst
@@ -28,11 +27,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from tests.fixtures.safe_product import SyntheticProduct
-
-pytestmark = pytest.mark.skipif(
-    shutil.which("gdal_translate") is None,
-    reason="gdal_translate not on PATH",
-)
 
 # Burst to extract; interior, so a wrong window or an unshifted GCP row shows up.
 BURST_INDEX = 2
@@ -59,7 +53,7 @@ def _geolocation_points(
 
 @pytest.fixture(scope="module")
 def extraction(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
-    """Extract one burst twice: once with the port, once with gdal_translate."""
+    """Extract one burst twice: once with the port, once with GDAL's VRT driver."""
     tmp_path = tmp_path_factory.mktemp("gdal-diff")
     product: SyntheticProduct = build_product(tmp_path, ProductSpec())
     spec = product.spec
@@ -87,19 +81,9 @@ def extraction(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     )
     srcwin = f"srcwin=0,{meta.starting_line},{meta.number_of_samples},{meta.number_of_lines}"
     reference = tmp_path / "reference.tiff"
-    subprocess.run(  # noqa: S603
-        [  # noqa: S607
-            "gdal_translate",
-            "-of",
-            "GTiff",
-            "-q",
-            f"vrt://{source}?{gcps}{srcwin}",
-            str(reference),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
+        rasterio.shutil.copy(f"vrt://{source}?{gcps}{srcwin}", reference, driver="GTiff")
 
     return {"ours": ours, "reference": reference, "meta": meta, "points": points}
 
@@ -116,9 +100,9 @@ def _read(path: Path) -> tuple[np.ndarray, list[tuple[float, float, float, float
             )
 
 
-class TestAgainstGdalTranslate:
+class TestAgainstGdalVrt:
     def test_pixels_are_identical(self, extraction: dict[str, Any]) -> None:
-        """The windowed rasterio read must return exactly what gdal_translate's srcwin does."""
+        """The windowed rasterio read must return exactly what the VRT's srcwin does."""
         ours, _, _ = _read(extraction["ours"])
         reference, _, _ = _read(extraction["reference"])
 
@@ -158,8 +142,8 @@ class TestAgainstGdalTranslate:
     ) -> None:
         """The port declares the GCP CRS used by CDSE burst products.
 
-        The VRT connection string has no GCP SRS option, so `gdal_translate`
-        writes the points without a projection. The port declares EPSG:4326.
+        The VRT connection string has no GCP SRS option, so GDAL writes the
+        points without a projection. The port declares EPSG:4326.
         """
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
