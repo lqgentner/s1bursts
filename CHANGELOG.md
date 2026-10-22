@@ -19,6 +19,12 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   (a `ValueError`) and write nothing, instead of writing an all-NaN composite
   and its QA layers.
 
+### Fixed
+
+- `CDSEAuth` re-authenticates with the password grant when the identity server
+  rejects a refresh token (HTTP 400/401) before its nominal expiry, instead of
+  failing every OData download until the refresh token expires.
+
 ## [0.6.0] - 2026-09-24
 
 ### Changed

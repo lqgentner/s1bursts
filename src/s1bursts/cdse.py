@@ -64,6 +64,10 @@ _DATE_COLS = ["BeginningDateTime", "EndingDateTime", "AzimuthTime"]
 logger = logging.getLogger(__name__)
 
 
+_REFRESH_REJECTED_STATUS = frozenset({400, 401})
+"""Identity-server responses that mean the refresh token is no longer accepted."""
+
+
 class CDSEAuth(AuthBase):
     """CDSE authentication handler using OpenIDConnect bearer tokens.
 
@@ -173,6 +177,16 @@ class CDSEAuth(AuthBase):
             data=data,
             timeout=self.request_timeout,
         )
+        if response.status_code in _REFRESH_REJECTED_STATUS:
+            # The identity server invalidated the refresh token before its nominal
+            # expiry (session limits, token rotation). Retrying the refresh would
+            # fail forever, so fall back to the password grant.
+            logger.info(
+                "Refresh token rejected (HTTP %d), re-authenticating with stored credentials.",
+                response.status_code,
+            )
+            self._get_initial_tokens()
+            return
         response.raise_for_status()
         self._update_tokens(response.json())
 
