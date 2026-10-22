@@ -28,6 +28,7 @@ from pandas import Timestamp
 from rasterio.windows import from_bounds
 
 from s1bursts import product_tags
+from s1bursts.errors import EmptyCompositeError
 from s1bursts.product import (
     RTCLRWQA,
     CoherenceProduct,
@@ -257,6 +258,8 @@ class ResolutionWeighter:
         ------
         ValueError
             If ``rtc_products`` is empty.
+        EmptyCompositeError
+            If no input has a valid pixel in ``geobox``; nothing is written.
         """
         rtc_products = list(rtc_products)
         if not rtc_products:
@@ -292,8 +295,13 @@ class ResolutionWeighter:
             logger.debug("skipping existing %s", self._fm.get_product_path(product).name)
             return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
 
-        rtc_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=1))
+        rtc_groups = self._contributing(
+            self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=1)),
+            geobox,
+        )
         area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
+        # The tags name the acquisitions that reach the cell, not every input.
+        observed = self._contributing_span(rtc_products, rtc_groups)
 
         self._check_area_coverage(rtc_groups, area_groups)
         rtc_obs = np.stack(list(rtc_groups.values()))  # (N, H, W)
@@ -316,7 +324,7 @@ class ResolutionWeighter:
                 n_observations=n_observations,
                 decibel=decibel,
                 source_tags=source_tags,
-                acquisitions=acquisitions,
+                acquisitions=observed,
             ),
             overwrite=overwrite,
         )
@@ -331,7 +339,7 @@ class ResolutionWeighter:
                 clip_max_resolution=clip_max_resolution,
                 cqm_decibel=cqm_decibel,
                 source_tags=source_tags,
-                acquisitions=acquisitions,
+                acquisitions=observed,
                 overwrite=overwrite,
             )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
@@ -443,6 +451,8 @@ class ResolutionWeighter:
         ------
         ValueError
             If ``coh_products`` is empty.
+        EmptyCompositeError
+            If no input has a valid pixel in ``geobox``; nothing is written.
         """
         coh_products = list(coh_products)
         if not coh_products:
@@ -481,8 +491,13 @@ class ResolutionWeighter:
             logger.debug("skipping existing %s", self._fm.get_product_path(product).name)
             return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
 
-        coh_groups = self._stitch_by_orbit_date(self._load_band(coh_products, geobox, band=1))
+        coh_groups = self._contributing(
+            self._stitch_by_orbit_date(self._load_band(coh_products, geobox, band=1)),
+            geobox,
+        )
         area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
+        # The tags name the acquisitions that reach the cell, not every input.
+        observed = self._contributing_span(coh_products, coh_groups)
 
         self._check_area_coverage(coh_groups, area_groups)
         coh_obs = np.stack(list(coh_groups.values()))  # (N, H, W)
@@ -503,7 +518,7 @@ class ResolutionWeighter:
                 n_observations=n_observations,
                 statistics=product_tags.coherence_statistics(composite),
                 source_tags=source_tags,
-                acquisitions=acquisitions,
+                acquisitions=observed,
             ),
             overwrite=overwrite,
         )
@@ -518,7 +533,7 @@ class ResolutionWeighter:
                 clip_max_resolution=clip_max_resolution,
                 cqm_decibel=cqm_decibel,
                 source_tags=source_tags,
-                acquisitions=acquisitions,
+                acquisitions=observed,
                 overwrite=overwrite,
             )
         return (product, (qa[QaMetric.NUM], qa[QaMetric.CQM])) if qa else product
@@ -1195,12 +1210,45 @@ class ResolutionWeighter:
         """
         groups: defaultdict[_OrbitDateKey, list[NDArray[np.floating[Any]]]] = defaultdict(list)
         for prod, data in loaded:
-            key: _OrbitDateKey = (
-                prod.rel_orbit_number,
-                self._acquisition_date(prod).normalize(),
-            )
-            groups[key].append(data)
+            groups[self._group_key(prod)].append(data)
         return {key: self._first_notna(arrays) for key, arrays in sorted(groups.items())}
+
+    @staticmethod
+    def _contributing(
+        groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
+        geobox: MGRSGeoBox,
+    ) -> dict[_OrbitDateKey, NDArray[np.floating[Any]]]:
+        """Keep the orbit/date groups with at least one valid pixel in the cell.
+
+        Bursts are matched to a cell by footprint, and a burst may touch a
+        cell without reaching any of its pixels. Such a group adds nothing to
+        the composite, so it is not counted as an observation and its date is
+        not part of the acquisition span.
+
+        Raises
+        ------
+        EmptyCompositeError
+            If no group has a valid pixel in the cell.
+        """
+        kept = {key: data for key, data in groups.items() if np.isfinite(data).any()}
+        if not kept:
+            msg = f"no input observation has a valid pixel in cell {geobox.mgrs_code}"
+            raise EmptyCompositeError(msg)
+        return kept
+
+    @classmethod
+    def _group_key(cls, product: ComposableProduct) -> _OrbitDateKey:
+        """Return the orbit/date group a product is stitched into."""
+        return product.rel_orbit_number, cls._acquisition_date(product).normalize()
+
+    @classmethod
+    def _contributing_span(
+        cls,
+        products: Collection[ComposableProduct],
+        groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
+    ) -> product_tags.Acquisitions:
+        """First and last acquisition day among the products of the contributing groups."""
+        return cls._acquisition_span([p for p in products if cls._group_key(p) in groups])
 
     @staticmethod
     def _first_notna(arrays: Sequence[NDArray[np.floating[Any]]]) -> NDArray[np.floating[Any]]:

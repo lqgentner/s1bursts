@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the project is pre-1.0 (`0.x`), minor releases may contain breaking changes.
 
+## [Unreleased]
+
+### Changed
+
+- `compose_rtc_lrw()` and `compose_coherence_lrw()` leave out inputs with no
+  valid pixel in the cell. A burst matched to a cell by its footprint can
+  touch the cell without reaching any of its pixels; it no longer counts in
+  `CONTRIBUTING_OBSERVATIONS` or in the `FIRST_ACQUISITION_DATE` and
+  `LAST_ACQUISITION_DATE` tags.
+- When no input reaches the cell, both raise the new `EmptyCompositeError`
+  (a `ValueError`) and write nothing, instead of writing an all-NaN composite
+  and its QA layers.
+
 ## [0.6.0] - 2026-09-24
 
 ### Changed

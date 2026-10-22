@@ -32,6 +32,15 @@ class ConfigurationError(S1BurstsError):
     """
 
 
+class EmptyCompositeError(S1BurstsError, ValueError):
+    """No input observation has a valid pixel in the target cell.
+
+    A burst whose footprint touches a cell need not reach any of its pixels
+    once geocoded. A composite of such inputs would hold no value, so none is
+    written, and the cell is left without one, as if no burst had matched.
+    """
+
+
 class BurstError(S1BurstsError):
     """Base class for recoverable, per-item burst failures.
 
