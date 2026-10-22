@@ -36,6 +36,9 @@ from s1bursts.product import (
     CohLRWQA,
     CohPassComposite,
     CohPassQA,
+    GTCPassComposite,
+    GTCPassQA,
+    GTCProduct,
     QaMetric,
     RTCLRWComposite,
     RTCPassComposite,
@@ -45,7 +48,7 @@ from s1bursts.product import (
 from s1bursts.time_range import TimeRange, calendar_day
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Sequence
+    from collections.abc import Callable, Collection, Sequence
 
     from freezebase.mgrs import MGRSGeoBox
 
@@ -56,15 +59,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-type ComposableProduct = CoherenceProduct | RTCProduct
-type CompositeProduct = CohLRWComposite | RTCLRWComposite | RTCPassComposite | CohPassComposite
+type ComposableProduct = CoherenceProduct | RTCProduct | GTCProduct
+type CompositeProduct = (
+    CohLRWComposite | RTCLRWComposite | RTCPassComposite | CohPassComposite | GTCPassComposite
+)
 type LRWQAProduct = RTCLRWQA | CohLRWQA
-type QAProduct = RTCLRWQA | CohLRWQA | RTCPassQA | CohPassQA
+type QAProduct = RTCLRWQA | CohLRWQA | RTCPassQA | CohPassQA | GTCPassQA
 
 # Return shapes when ``write_qa=True``: the composite paired with its QA-product bundle.
 type RTCLRWResult = tuple[RTCLRWComposite, tuple[RTCLRWQA, RTCLRWQA]]
 type CohLRWResult = tuple[CohLRWComposite, tuple[CohLRWQA, CohLRWQA]]
 type RTCPassResult = tuple[RTCPassComposite, RTCPassQA]
+type GTCPassResult = tuple[GTCPassComposite, GTCPassQA]
 type CohPassResult = tuple[CohPassComposite, CohPassQA]
 
 _OrbitDateKey = tuple[int, Timestamp]
@@ -628,33 +634,167 @@ class ResolutionWeighter:
             One entry per pass direction.  Each value is the composite, or
             ``(composite, qa_num)`` when ``write_qa=True``.
         """
-        rtc_products = list(rtc_products)
-        if not rtc_products:
+        return self._compose_backscatter_by_pass(
+            rtc_products,
+            geobox,
+            composite_cls=RTCPassComposite,
+            qa_cls=RTCPassQA,
+            metadata_fn=product_tags.rtc_pass_metadata,
+            aggregation=aggregation,
+            decibel=decibel,
+            write_qa=write_qa,
+            overwrite=overwrite,
+            time_range=time_range,
+        )
+
+    @overload
+    def compose_gtc_by_pass(
+        self,
+        gtc_products: Collection[GTCProduct],
+        geobox: MGRSGeoBox,
+        *,
+        aggregation: Literal["mean", "median"] | float = ...,
+        decibel: bool = ...,
+        write_qa: Literal[False] = False,
+        overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
+    ) -> dict[PassDirection, GTCPassComposite]: ...
+    @overload
+    def compose_gtc_by_pass(
+        self,
+        gtc_products: Collection[GTCProduct],
+        geobox: MGRSGeoBox,
+        *,
+        aggregation: Literal["mean", "median"] | float = ...,
+        decibel: bool = ...,
+        write_qa: Literal[True],
+        overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
+    ) -> dict[PassDirection, GTCPassResult]: ...
+    @overload
+    def compose_gtc_by_pass(
+        self,
+        gtc_products: Collection[GTCProduct],
+        geobox: MGRSGeoBox,
+        *,
+        aggregation: Literal["mean", "median"] | float = ...,
+        decibel: bool = ...,
+        write_qa: bool,
+        overwrite: bool = ...,
+        time_range: TimeRange | None = ...,
+    ) -> dict[PassDirection, GTCPassComposite | GTCPassResult]: ...
+    def compose_gtc_by_pass(
+        self,
+        gtc_products: Collection[GTCProduct],
+        geobox: MGRSGeoBox,
+        *,
+        aggregation: Literal["mean", "median"] | float = "median",
+        decibel: bool = False,
+        write_qa: bool = False,
+        overwrite: bool = False,
+        time_range: TimeRange | None = None,
+    ) -> Mapping[PassDirection, GTCPassComposite | GTCPassResult]:
+        """Compute unweighted GTC beta0 composites stratified by pass direction.
+
+        Bursts from the same orbit and acquisition date are mosaicked using the
+        first non-NaN pixel strategy.  The resulting orbit-date observations are
+        then aggregated temporally (mean or median) per pass direction
+        (ascending / descending).  The stored value is beta-0 power, or
+        decibels with ``decibel=True``.
+
+        Parameters
+        ----------
+        gtc_products
+            GTC products to composite.  Products from both pass directions may
+            be mixed; they are split by their ``pass_direction``.
+        geobox
+            Target MGRS grid cell.
+        aggregation
+            Temporal aggregation method.  Pass ``"mean"`` or ``"median"`` for
+            the corresponding statistic, or a float in ``(0, 1)`` for an
+            interpolated quantile at that level.
+        decibel
+            If ``True``, convert the aggregated composite from intensity
+            (power) to decibels before writing; non-positive intensities
+            become NaN.  Aggregation always happens in the linear domain.
+        write_qa
+            If ``True``, also write a contributing-observations QA product
+            (``QA-NUM``) per pass direction.
+        overwrite
+            If ``False`` and the output file already exists, skip computation
+            and return the existing product metadata.
+        time_range
+            The compositing window, as calendar days; pass the same
+            :class:`~s1bursts.time_range.TimeRange` the search was made with.
+            When given, the product is named and tagged with its days rather
+            than with the first and last acquisition; the observed span is
+            kept in the ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE``
+            tags. An input outside the window is a ``ValueError``.
+
+        Returns
+        -------
+        dict[PassDirection, GTCPassComposite or tuple[GTCPassComposite, GTCPassQA]]
+            One entry per pass direction.  Each value is the composite, or
+            ``(composite, qa_num)`` when ``write_qa=True``.
+        """
+        return self._compose_backscatter_by_pass(
+            gtc_products,
+            geobox,
+            composite_cls=GTCPassComposite,
+            qa_cls=GTCPassQA,
+            metadata_fn=product_tags.gtc_pass_metadata,
+            aggregation=aggregation,
+            decibel=decibel,
+            write_qa=write_qa,
+            overwrite=overwrite,
+            time_range=time_range,
+        )
+
+    def _compose_backscatter_by_pass[
+        C: (RTCPassComposite, GTCPassComposite),
+        Q: (RTCPassQA, GTCPassQA),
+    ](
+        self,
+        products: Collection[RTCProduct | GTCProduct],
+        geobox: MGRSGeoBox,
+        *,
+        composite_cls: type[C],
+        qa_cls: type[Q],
+        metadata_fn: Callable[..., RasterMetadata],
+        aggregation: Literal["mean", "median"] | float,
+        decibel: bool,
+        write_qa: bool,
+        overwrite: bool,
+        time_range: TimeRange | None,
+    ) -> dict[PassDirection, C | tuple[C, Q]]:
+        """Per-pass unweighted composite shared by the RTC and GTC entry points."""
+        inputs = list(products)
+        if not inputs:
             return {}
         self._check_aggregation(aggregation)
 
-        polarization = self._check_polarization(rtc_products)
-        acquisitions = self._acquisition_span(rtc_products)
+        polarization = self._check_polarization(inputs)
+        acquisitions = self._acquisition_span(inputs)
         start_date, end_date = self._composite_dates(acquisitions, time_range)
 
-        loaded = self._load_band(rtc_products, geobox, band=1)
+        loaded = self._load_band(inputs, geobox, band=1)
 
         subsets: defaultdict[PassDirection, list[_LoadedEntry]] = defaultdict(list)
         for prod, data in loaded:
             subsets[prod.pass_direction].append((prod, data))
 
-        result: dict[PassDirection, RTCPassComposite | RTCPassResult] = {}
+        result: dict[PassDirection, C | tuple[C, Q]] = {}
         for direction, subset in subsets.items():
-            product = RTCPassComposite(
+            product = composite_cls(
                 mgrs_code=geobox.mgrs_code,
                 start_date=start_date,
                 end_date=end_date,
                 polarization=polarization,
                 pass_direction=direction,
             )
-            qa_num: list[RTCPassQA] = (
+            qa_num: list[Q] = (
                 [
-                    RTCPassQA(
+                    qa_cls(
                         mgrs_code=geobox.mgrs_code,
                         start_date=start_date,
                         end_date=end_date,
@@ -671,8 +811,8 @@ class ResolutionWeighter:
                 continue
 
             groups = self._stitch_by_orbit_date(subset)
-            rtc_obs = np.stack(list(groups.values()))  # (N, H, W)
-            composite = self._aggregate_unweighted(rtc_obs, aggregation)
+            observations = np.stack(list(groups.values()))  # (N, H, W)
+            composite = self._aggregate_unweighted(observations, aggregation)
             if decibel:
                 composite = self._to_decibel(composite)
             source_tags = self._input_tags([prod for prod, _ in subset])
@@ -682,10 +822,10 @@ class ResolutionWeighter:
                 composite,
                 product,
                 geobox,
-                product_tags.rtc_pass_metadata(
+                metadata_fn(
                     product,
                     aggregation=aggregation,
-                    n_observations=len(rtc_obs),
+                    n_observations=len(observations),
                     decibel=decibel,
                     source_tags=source_tags,
                     acquisitions=acquisitions,
@@ -694,13 +834,13 @@ class ResolutionWeighter:
             )
             for qa_product in qa_num:
                 self._save(
-                    self._count_observations(rtc_obs),
+                    self._count_observations(observations),
                     qa_product,
                     geobox,
                     product_tags.qa_metadata(
                         qa_product,
                         aggregation=aggregation,
-                        n_observations=len(rtc_obs),
+                        n_observations=len(observations),
                         source_tags=source_tags,
                         acquisitions=acquisitions,
                     ),

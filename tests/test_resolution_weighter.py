@@ -22,6 +22,8 @@ from s1bursts.filemanager import FileManager
 from s1bursts.product import (
     RTCLRWQA,
     CoherenceProduct,
+    GTCPassComposite,
+    GTCProduct,
     QaMetric,
     RTCLRWComposite,
     RTCPassComposite,
@@ -1532,6 +1534,81 @@ class TestComposeByPass:
         scene.weighter.compose_rtc_by_pass([product], scene.geobox)
 
         assert path.read_bytes() == b"kept"
+
+
+def _gtc(date: str, orbit: int = 15, burst_id: int = _ASCENDING_BURST) -> GTCProduct:
+    return GTCProduct(
+        burst_id=burst_id,
+        sub_swath="IW1",
+        crs=_UTM32,
+        date=Timestamp(date),
+        polarization="VV",
+        _rel_orbit_number=orbit,
+    )
+
+
+_SOURCE_TAGS = {
+    "DEM": "glo30",
+    "PROCESSING_SOFTWARE": "SNAP",
+    "PROCESSING_SOFTWARE_VERSION": "14.0",
+}
+
+
+class TestComposeGtcByPass:
+    def test_aggregates_per_pass_and_writes_qa(self, scene: _Scene) -> None:
+        """Ascending dates 3.0 and 5.0 average to 4.0; descending keeps its NaN pixel."""
+        a1, a2 = _gtc("2019-01-05"), _gtc("2019-01-17")
+        _write_raster(scene.manager.get_product_path(a1), [_full(3.0)], _SOURCE_TAGS)
+        _write_raster(scene.manager.get_product_path(a2), [_full(5.0)], _SOURCE_TAGS)
+        d1 = _gtc("2019-01-08", orbit=66, burst_id=_DESCENDING_BURST)
+        partial = _full(9.0)
+        partial[0, 0] = np.nan
+        _write_raster(scene.manager.get_product_path(d1), [partial], _SOURCE_TAGS)
+        window = TimeRange("2019-01-01", "2019-01-31")
+
+        result = scene.weighter.compose_gtc_by_pass(
+            [a1, a2, d1], scene.geobox, aggregation="mean", write_qa=True, time_range=window
+        )
+
+        asc, asc_qa = result["Ascending"]
+        desc, desc_qa = result["Descending"]
+        assert isinstance(asc, GTCPassComposite)
+        assert (
+            scene.manager.get_product_path(asc).name
+            == "S1_GTC_COMP_A_32TMS_VV_20190101_20190131.tif"
+        )
+        with rasterio.open(scene.manager.get_product_path(asc)) as src:
+            assert src.read(1) == pytest.approx(np.full((_TILE, _TILE), 4.0))
+            assert src.tags()["BACKSCATTER_MEASUREMENT"] == "Beta-0"
+            assert src.tags()["CONTRIBUTING_OBSERVATIONS"] == "2"
+            assert src.tags()["FIRST_ACQUISITION_DATE"].startswith("2019-01-05")
+        with rasterio.open(scene.manager.get_product_path(asc_qa)) as src:
+            assert (src.read(1) == 2).all()
+        with rasterio.open(scene.manager.get_product_path(desc)) as src:
+            values = src.read(1)
+            assert np.isnan(values[0, 0])
+            assert values[1, 1] == 9.0
+        with rasterio.open(scene.manager.get_product_path(desc_qa)) as src:
+            counts = src.read(1)
+            assert counts[0, 0] == 0
+            assert counts[1, 1] == 1
+
+    def test_single_direction_input_yields_one_entry(self, scene: _Scene) -> None:
+        a1 = _gtc("2019-01-05")
+        _write_raster(scene.manager.get_product_path(a1), [_full(2.0)], _SOURCE_TAGS)
+
+        result = scene.weighter.compose_gtc_by_pass([a1], scene.geobox, aggregation="mean")
+
+        assert list(result) == ["Ascending"]
+
+    def test_rtc_products_still_write_rtc_names(self, scene: _Scene) -> None:
+        r = _rtc("2019-01-05")
+        _write_raster(scene.manager.get_product_path(r), [_full(2.0), _full(1.0)], _SOURCE_TAGS)
+
+        result = scene.weighter.compose_rtc_by_pass([r], scene.geobox, aggregation="mean")
+
+        name = scene.manager.get_product_path(result["Ascending"]).name
+        assert name.startswith("S1_RTC_COMP_A_")
 
 
 class TestCompositeTags:

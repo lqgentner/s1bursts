@@ -8,6 +8,15 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ## [Unreleased]
 
+### Added
+
+- GTC pass composites: `ResolutionWeighter.compose_gtc_by_pass()` aggregates
+  beta-0 GTC products per pass direction without weighting, like
+  `compose_rtc_by_pass()` does for RTC. With the new product types
+  `GTCPassComposite` (`S1_GTC_COMP_{A/D}_…`) and `GTCPassQA`, the
+  `FileManager.find_gtc_pass_composites()` and `find_gtc_pass_qa()` lookups,
+  and `product_tags.gtc_pass_metadata()`.
+
 ### Changed
 
 - `compose_rtc_lrw()` and `compose_coherence_lrw()` leave out inputs with no
