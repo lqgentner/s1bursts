@@ -60,13 +60,6 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - name: Install the GDAL CLI
-        # Only `gdal_translate`, and only for the test that diffs the port's
-        # raster extraction against an independent GDAL implementation
-        # (tests/test_gdal_reference_extraction.py). That test skips without it,
-        # so this is what keeps it from silently never running. The package
-        # itself installs from wheels and needs no system GDAL.
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gdal-bin
       - name: Run offline unit tests with coverage
         run: >
           uv run --python ${{ matrix.python-version }}

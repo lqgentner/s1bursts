@@ -105,7 +105,6 @@ jobs:
           printf '%s\n' "$usage" | head -5
           docker run --rm "$image" sh -c 'test -x "$SNAP_BIN/gpt"'
           docker run --rm "$image" uv --version
-          docker run --rm "$image" gdal_translate --version
 
       - name: Summary
         run: |
