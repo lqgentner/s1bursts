@@ -11,7 +11,8 @@ API. Preserve compatibility unless a change is explicitly breaking.
 
 The project uses uv and supports Python 3.12–3.14. Dependencies are declared in
 `pyproject.toml`, and the virtual environment is located at `.venv/`. freezebase is resolved
-from PyPI like any other dependency.
+from PyPI like any other dependency. `.python-version` pins the interpreter of `.venv/`; CI
+jobs that test a specific version pass `--python`, which takes precedence over it.
 
 ```bash
 uv sync
@@ -19,8 +20,8 @@ uv sync
 
 The `Programming Language :: Python` classifiers are the source of truth for the supported
 versions (PyPI and the README badge are built from them). `tests/test_supported_python_versions.py`
-fails if the CI test matrix, `requires-python`, the lowest-bound job, Pyrefly's `python-version`
-or the SNAP image's `PYTHON_VERSION` drift from them, so change them together.
+fails if the CI test matrix, `requires-python`, the lowest-bound job, Pyrefly's `python-version`,
+the SNAP image's `PYTHON_VERSION` or `.python-version` drift from them, so change them together.
 
 ## Required checks
 
