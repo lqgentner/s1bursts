@@ -903,12 +903,11 @@ class TestComposeReturns:
             assert src is not None
             return [(p, src[id(p)]) for p in products]
 
-        # Stands in for the real windowed reader.
-        # pyrefly: ignore [bad-assignment]
-        weighter._load_band = fake_load
-        # The stubs have no file to inherit provenance tags from.
-        # pyrefly: ignore [bad-assignment]
-        weighter._input_tags = lambda _product: {}
+        # Instance attributes shadow the real windowed reader and the provenance
+        # lookup, which the stubs have no file for. Written through ``vars`` because
+        # Pyrefly 1.4 rejects assigning to a method, and 1.3 reports it under a
+        # different code, so no single ignore comment fits both.
+        vars(weighter).update(_load_band=fake_load, _input_tags=lambda _product: {})
 
     def test_rtc_lrw_without_qa_returns_bare_composite(self, tmp_path: Path) -> None:
         """``write_qa=False`` returns just the composite (unchanged)."""
