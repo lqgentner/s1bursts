@@ -37,7 +37,12 @@ from s1bursts import (
 from s1bursts.config import get_settings
 from s1bursts.dem import _get_transformer
 from s1bursts.errors import ConfigurationError
-from s1bursts.snap_client import _resolve_gpt_path
+from s1bursts.snap_client import (
+    EXTERNAL_DEM_FIXED_IN,
+    _resolve_gpt_path,
+    external_dem_needs_half_pixel_shift,
+    snap_dem_module_version,
+)
 from tests.dem_probe import PROBE_CENTRE, measure_dem_sampling
 from tests.safe_conformance import check_burst_safe, compare_burst_safes
 
@@ -607,20 +612,32 @@ class TestExternalDEMSampling:
     """
 
     @requires_snap
-    def test_snap_samples_an_external_dem_half_a_pixel_south_east(
+    def test_external_dem_offset_is_what_the_module_version_predicts(
         self,
         dem_sampling: DEMProbe,
     ) -> None:
+        """The installed SNAP samples where `external_dem_needs_half_pixel_shift` says.
+
+        The half-pixel offset is fixed in the ``snap-dem`` module from
+        `EXTERNAL_DEM_FIXED_IN` on, and that module is updated separately from
+        SNAP itself, so this is what notices an update that moves the boundary:
+        a fix backported to the 13.x line, or one that turns out to start later.
+        """
+        gpt = _resolve_gpt_path(None, _settings.snap)
+        module = snap_dem_module_version(gpt)
+        needs_shift = external_dem_needs_half_pixel_shift(gpt.parent)
         offset = dem_sampling.raw
         # A rigid shift, not a resampling artefact that a tolerance could absorb.
         assert offset.scatter < 0.01
+        expected = 0.5 if needs_shift else 0.0
         message = (
-            "SNAP no longer samples an external DEM half a pixel off "
-            f"(offset {offset.column:+.3f}, {offset.row:+.3f} px): "
-            "prepare_dem_for_snap must stop shifting the geotransform"
+            f"snap-dem {module} samples an external DEM at "
+            f"({offset.column:+.3f}, {offset.row:+.3f}) px, but the module version "
+            f"(fixed from {EXTERNAL_DEM_FIXED_IN}) predicts {expected:+.1f}: "
+            "EXTERNAL_DEM_FIXED_IN no longer matches SNAP"
         )
-        assert offset.column == pytest.approx(0.5, abs=0.01), message
-        assert offset.row == pytest.approx(0.5, abs=0.01), message
+        assert offset.column == pytest.approx(expected, abs=0.01), message
+        assert offset.row == pytest.approx(expected, abs=0.01), message
 
     @requires_snap
     def test_prepared_dem_is_sampled_where_its_georeferencing_says(

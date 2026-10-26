@@ -4,7 +4,10 @@
 south-east of where its georeferencing places it, and because the only geoid
 SNAP knows is EGM96. Both are properties of SNAP, not of this package, so both
 have to be measured against the installed ``gpt`` rather than asserted from a
-golden file — the day either is fixed, the compensation becomes the error.
+golden file — the day either is fixed, the compensation becomes the error. The
+half-pixel offset was fixed in the ``snap-dem`` 14.0.2 module update, which
+``external_dem_needs_half_pixel_shift`` keys on; the probe is what says whether
+that is still true of the installation at hand.
 
 ``AddElevation`` writes out what ``ElevationModel.getElevation`` returns on a
 grid of our choosing, which is the call Terrain-Flattening and
@@ -263,7 +266,11 @@ def measure_dem_sampling(gpt: Path, work_dir: Path) -> DEMProbe:
     """
     target, dems = _write_inputs(work_dir)
     prepared = {
-        f"{name}_prepared": prepare_dem_for_snap(dem, cache_dir=work_dir / "cache")
+        f"{name}_prepared": prepare_dem_for_snap(
+            dem,
+            cache_dir=work_dir / "cache",
+            snap_bin=gpt.parent,
+        )
         for name, dem in dems.items()
         if name != "flat"
     }

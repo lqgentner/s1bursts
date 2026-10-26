@@ -34,6 +34,12 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Fixed
 
+- `prepare_dem_for_snap()` no longer shifts the DEM when the installed SNAP has
+  fixed its half-pixel DEM sampling error (`snap-dem` 14.0.2 or newer). Under
+  such a SNAP, every prepared DEM ended up half a DEM pixel off (about 15 m for
+  a 30 m DEM). SNAP 13, older SNAP 14 and unrecognised installations keep the
+  shift, so their results are unchanged. The new optional `snap_bin` argument
+  names the installation. Cached DEMs are prepared again once.
 - `CDSEAuth` re-authenticates with the password grant when the identity server
   rejects a refresh token (HTTP 400/401) before its nominal expiry, instead of
   failing every OData download until the refresh token expires.

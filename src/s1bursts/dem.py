@@ -21,19 +21,21 @@ from rasterio.errors import RasterioError
 import rasterio.windows
 
 from s1bursts.config import get_settings
+from s1bursts.snap_client import external_dem_needs_half_pixel_shift
 
 logger = logging.getLogger(__name__)
 
-# Marks a copy as deliberately offset, so it cannot be mistaken for a canonical
-# DEM if it turns up outside the cache.
+# Records whether a copy is deliberately offset ("1") or not ("0"), so a shifted
+# copy cannot be mistaken for a canonical DEM if it turns up outside the cache.
 COMPENSATED_TAG = "SNAP_HALF_PIXEL_COMPENSATED"
 VERTICAL_CONVERSION_TAG = "SNAP_VERTICAL_DATUM_CONVERTED"
 
 TARGET_CRS = "EPSG:4979"
+HALF_PIXEL = 0.5
 
 # Bumping this invalidates every cache entry. Raise it whenever preparation
 # changes in a way that alters the written raster or its cache identity.
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 
 # Suffix of the JSON provenance sidecar written next to each cache entry.
 PROVENANCE_SUFFIX = ".provenance.json"
@@ -50,10 +52,14 @@ def _file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _preparation_digest(source_crs: str | None) -> str:
+def _preparation_digest(source_crs: str | None, *, shifted: bool) -> str:
     """Return a stable digest of options that affect the prepared raster."""
     payload = json.dumps(
-        {"source_crs": source_crs, "target_crs": TARGET_CRS if source_crs else None},
+        {
+            "source_crs": source_crs,
+            "target_crs": TARGET_CRS if source_crs else None,
+            "pixel_offset": HALF_PIXEL if shifted else 0.0,
+        },
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()
@@ -82,12 +88,12 @@ def _read_provenance(sidecar: Path) -> dict[str, Any] | None:
     return record if isinstance(record, dict) else None
 
 
-def _entry_is_intact(dest: Path, *, converted: bool) -> bool:
+def _entry_is_intact(dest: Path, *, converted: bool, shifted: bool) -> bool:
     """Check that the prepared raster opens and carries the expected tags."""
     try:
         with rasterio.open(dest) as src:
             tags = src.tags()
-            tagged = tags.get(COMPENSATED_TAG) == "1"
+            tagged = tags.get(COMPENSATED_TAG) == str(int(shifted))
             conversion_matches = tags.get(VERTICAL_CONVERSION_TAG) == str(int(converted))
     except (RasterioError, OSError):
         logger.warning("Prepared DEM '%s' could not be opened; rewriting", dest.name)
@@ -106,6 +112,7 @@ def _cache_entry_is_valid(
     preparation_digest: str,
     *,
     converted: bool,
+    shifted: bool,
 ) -> bool:
     """Check that a cache entry matches its provenance and is readable."""
     if not dest.exists():
@@ -130,7 +137,7 @@ def _cache_entry_is_valid(
         logger.warning("Prepared DEM '%s' has an unexpected size; rewriting", dest.name)
         return False
 
-    return _entry_is_intact(dest, converted=converted)
+    return _entry_is_intact(dest, converted=converted, shifted=shifted)
 
 
 def _normalise_source_crs(dem: Path, source_crs: str | None) -> tuple[CRS | None, str | None]:
@@ -348,7 +355,13 @@ def _convert_elevations(
         band[valid] = transformed
 
 
-def _prepare(dem: Path, dest: Path, transformer: Transformer | None) -> None:
+def _prepare(
+    dem: Path,
+    dest: Path,
+    transformer: Transformer | None,
+    *,
+    shifted: bool,
+) -> None:
     """Write a SNAP-prepared copy of ``dem`` to ``dest`` atomically."""
     partial = dest.with_name(f"{dest.name}.{token_hex(8)}.partial")
     try:
@@ -361,7 +374,11 @@ def _prepare(dem: Path, dest: Path, transformer: Transformer | None) -> None:
             )
             profile = src.profile.copy()
             profile.update(
-                transform=src.transform @ Affine.translation(0.5, 0.5),
+                transform=(
+                    src.transform @ Affine.translation(HALF_PIXEL, HALF_PIXEL)
+                    if shifted
+                    else src.transform
+                ),
                 dtype=output_dtype.name,
                 driver="GTiff",
                 tiled=True,
@@ -374,7 +391,7 @@ def _prepare(dem: Path, dest: Path, transformer: Transformer | None) -> None:
             with rasterio.open(partial, "w", **profile) as dst:
                 dst.update_tags(
                     **{
-                        COMPENSATED_TAG: "1",
+                        COMPENSATED_TAG: str(int(shifted)),
                         VERTICAL_CONVERSION_TAG: str(int(transformer is not None)),
                     },
                 )
@@ -407,18 +424,23 @@ def prepare_dem_for_snap(
     source_crs: str | None = None,
     download_missing_grids: bool = False,
     cache_dir: Path | None = None,
+    snap_bin: Path | None = None,
 ) -> Path:
     """Return an external DEM prepared for SNAP's sampling and height conventions.
 
     The output geotransform is shifted by half a pixel because SNAP interprets an
     external DEM's origin as the centre of its first pixel, and so samples the file
-    half a pixel south-east of where its georeferencing places it [1]. When
+    half a pixel south-east of where its georeferencing places it [1]. SNAP fixed
+    that in the 14.0.2 update of its ``snap-dem`` module, so the shift is applied
+    only for an installation older than that, and for one whose version cannot be
+    determined. When
     ``source_crs`` is supplied, elevations are also transformed from that compound
     horizontal and vertical CRS to WGS 84 ellipsoidal heights (EPSG:4979). SNAP
     cannot do that conversion itself: the only geoid it knows is EGM96, which it
     applies even to the Copernicus DEM, whose heights are referenced to EGM2008 [2].
 
-    The result is correct **only** when read by SNAP and must only be passed as an
+    The result is correct **only** when read by the SNAP installation it was
+    prepared for, and must only be passed as an
     ``externalDEMFile``. Set SNAP's ``externalDEMApplyEGM`` parameter to ``False``.
     Prepared copies are cached by source content and conversion settings.
 
@@ -435,6 +457,10 @@ def prepare_dem_for_snap(
     cache_dir
         Directory for prepared copies. Defaults to ``SNAP_DEM_CACHE``
         (``~/.s1bursts/dem``).
+    snap_bin
+        A SNAP installation's ``bin`` directory, which decides whether the
+        half-pixel shift is needed. Defaults to ``SNAP_BIN``, then ``gpt``
+        discovered on ``PATH``.
 
     Returns
     -------
@@ -451,6 +477,8 @@ def prepare_dem_for_snap(
         If no exact vertical transformation is available.
     pyproj.exceptions.ProjError
         If any DEM pixel falls outside the selected transformation's valid area.
+    ConfigurationError
+        If ``snap_bin`` is given but contains no ``gpt`` executable.
 
     References
     ----------
@@ -465,7 +493,8 @@ def prepare_dem_for_snap(
         raise FileNotFoundError(msg)
 
     compound_crs, canonical_source_crs = _normalise_source_crs(dem, source_crs)
-    preparation_digest = _preparation_digest(canonical_source_crs)
+    shifted = external_dem_needs_half_pixel_shift(snap_bin)
+    preparation_digest = _preparation_digest(canonical_source_crs, shifted=shifted)
 
     cache_dir = cache_dir or get_settings().snap.dem_cache
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -484,6 +513,7 @@ def prepare_dem_for_snap(
         source_digest,
         preparation_digest,
         converted=converted,
+        shifted=shifted,
     ):
         logger.debug("Reusing prepared DEM '%s'", dest)
         return dest
@@ -495,7 +525,7 @@ def prepare_dem_for_snap(
     )
     logger.info("Writing SNAP-prepared DEM '%s' -> '%s'", dem, dest)
     start = time.perf_counter()
-    _prepare(dem, dest, transformer)
+    _prepare(dem, dest, transformer, shifted=shifted)
     _write_provenance(
         sidecar,
         {
@@ -513,7 +543,7 @@ def prepare_dem_for_snap(
             "preparation_sha256": preparation_digest,
             "output_name": dest.name,
             "output_size": dest.stat().st_size,
-            "pixel_offset": [0.5, 0.5],
+            "pixel_offset": [HALF_PIXEL, HALF_PIXEL] if shifted else [0.0, 0.0],
         },
     )
     logger.info("Wrote '%s' in %.1f s", dest.name, time.perf_counter() - start)
