@@ -225,6 +225,24 @@ class TestEndpointWrappers:
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, HTTPError)
 
+    def test_odata_non_file_response_becomes_error_result(self) -> None:
+        db = _make_database()
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            cdse_id="cdse-id",
+        )
+        db.client = MagicMock()
+        # Previously escaped the handler and aborted the whole batch.
+        db.client.download_burst.side_effect = RuntimeError("No downloadable file found")
+
+        result = db._download_burst_odata(burst)
+
+        assert isinstance(result, ErrorResult)
+        assert isinstance(result.error, RuntimeError)
+
     def test_odata_without_credentials_returns_clear_error(self) -> None:
         """A missing-credentials failure surfaces as a per-burst BurstDownloadError."""
         file_manager = MagicMock()

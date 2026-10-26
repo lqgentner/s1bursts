@@ -43,6 +43,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - `CDSEAuth` re-authenticates with the password grant when the identity server
   rejects a refresh token (HTTP 400/401) before its nominal expiry, instead of
   failing every OData download until the refresh token expires.
+- An OData download answered with something other than a file, or caught in a
+  redirect loop, is recorded as that burst's error. It used to raise and abort
+  the batch even with `continue_on_error`.
 
 ## [0.6.0] - 2026-09-24
 
