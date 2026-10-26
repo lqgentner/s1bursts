@@ -98,6 +98,8 @@ Without `--submit` the script uses jobs already completed under the account and 
 
 [`tests/fixtures/REFERENCE.md`](tests/fixtures/REFERENCE.md) describes both reference products and the conditions each comparison depends on: for OPERA, that the static layers are compared against the acquisition they were derived from and that gamma-0 is averaged in power; for HyP3, that its coherence is a different estimator (phase-sigma, measured on Goldstein-filtered phase, which saturates near 1 over coherent ground) and that it must be ordered at 5 x 1 looks, the setting whose estimation window matches this package's. Those are why the HyP3 comparison asserts ordering, a bounded signed offset and geolocation rather than equality of values, and why each scene declares whether its reference carries a pattern: the claims are selected from that declaration when tests are collected, so every claim a scene carries is asserted rather than skipped.
 
+SNAP output is bit-reproducible run to run, and does not depend on `-q` or `-Xmx`, so a product golden can be a checksum and a CI container with fewer CPUs than a dev machine cannot move it. It is specific to one SNAP version, though (see [SNAP versions](#snap-versions)). s1ard is built on SNAP, so comparing against it is circular and validates nothing.
+
 ### External DEM handling
 
 `prepare_dem_for_snap()` compensates for two reported SNAP bugs: an external DEM is sampled [half a pixel south-east](https://forum.step.esa.int/t/external-dem-is-sampled-half-a-pixel-off/46042) of where its georeferencing places it, and the only geoid SNAP knows is EGM96, which it [applies to the Copernicus DEM](https://forum.step.esa.int/t/copernicus-dem-built-in-path-applies-egm96-while-the-data-is-egm2008/46041) even though those heights are EGM2008. When either is fixed the compensation becomes the error, and nothing else would notice: the unit tests assert what the shift does for a given version, not that the version is still the right one, and every other graph reads the built-in DEM rather than a file.
@@ -134,6 +136,8 @@ SNAP 14 also added two `Coherence` parameters, exposed as `CoherenceConfig.corre
 
 `SUPPORTED_SNAP_VERSIONS` in `snap_client.py` is the source of truth for which versions are tested, and `SNAPConfig` warns when it resolves one outside that set. The CI matrix and README badge state the same list, so `tests/test_supported_snap_versions.py` fails if the three drift apart.
 
+SNAP 13 and 14 do not produce identical pixels, so never mix them in one time series; products record `PROCESSING_SOFTWARE_VERSION`. On one burst with a shared SLC and DEM cache the median gamma-0 difference is 1.1 % (0.05 dB, unbiased) and p99 is 9.5 %; coherence is 0.004 lower on average. Terrain-Correction is the changed operator, not Terrain-Flattening or calibration: SNAP 14 adds an undocumented bistatic residual correction to its range-Doppler geolocation that cannot be disabled, a sub-pixel azimuth shift (at most 0.05 px) that grows with range. Coherence has a second cause, `correctCoherenceBias`. Already ruled out: the DEM readers (`AddElevation` is bit-identical), the resampling kernels, and the near-zero floor SNAP 13's calibration applies (SNAP-4160), which never reaches the product. SNAP 14 also zero-fills the ragged last tile column of a *tiled-GeoTIFF source product* in `AddElevation`; this package only feeds SNAP SAFE zips, and a ragged tiled external DEM was verified to give bit-identical output, so do not pad the DEM writer.
+
 ### SNAP in CI
 
 The scheduled integration workflow runs inside `ghcr.io/lqgentner/s1bursts-snap`, built from [`containers/Dockerfile.snap`](containers/Dockerfile.snap) by `.github/workflows/container.yml`. Installing SNAP per run is slow, and the Actions cache expires after seven days — which the weekly schedule sits right on top of — so the toolchain is baked into a pinned image instead.
@@ -159,6 +163,14 @@ docker run --rm -v "$PWD:/w" -w /w --env-file .env \
 ```
 
 `SNAP_BIN` is overridden because `.env` points at a host install, and `UV_PROJECT_ENVIRONMENT` keeps the container from overwriting the host `.venv` on the bind mount.
+
+### Parity with CDSE's burst products
+
+The burst extractor reproduces the products of CDSE's burst service (the raster is byte-identical on burst 30346). Two fields differ on purpose, so do not "fix" them: GCP rows follow the reference script's corrected behaviour, since CDSE's are one whole burst too far (-9006 where ours are -4503) and `tests/safe_conformance.py` reports it as `KNOWN DEVIATION:`; and footprint coordinates are copied as the annotation's raw text, which is what CDSE ships, whereas the reference script's XPath `number()` loses a digit. The wide footprint, blanked manifest checksums and retained out-of-burst grid points are CDSE's behaviour too. Before changing what `burst_extractor.py` outputs, run `uv run --env-file .env pytest -m integration -k ReferenceConformance` and diff against CDSE instead of reasoning from the SAFE spec.
+
+### Terminology and band names
+
+The area Terrain-Flattening divides beta-0 by is the **local scattering area** (CEOS-ARD SAR PFS wording; Small et al. say contributing area, OPERA the area normalization factor, SNAP `simulatedImage`), kept only where those are external identifiers. Each band has one snake_case name, used as the graph's target band, the GeoTIFF band description and the `LAYER_NAME` tag: RTC `gamma0` and `scattering_area`, GTC `beta0`, `coherence`, and `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` for the interferogram. CEOS-ARD PFS SAR v1.3.1 governs; its Composite Backscatter product covers the LRW output. Do not rename `QA-NUM` to match item 2.21 of that standard, because the token is embedded in output filenames and the `filemanager.py` discovery regexes. The `tests/fixtures/regenerate_*_reference.py` scripts read bands by description and silently fall back to band 1 on a miss, so a band rename must reach them.
 
 ## Releasing
 
