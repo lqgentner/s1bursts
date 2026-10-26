@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 import zipfile
 
+from freezebase.errors import RasterWriteError
 import numpy as np
 from pandas import Timestamp
 from pyproj import CRS
@@ -31,7 +32,12 @@ from s1bursts.snap_client import (
     snap_version,
     snap_worker_userdir,
 )
-from s1bursts.snap_graph import NODATA_SENTINEL, BackscatterConfig, CoherenceConfig
+from s1bursts.snap_graph import (
+    NODATA_SENTINEL,
+    BackscatterConfig,
+    CoherenceConfig,
+    InterferogramConfig,
+)
 from s1bursts.summary import ErrorResult, OkResult
 
 if TYPE_CHECKING:
@@ -641,6 +647,39 @@ class TestCreateBackscatter:
         assert isinstance(result.error, SnapProcessingError)
         assert result.source is burst
 
+    def test_write_failure_returns_error_result(self, client: SNAPClient) -> None:
+        burst = _make_burst("2022-01-01")
+
+        with (
+            patch.object(client, "_run_gpt"),
+            patch.object(
+                client,
+                "_finalize_product",
+                side_effect=RasterWriteError("write failed"),
+            ),
+        ):
+            result = client.create_backscatter(
+                burst,
+                crs=self.CRS_UTM32,
+                config=BackscatterConfig(),
+            )
+
+        assert isinstance(result, ErrorResult)
+        assert isinstance(result.error, RasterWriteError)
+
+    def test_unrelated_runtime_error_propagates(self, client: SNAPClient) -> None:
+        """Only a failed product write becomes a per-burst error."""
+        with (
+            patch.object(client, "_run_gpt"),
+            patch.object(client, "_finalize_product", side_effect=RuntimeError("bug")),
+            pytest.raises(RuntimeError, match="bug"),
+        ):
+            client.create_backscatter(
+                _make_burst("2022-01-01"),
+                crs=self.CRS_UTM32,
+                config=BackscatterConfig(),
+            )
+
 
 class TestFinalizeProduct:
     @staticmethod
@@ -686,6 +725,29 @@ class TestFinalizeProduct:
             assert ds.tags(1) == {"LAYER_NAME": "gamma0"}
             assert ds.units == ("linear power",)
             assert np.array_equal(ds.read(1), data, equal_nan=True)
+
+    def test_band_count_mismatch_raises_before_writing(
+        self,
+        client: SNAPClient,
+        tmp_path: Path,
+    ) -> None:
+        """Metadata that doesn't fit the graph's bands is a bug, not a per-burst failure."""
+        staging = tmp_path / "staging.tif"
+        product = tmp_path / "final.tif"
+        self._write_staging(staging, np.ones((1, 2, 2), dtype=np.float32))
+
+        with pytest.raises(ValueError, match="band"):
+            client._finalize_product(
+                staging,
+                product,
+                metadata=RasterMetadata(
+                    tags={},
+                    band_names=["gamma0", "scattering_area"],
+                    units=["linear power", "m2"],
+                ),
+            )
+
+        assert not product.exists()
 
     def test_masks_pixels_that_are_zero_in_every_band(
         self,
@@ -794,6 +856,55 @@ class TestCreateCoherence:
             result = client.create_coherence(pair, crs=self.CRS_UTM32, config=CoherenceConfig())
 
         assert isinstance(result, ErrorResult)
+        assert result.source is pair
+
+
+class TestCreateInterferogram:
+    CRS_UTM32 = CRS("EPSG:32632")
+
+    def _make_pair(self) -> BurstPair:
+        return BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
+
+    def test_creates_interferogram_product(self, client: SNAPClient) -> None:
+        with (
+            patch.object(client, "_run_gpt") as mock_gpt,
+            patch.object(client, "_finalize_product") as mock_finalize,
+        ):
+            result = client.create_interferogram(
+                self._make_pair(),
+                crs=self.CRS_UTM32,
+                config=InterferogramConfig(),
+            )
+
+        assert isinstance(result, OkResult)
+        assert mock_gpt.call_count == 1
+        metadata = mock_finalize.call_args.kwargs["metadata"]
+        assert metadata.band_names == [
+            "ifg_real",
+            "ifg_imag",
+            "intensity_primary",
+            "intensity_secondary",
+        ]
+
+    def test_write_failure_returns_error_result(self, client: SNAPClient) -> None:
+        pair = self._make_pair()
+
+        with (
+            patch.object(client, "_run_gpt"),
+            patch.object(
+                client,
+                "_finalize_product",
+                side_effect=RasterWriteError("write failed"),
+            ),
+        ):
+            result = client.create_interferogram(
+                pair,
+                crs=self.CRS_UTM32,
+                config=InterferogramConfig(),
+            )
+
+        assert isinstance(result, ErrorResult)
+        assert isinstance(result.error, RasterWriteError)
         assert result.source is pair
 
 

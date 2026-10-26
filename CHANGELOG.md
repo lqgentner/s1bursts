@@ -30,7 +30,20 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   and its QA layers.
 - The burst-ID map cache is written as zstd-compressed GeoParquet in bounded
   row groups through freezebase 0.9's `write_parquet` (128 → 85 MB for IW).
-  Caches written before stay valid. Requires `freezebase>=0.9`.
+  Caches written before stay valid.
+- **Breaking:** requires freezebase 0.10 (`freezebase[s3]>=0.10,<0.11`).
+- **Breaking:** a per-burst `ErrorResult` holds only the failures it is meant
+  to record. Other `RuntimeError`s now propagate, so a bug no longer passes for a
+  failed burst:
+  - An OData download keeps freezebase's `DownloadError` (a `RuntimeError`) as
+    the burst's error, as before. Any other `RuntimeError` is raised.
+  - `create_backscatter()`, `create_coherence()` and `create_interferogram()`
+    record freezebase's `RasterWriteError` when the product cannot be written.
+    Band names or units that do not match the graph's bands, which would be an
+    s1bursts bug, raise `ValueError` before anything is written instead of
+    becoming every burst's `RuntimeError`.
+
+  Code that checks `isinstance(result.error, RuntimeError)` keeps working.
 
 ### Fixed
 

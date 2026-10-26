@@ -466,6 +466,8 @@ class CDSEBurstClient:
             If the client has no valid CDSEAuth instance.
         requests.HTTPError
             If the download request fails.
+        freezebase.errors.DownloadError
+            If the response is not a file, or redirects without a host or too often.
         """
         url = f"{self.download_endpoint}/{cdse_id}"
         if not (isinstance(self.auth, CDSEAuth)):
