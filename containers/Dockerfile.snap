@@ -57,6 +57,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # No system Python on purpose: interpreters come from uv, as in development.
 ARG PYTHON_VERSION=3.13
+# Outside $HOME: GitHub Actions starts job containers with HOME=/github/home,
+# where uv would not find an interpreter installed under /root.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 RUN uv python install "${PYTHON_VERSION}"
 # Takes precedence over the repository's .python-version, which would
 # otherwise have uv download a different interpreter at `uv sync`.
