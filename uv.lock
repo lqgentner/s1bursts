@@ -188,7 +188,7 @@ wheels = [
 
 [[package]]
 name = "asf-search"
-version = "13.1.1"
+version = "14.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dateparser" },
@@ -199,9 +199,9 @@ dependencies = [
     { name = "shapely" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/b8/fd0d4c9df7f5902ee789568450ec24db03937e96457b06ba96f5be2b9bf4/asf_search-13.1.1.tar.gz", hash = "sha256:a0231a5f01dbd6ce1bff542f8fa246d5750b94260170a8da257317536e287ee8", size = 1514942, upload-time = "2026-09-14T16:40:17.857Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7d/6a/8ab685c0b30292c30c544cc7622f2b23c3f943ce183b39af8f228f82bedd/asf_search-14.0.3.tar.gz", hash = "sha256:14304c1eaf5dae1d82bdd1e327a0c59472eb352fec07dfb023a37430add71411", size = 1516640, upload-time = "2026-09-24T19:04:40.741Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/41/000bddcab1f55805f26451dc5d31a3c03bf2084db8f3d4d3bd1d90148f40/asf_search-13.1.1-py3-none-any.whl", hash = "sha256:076d5a287c4dd0b5863dffb1656846acf93725b7fcfe4721528170625d59f8bc", size = 132498, upload-time = "2026-09-14T16:40:16.379Z" },
+    { url = "https://files.pythonhosted.org/packages/12/c1/eb4ea07b24b37c5fad0ab44fe408a9e872b755a219f3b3dc3879fa3d5e2c/asf_search-14.0.3-py3-none-any.whl", hash = "sha256:1c08994d70539742644f69699eea81d9b0977bf3ae223f1e999eef5a1324aeee", size = 133017, upload-time = "2026-09-24T19:04:39.225Z" },
 ]
 
 [[package]]
