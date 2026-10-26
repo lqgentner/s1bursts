@@ -105,6 +105,9 @@ jobs:
           printf '%s\n' "$usage" | head -5
           docker run --rm "$image" sh -c 'test -x "$SNAP_BIN/gpt"'
           docker run --rm "$image" uv --version
+          # Actions overrides HOME in job containers; the interpreter must not
+          # live under it, or `uv sync` there downloads its own.
+          docker run --rm -e HOME=/github/home "$image" sh -c 'cd / && uv python find --managed-python'
 
       - name: Summary
         run: |

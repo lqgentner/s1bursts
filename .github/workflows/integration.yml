@@ -98,14 +98,6 @@ jobs:
           key: uv-integration-${{ matrix.leg.snap }}-${{ hashFiles('uv.lock') }}
           restore-keys: uv-integration-${{ matrix.leg.snap }}-
 
-      - name: Use the image's Python
-        # The repository's .python-version would otherwise have uv download
-        # another interpreter, and the run would no longer be the toolchain
-        # the image tag stands for. Read from / so the pin is not consulted.
-        run: |
-          python="$(cd / && uv python find --managed-python)"
-          echo "UV_PYTHON=${python}" >> "$GITHUB_ENV"
-
       - run: uv sync
 
       - name: Record tool versions
