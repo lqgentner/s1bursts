@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 from typing import TYPE_CHECKING, Any, Final
+import zipfile
 
 from freezebase.raster import (
     build_rasterio_profile,
@@ -144,6 +145,120 @@ def snap_version(gpt_path: Path) -> tuple[int, ...] | None:
     with suppress(OSError):
         return _as_version(version_file.read_text())
     return None
+
+
+# First version of SNAP's `snap-dem` module that samples an external DEM where its
+# georeferencing places it (SNAP-4264, snap-engine#640). It shipped in the 14.0.2
+# module update; no release of the 13.x line has it. tests/test_integration.py
+# measures the installed SNAP and fails if this drifts from what it does.
+EXTERNAL_DEM_FIXED_IN: Final[tuple[int, ...]] = (14, 0, 2)
+
+_SNAP_DEM_JAR: Final = Path("modules") / "org-esa-snap-snap-dem.jar"
+
+
+def _jar_module_version(jar: Path) -> tuple[int, ...] | None:
+    """Read the version a NetBeans module declares in its jar's manifest."""
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            manifest = archive.read("META-INF/MANIFEST.MF").decode("utf-8", "replace")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+    for line in manifest.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "OpenIDE-Module-Specification-Version":
+            return _as_version(value)
+    return None
+
+
+def _snap_user_dir(install_dir: Path) -> Path | None:
+    """Return the userdir SNAP keeps module updates in when its installation is read-only."""
+    with suppress(OSError):
+        for line in (install_dir / "etc" / "snap.conf").read_text().splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == "default_userdir":
+                expanded = os.path.expandvars(value.strip().strip('"'))
+                # A variable expandvars does not know stays in the path.
+                if "$" not in expanded:
+                    return Path(expanded)
+    with suppress(RuntimeError):
+        return Path.home() / ".snap" / "system"
+    return None
+
+
+def snap_dem_module_version(gpt_path: Path) -> tuple[int, ...] | None:
+    """Version of the ``snap-dem`` module a ``gpt`` executable runs.
+
+    SNAP versions its modules separately from the installation: a module update
+    leaves ``VERSION.txt`` unchanged. Reads the version the module's jar declares,
+    in the installation and in the user's SNAP directory, where updates land when
+    the installation is not writable, and returns the newer. Not cached: the module
+    is updated independently of SNAP, possibly while a process is running.
+
+    Parameters
+    ----------
+    gpt_path
+        The ``gpt`` executable, as resolved by ``_resolve_gpt_path``.
+
+    Returns
+    -------
+    tuple of int or None
+        The version as a comparable tuple, e.g. ``(14, 0, 2)``, or ``None``
+        where no jar is found or its manifest is unreadable.
+    """
+    install_dir = gpt_path.parent.parent
+    clusters = [install_dir / "snap"]
+    if (user_dir := _snap_user_dir(install_dir)) is not None:
+        clusters.append(user_dir)
+    versions = [
+        version
+        for cluster in clusters
+        if (version := _jar_module_version(cluster / _SNAP_DEM_JAR)) is not None
+    ]
+    return max(versions, default=None)
+
+
+def external_dem_needs_half_pixel_shift(bin_dir: Path | None = None) -> bool:
+    """Whether SNAP samples an external DEM half a pixel south-east of its georeferencing.
+
+    Where no installation is found by default, or its ``snap-dem`` version cannot
+    be read, the bug is assumed present: that is the behaviour of every SNAP release
+    up to 14.0.1, and of the whole 13.x line.
+
+    Parameters
+    ----------
+    bin_dir
+        A SNAP installation's ``bin`` directory. Defaults to ``SNAP_BIN``, then
+        ``gpt`` discovered on ``PATH``.
+
+    Returns
+    -------
+    bool
+        ``True`` if a DEM must be shifted by half a pixel to be sampled in place.
+
+    Raises
+    ------
+    ConfigurationError
+        If ``bin_dir`` is given but contains no ``gpt`` executable.
+    """
+    try:
+        gpt_path = _resolve_gpt_path(bin_dir, get_settings().snap)
+    except ConfigurationError:
+        if bin_dir is not None:
+            raise
+        logger.info(
+            "No SNAP installation found; assuming it samples an external DEM off by half a pixel"
+        )
+        return True
+    version = snap_dem_module_version(gpt_path)
+    if version is None:
+        logger.warning(
+            "Could not determine the version of SNAP's snap-dem module for '%s'; assuming it "
+            "samples an external DEM half a pixel off, as releases before %s do.",
+            gpt_path,
+            ".".join(str(part) for part in EXTERNAL_DEM_FIXED_IN),
+        )
+        return True
+    return version < EXTERNAL_DEM_FIXED_IN
 
 
 def _extract_gpt_error(

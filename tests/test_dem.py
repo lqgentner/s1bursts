@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
+import zipfile
 
 import numpy as np
 import pytest
@@ -23,6 +24,7 @@ from s1bursts.dem import (
     VERTICAL_CONVERSION_TAG,
     prepare_dem_for_snap,
 )
+from s1bursts.snap_client import external_dem_needs_half_pixel_shift
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -65,6 +67,12 @@ def _write_dem(
     ) as dst:
         dst.write(data)
     return path
+
+
+@pytest.fixture(autouse=True)
+def snap_needs_shift(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the SNAP-dependent shift, so no test depends on the SNAP installed here."""
+    monkeypatch.setattr(dem_module, "external_dem_needs_half_pixel_shift", lambda _bin=None: True)
 
 
 @pytest.fixture
@@ -213,6 +221,147 @@ class TestPrepareForSnap:
         out = prepare_dem_for_snap(make_dem())
 
         assert out.parent == cache
+
+
+class TestSnapThatSamplesInPlace:
+    """A SNAP whose ``snap-dem`` no longer needs the half-pixel shift."""
+
+    @pytest.fixture(autouse=True)
+    def fixed_snap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            dem_module,
+            "external_dem_needs_half_pixel_shift",
+            lambda _bin=None: False,
+        )
+
+    def test_leaves_the_origin_where_it_was(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        dem = make_dem()
+        out = prepare_dem_for_snap(dem, cache_dir=tmp_path / "cache")
+
+        with rasterio.open(dem) as src, rasterio.open(out) as dst:
+            assert dst.transform == src.transform
+            assert np.array_equal(src.read(), dst.read(), equal_nan=True)
+
+    def test_tags_and_records_the_copy_as_unshifted(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        out = prepare_dem_for_snap(make_dem(), cache_dir=tmp_path / "cache")
+
+        with rasterio.open(out) as dst:
+            assert dst.tags()[COMPENSATED_TAG] == "0"
+        assert json.loads(_sidecar_of(out).read_text())["pixel_offset"] == [0.0, 0.0]
+
+    def test_reuses_its_cached_copy(self, make_dem: Callable[..., Path], tmp_path: Path) -> None:
+        dem = make_dem()
+        cache = tmp_path / "cache"
+        first = prepare_dem_for_snap(dem, cache_dir=cache)
+        stamp = first.stat().st_mtime_ns
+
+        assert prepare_dem_for_snap(dem, cache_dir=cache) == first
+        assert first.stat().st_mtime_ns == stamp
+
+    def test_shifted_copy_is_not_reused(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A copy prepared for an older SNAP stays in the cache, but is never handed out."""
+        dem = make_dem()
+        cache = tmp_path / "cache"
+        with monkeypatch.context() as older:
+            older.setattr(
+                dem_module, "external_dem_needs_half_pixel_shift", lambda _bin=None: True
+            )
+            shifted = prepare_dem_for_snap(dem, cache_dir=cache)
+
+        unshifted = prepare_dem_for_snap(dem, cache_dir=cache)
+
+        assert unshifted != shifted
+        with rasterio.open(shifted) as old, rasterio.open(unshifted) as new:
+            assert old.transform.c == pytest.approx(new.transform.c + RES / 2)
+
+    def test_entry_tagged_as_shifted_is_rewritten(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        cache = tmp_path / "cache"
+        dem = make_dem()
+        out = prepare_dem_for_snap(dem, cache_dir=cache)
+        with rasterio.open(out, "r+") as dst:
+            dst.update_tags(**{COMPENSATED_TAG: "1"})
+        # Keep the recorded size in step so the tag check, not the size check, decides.
+        sidecar = _sidecar_of(out)
+        record = json.loads(sidecar.read_text())
+        record["output_size"] = out.stat().st_size
+        sidecar.write_text(json.dumps(record))
+
+        with rasterio.open(prepare_dem_for_snap(dem, cache_dir=cache)) as src:
+            assert src.tags()[COMPENSATED_TAG] == "0"
+
+
+class TestSnapSelection:
+    @pytest.mark.parametrize(("version", "shifted"), [("14.0.1", True), ("14.0.2", False)])
+    def test_decides_from_the_installation_unmocked(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        version: str,
+        shifted: bool,
+    ) -> None:
+        """The version check and `snap_bin` forwarding work together, with no stub between."""
+        monkeypatch.setattr(
+            dem_module,
+            "external_dem_needs_half_pixel_shift",
+            external_dem_needs_half_pixel_shift,
+        )
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+        bin_dir = tmp_path / "snap" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "gpt").touch()
+        (bin_dir / "gpt").chmod(0o755)
+        jar = tmp_path / "snap" / "snap" / "modules" / "org-esa-snap-snap-dem.jar"
+        jar.parent.mkdir(parents=True)
+        with zipfile.ZipFile(jar, "w") as archive:
+            archive.writestr(
+                "META-INF/MANIFEST.MF",
+                f"Manifest-Version: 1.0\nOpenIDE-Module-Specification-Version: {version}\n",
+            )
+        dem = make_dem()
+
+        out = prepare_dem_for_snap(dem, cache_dir=tmp_path / "cache", snap_bin=bin_dir)
+
+        with rasterio.open(dem) as src, rasterio.open(out) as dst:
+            expected = src.transform.c + RES / 2 if shifted else src.transform.c
+            assert dst.transform.c == pytest.approx(expected)
+
+    def test_asks_the_requested_installation(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        asked: list[Path | None] = []
+
+        def _record(bin_dir: Path | None = None) -> bool:
+            asked.append(bin_dir)
+            return True
+
+        monkeypatch.setattr(dem_module, "external_dem_needs_half_pixel_shift", _record)
+        snap_bin = tmp_path / "snap" / "bin"
+
+        prepare_dem_for_snap(make_dem(), cache_dir=tmp_path / "cache", snap_bin=snap_bin)
+
+        assert asked == [snap_bin]
 
 
 class _OffsetTransformer:

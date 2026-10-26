@@ -7,6 +7,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
+import zipfile
 
 import numpy as np
 from pandas import Timestamp
@@ -25,6 +26,8 @@ from s1bursts.snap_client import (
     SNAPConfig,
     _extract_gpt_error,
     _resolve_gpt_path,
+    external_dem_needs_half_pixel_shift,
+    snap_dem_module_version,
     snap_version,
     snap_worker_userdir,
 )
@@ -153,6 +156,244 @@ class TestSnapVersion:
 
     def test_returns_none_for_an_unparsable_version_file(self, tmp_path: Path) -> None:
         assert snap_version(self._install(tmp_path, "not a version")) is None
+
+
+def _write_module_jar(cluster: Path, manifest: str | None) -> None:
+    """Write the ``snap-dem`` jar, with the given manifest text or without a manifest."""
+    jar = cluster / "modules" / "org-esa-snap-snap-dem.jar"
+    jar.parent.mkdir(parents=True)
+    with zipfile.ZipFile(jar, "w") as archive:
+        archive.writestr("org/esa/snap/dem/Placeholder.class", b"")
+        if manifest is not None:
+            archive.writestr("META-INF/MANIFEST.MF", manifest)
+
+
+def _manifest(version: str) -> str:
+    return (
+        "Manifest-Version: 1.0\n"
+        "OpenIDE-Module-Implementation-Version: 99.9.9\n"
+        f"OpenIDE-Module-Specification-Version: {version}\n"
+        "OpenIDE-Module-Build-Version: 202610051459\n"
+    )
+
+
+class _SnapInstall:
+    """A SNAP-shaped install whose ``snap-dem`` jar is under test."""
+
+    def __init__(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.root = root
+        self.bin_dir = root / "install" / "bin"
+        self.bin_dir.mkdir(parents=True)
+        self.gpt = _make_executable(self.bin_dir / "gpt")
+        # Keeps the default userdir off the developer's real ~/.snap.
+        self.home = root / "home"
+        monkeypatch.setenv("HOME", str(self.home))
+        monkeypatch.setenv("USERPROFILE", str(self.home))
+
+    def install_module(self, version: str) -> None:
+        _write_module_jar(self.root / "install" / "snap", _manifest(version))
+
+    def install_module_with_manifest(self, manifest: str | None) -> None:
+        _write_module_jar(self.root / "install" / "snap", manifest)
+
+    def update_module_in_userdir(self, version: str, userdir: Path | None = None) -> None:
+        _write_module_jar(userdir or self.home / ".snap" / "system", _manifest(version))
+
+
+@pytest.fixture
+def snap_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _SnapInstall:
+    return _SnapInstall(tmp_path, monkeypatch)
+
+
+class TestSnapDemModuleVersion:
+    """The ``snap-dem`` version, read from the module jar's manifest."""
+
+    def test_reads_the_installations_jar(self, snap_install: _SnapInstall) -> None:
+        snap_install.install_module("14.0.2")
+
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 2)
+
+    def test_reads_the_specification_version_not_the_implementation_version(
+        self,
+        snap_install: _SnapInstall,
+    ) -> None:
+        snap_install.install_module("14.0.1")
+
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 1)
+
+    def test_userdir_update_wins_over_an_older_installation(
+        self,
+        snap_install: _SnapInstall,
+    ) -> None:
+        snap_install.install_module("14.0.0")
+        snap_install.update_module_in_userdir("14.0.2")
+
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 2)
+
+    def test_older_userdir_jar_does_not_hide_the_installation(
+        self,
+        snap_install: _SnapInstall,
+    ) -> None:
+        snap_install.install_module("14.0.2")
+        snap_install.update_module_in_userdir("14.0.0")
+
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 2)
+
+    def test_userdir_comes_from_snap_conf(
+        self,
+        snap_install: _SnapInstall,
+        tmp_path: Path,
+    ) -> None:
+        custom = tmp_path / "custom-userdir"
+        etc = tmp_path / "install" / "etc"
+        etc.mkdir()
+        (etc / "snap.conf").write_text(f'# comment\ndefault_userdir="{custom}"\n')
+        snap_install.update_module_in_userdir("14.0.2", userdir=custom)
+
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 2)
+
+    def test_snap_conf_userdir_expands_the_home_variable(
+        self,
+        snap_install: _SnapInstall,
+        tmp_path: Path,
+    ) -> None:
+        etc = tmp_path / "install" / "etc"
+        etc.mkdir()
+        (etc / "snap.conf").write_text('default_userdir="${HOME}/.snap/system"\n')
+        snap_install.update_module_in_userdir("14.0.2")
+
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 2)
+
+    def test_unexpandable_snap_conf_userdir_falls_back_to_the_default(
+        self,
+        snap_install: _SnapInstall,
+        tmp_path: Path,
+    ) -> None:
+        etc = tmp_path / "install" / "etc"
+        etc.mkdir()
+        (etc / "snap.conf").write_text('default_userdir="${NO_SUCH_VARIABLE_FOR_SNAP}/system"\n')
+        snap_install.update_module_in_userdir("14.0.2")
+
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 2)
+
+    def test_tolerates_a_missing_home_directory(
+        self,
+        snap_install: _SnapInstall,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        snap_install.install_module("14.0.2")
+
+        def _no_home() -> Path:
+            msg = "Could not determine home directory."
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(Path, "home", _no_home)
+
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 2)
+
+    def test_does_not_cache_across_a_module_update(self, snap_install: _SnapInstall) -> None:
+        snap_install.install_module("14.0.0")
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 0)
+
+        snap_install.update_module_in_userdir("14.0.2")
+
+        assert snap_dem_module_version(snap_install.gpt) == (14, 0, 2)
+
+    def test_returns_none_without_a_jar(self, snap_install: _SnapInstall) -> None:
+        assert snap_dem_module_version(snap_install.gpt) is None
+
+    @pytest.mark.parametrize(
+        "manifest",
+        [
+            None,
+            "Manifest-Version: 1.0\n",
+            _manifest("not a version"),
+            "OpenIDE-Module-Specification-Version:\n",
+        ],
+        ids=["no-manifest", "no-version", "unparsable-version", "empty-version"],
+    )
+    def test_returns_none_for_an_unusable_manifest(
+        self,
+        snap_install: _SnapInstall,
+        manifest: str | None,
+    ) -> None:
+        snap_install.install_module_with_manifest(manifest)
+
+        assert snap_dem_module_version(snap_install.gpt) is None
+
+    def test_returns_none_for_a_file_that_is_not_a_jar(self, snap_install: _SnapInstall) -> None:
+        jar = snap_install.root / "install" / "snap" / "modules" / "org-esa-snap-snap-dem.jar"
+        jar.parent.mkdir(parents=True)
+        jar.write_text("not a zip file")
+
+        assert snap_dem_module_version(snap_install.gpt) is None
+
+
+class TestExternalDemNeedsHalfPixelShift:
+    """Only a ``snap-dem`` older than 14.0.2, or an unknown one, needs the shift."""
+
+    @pytest.mark.parametrize(
+        ("version", "needs_shift"),
+        [
+            ("13.0.0", True),
+            ("13.0.2", True),
+            ("13.0.3", True),
+            ("14.0.0", True),
+            ("14.0.1", True),
+            ("14.0.2", False),
+            ("14.1.0", False),
+            ("15.0.0", False),
+        ],
+    )
+    def test_decides_by_the_module_version(
+        self,
+        snap_install: _SnapInstall,
+        version: str,
+        needs_shift: bool,
+    ) -> None:
+        snap_install.install_module(version)
+
+        assert external_dem_needs_half_pixel_shift(snap_install.bin_dir) is needs_shift
+
+    def test_assumes_the_bug_when_the_version_is_unknown(
+        self,
+        snap_install: _SnapInstall,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="s1bursts.snap_client"):
+            assert external_dem_needs_half_pixel_shift(snap_install.bin_dir) is True
+
+        assert any("snap-dem" in record.message for record in caplog.records)
+
+    def test_assumes_the_bug_when_no_installation_is_found(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("SNAP_BIN", raising=False)
+        monkeypatch.setenv("PATH", str(tmp_path))
+
+        assert external_dem_needs_half_pixel_shift() is True
+
+    def test_raises_for_an_explicit_directory_without_gpt(self, tmp_path: Path) -> None:
+        """A typo in `bin_dir` must not silently pick the shifted behaviour."""
+        empty = tmp_path / "no-gpt-here"
+        empty.mkdir()
+
+        with pytest.raises(ConfigurationError, match="No `gpt` executable"):
+            external_dem_needs_half_pixel_shift(empty)
+
+    def test_installation_defaults_to_snap_bin(
+        self,
+        snap_install: _SnapInstall,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        snap_install.install_module("14.0.2")
+        monkeypatch.setenv("SNAP_BIN", str(snap_install.bin_dir))
+        monkeypatch.chdir(snap_install.root)
+
+        assert external_dem_needs_half_pixel_shift() is False
 
 
 class TestResolveGptPath:
