@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import hashlib
 import json
 import logging
+import math
 from pathlib import Path
 from secrets import token_hex
 from tempfile import TemporaryDirectory
@@ -17,7 +19,10 @@ import numpy as np
 from pyproj import CRS, Transformer, datadir, proj_version_str
 from pyproj.transformer import TransformerGroup
 import rasterio
+from rasterio.enums import Resampling
 from rasterio.errors import RasterioError
+from rasterio.transform import from_origin
+from rasterio.vrt import WarpedVRT
 import rasterio.windows
 
 from s1bursts.config import get_settings
@@ -35,7 +40,7 @@ HALF_PIXEL = 0.5
 
 # Bumping this invalidates every cache entry. Raise it whenever preparation
 # changes in a way that alters the written raster or its cache identity.
-CACHE_SCHEMA_VERSION = 3
+CACHE_SCHEMA_VERSION = 4
 
 # Suffix of the JSON provenance sidecar written next to each cache entry.
 PROVENANCE_SUFFIX = ".provenance.json"
@@ -52,13 +57,20 @@ def _file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _preparation_digest(source_crs: str | None, *, shifted: bool) -> str:
+def _preparation_digest(
+    source_crs: str | None,
+    resolution: float | None,
+    *,
+    shifted: bool,
+) -> str:
     """Return a stable digest of options that affect the prepared raster."""
     payload = json.dumps(
         {
             "source_crs": source_crs,
             "target_crs": TARGET_CRS if source_crs else None,
             "pixel_offset": HALF_PIXEL if shifted else 0.0,
+            "resolution": resolution,
+            "resampling": "bilinear" if resolution else None,
         },
         sort_keys=True,
     )
@@ -359,13 +371,34 @@ def _prepare(
     dem: Path,
     dest: Path,
     transformer: Transformer | None,
+    resolution: float | None,
     *,
     shifted: bool,
 ) -> None:
     """Write a SNAP-prepared copy of ``dem`` to ``dest`` atomically."""
     partial = dest.with_name(f"{dest.name}.{token_hex(8)}.partial")
     try:
-        with rasterio.open(dem) as src:
+        with ExitStack() as stack:
+            original = stack.enter_context(rasterio.open(dem))
+            src = original
+            if resolution is not None:
+                left, bottom, right, top = original.bounds
+                # Round sub-pixel floating error before expanding to cover the bounds.
+                width = max(1, math.ceil(round((right - left) / resolution, 8)))
+                height = max(1, math.ceil(round((top - bottom) / resolution, 8)))
+                transform = from_origin(left, top, resolution, resolution)
+                src = stack.enter_context(
+                    WarpedVRT(
+                        original,
+                        crs=original.crs,
+                        transform=transform,
+                        width=width,
+                        height=height,
+                        resampling=Resampling.bilinear,
+                        dtype="float32",
+                        nodata=original.nodata if original.nodata is not None else np.nan,
+                    )
+                )
             source_dtype = np.dtype(src.dtypes[0])
             output_dtype = (
                 np.dtype("float32")
@@ -422,6 +455,7 @@ def prepare_dem_for_snap(
     dem: Path,
     *,
     source_crs: str | None = None,
+    resolution: float | None = None,
     download_missing_grids: bool = False,
     cache_dir: Path | None = None,
     snap_bin: Path | None = None,
@@ -433,8 +467,7 @@ def prepare_dem_for_snap(
     half a pixel south-east of where its georeferencing places it [1]. SNAP fixed
     that in the 14.0.2 update of its ``snap-dem`` module, so the shift is applied
     only for an installation older than that, and for one whose version cannot be
-    determined. When
-    ``source_crs`` is supplied, elevations are also transformed from that compound
+    determined. When ``source_crs`` is supplied, elevations are also transformed from that compound
     horizontal and vertical CRS to WGS 84 ellipsoidal heights (EPSG:4979). SNAP
     cannot do that conversion itself: the only geoid it knows is EGM96, which it
     applies even to the Copernicus DEM, whose heights are referenced to EGM2008 [2].
@@ -452,6 +485,13 @@ def prepare_dem_for_snap(
         Compound CRS describing the DEM's horizontal and orthometric references,
         for example ``"EPSG:4326+3855"`` for Copernicus GLO-30. If omitted,
         elevations pass through unchanged.
+    resolution
+        Optional square pixel size in the source horizontal CRS units (degrees
+        for a geographic CRS, metres for a metre-based projected CRS). Resamples
+        bilinearly before height conversion and the SNAP half-pixel offset.
+        The output retains the source horizontal CRS and uses float32 samples.
+        If omitted, preserves the input grid and sample type unless height
+        conversion requires floating point.
     download_missing_grids
         Download required open-license PROJ grids when they are not installed.
     cache_dir
@@ -472,7 +512,8 @@ def prepare_dem_for_snap(
     FileNotFoundError
         If ``dem`` does not exist.
     ValueError
-        If the source CRS is invalid or inconsistent with the DEM.
+        If the source CRS is invalid or inconsistent with the DEM, or the
+        requested resolution is not finite and positive.
     RuntimeError
         If no exact vertical transformation is available.
     pyproj.exceptions.ProjError
@@ -492,9 +533,18 @@ def prepare_dem_for_snap(
         msg = f"DEM not found: '{dem}'"
         raise FileNotFoundError(msg)
 
+    if resolution is not None:
+        resolution = float(resolution)
+        if not math.isfinite(resolution) or resolution <= 0:
+            msg = "resolution must be finite and positive"
+            raise ValueError(msg)
+        with rasterio.open(dem) as src:
+            if src.crs is None:
+                msg = f"DEM has no horizontal CRS: '{dem}'"
+                raise ValueError(msg)
     compound_crs, canonical_source_crs = _normalise_source_crs(dem, source_crs)
     shifted = external_dem_needs_half_pixel_shift(snap_bin)
-    preparation_digest = _preparation_digest(canonical_source_crs, shifted=shifted)
+    preparation_digest = _preparation_digest(canonical_source_crs, resolution, shifted=shifted)
 
     cache_dir = cache_dir or get_settings().snap.dem_cache
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -525,7 +575,7 @@ def prepare_dem_for_snap(
     )
     logger.info("Writing SNAP-prepared DEM '%s' -> '%s'", dem, dest)
     start = time.perf_counter()
-    _prepare(dem, dest, transformer, shifted=shifted)
+    _prepare(dem, dest, transformer, resolution, shifted=shifted)
     _write_provenance(
         sidecar,
         {
@@ -535,6 +585,8 @@ def prepare_dem_for_snap(
             "source_sha256": source_digest,
             "source_size": dem.stat().st_size,
             "source_crs": canonical_source_crs,
+            "resolution": resolution,
+            "resampling": "bilinear" if resolution else None,
             "target_crs": TARGET_CRS if converted else None,
             "transformer_description": transformer.description
             if transformer is not None

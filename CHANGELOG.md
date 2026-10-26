@@ -17,6 +17,10 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `FileManager.find_gtc_pass_composites()` and `find_gtc_pass_qa()` lookups,
   and `product_tags.gtc_pass_metadata()`.
 - **Python 3.15 support**, verified in CI.
+- Optional `resolution` argument for `prepare_dem_for_snap()`: resamples the
+  DEM bilinearly to a square pixel size, in the DEM's horizontal CRS units,
+  before height conversion and, where SNAP needs it, the half-pixel shift.
+  Cached DEMs are prepared again once.
 
 ### Changed
 

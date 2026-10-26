@@ -1044,3 +1044,127 @@ class TestConcurrency:
         with rasterio.open(results[0]) as src:
             assert src.read(1)[0, 0] == pytest.approx(7.0)
             assert src.tags()[COMPENSATED_TAG] == "1"
+
+
+class TestResampling:
+    def test_resamples_then_applies_target_half_pixel_offset(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        dem = make_dem(fill=100, dtype="int16")
+        dest = prepare_dem_for_snap(dem, resolution=2 * RES, cache_dir=tmp_path / "cache")
+        with rasterio.open(dest) as result:
+            assert result.width == 15
+            assert result.height == 10
+            assert result.res == pytest.approx((2 * RES, 2 * RES))
+            assert result.transform.c == pytest.approx(ORIGIN_X + RES)
+            assert result.transform.f == pytest.approx(ORIGIN_Y - RES)
+            assert result.dtypes == ("float32",)
+            np.testing.assert_allclose(result.read(1), 100)
+
+    def test_resamples_without_offset_under_a_fixed_snap(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            dem_module,
+            "external_dem_needs_half_pixel_shift",
+            lambda _bin=None: False,
+        )
+        dest = prepare_dem_for_snap(
+            make_dem(fill=100, dtype="int16"),
+            resolution=2 * RES,
+            cache_dir=tmp_path / "cache",
+        )
+        with rasterio.open(dest) as result:
+            assert result.res == pytest.approx((2 * RES, 2 * RES))
+            assert result.transform.c == pytest.approx(ORIGIN_X)
+            assert result.transform.f == pytest.approx(ORIGIN_Y)
+            assert result.tags()[COMPENSATED_TAG] == "0"
+
+    def test_resolution_changes_cache_identity(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        dem = make_dem(fill=100)
+        native = prepare_dem_for_snap(dem, cache_dir=tmp_path / "cache")
+        coarse = prepare_dem_for_snap(dem, resolution=2 * RES, cache_dir=tmp_path / "cache")
+        assert native != coarse
+        assert coarse == prepare_dem_for_snap(
+            dem, resolution=2 * RES, cache_dir=tmp_path / "cache"
+        )
+        record = json.loads(_sidecar_of(coarse).read_text())
+        assert record["resolution"] == 2 * RES
+        assert record["resampling"] == "bilinear"
+
+    @pytest.mark.parametrize("resolution", [0, -1, float("nan"), float("inf")])
+    def test_rejects_invalid_resolution(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        resolution: float,
+    ) -> None:
+        with pytest.raises(ValueError, match="resolution must be finite and positive"):
+            prepare_dem_for_snap(
+                make_dem(fill=100), resolution=resolution, cache_dir=tmp_path / "cache"
+            )
+
+    def test_conversion_samples_resampled_centres(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        transformer = _OffsetTransformer()
+        monkeypatch.setattr(dem_module, "_get_transformer", lambda *_args, **_kwargs: transformer)
+        out = prepare_dem_for_snap(
+            make_dem(fill=100),
+            source_crs="EPSG:4326+3855",
+            resolution=2 * RES,
+            cache_dir=tmp_path / "cache",
+        )
+        with rasterio.open(out) as result:
+            np.testing.assert_allclose(result.read(1), 110)
+        x, y, z, _ = transformer.calls[0]
+        assert x[0] == pytest.approx(ORIGIN_X + RES)
+        assert y[0] == pytest.approx(ORIGIN_Y - RES)
+        np.testing.assert_allclose(z, 100)
+
+    def test_resampling_preserves_nodata(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        dem = make_dem(fill=100)
+        with rasterio.open(dem, "r+") as src:
+            data = src.read(1)
+            data[:, :10] = np.nan
+            src.write(data, 1)
+        out = prepare_dem_for_snap(dem, resolution=2 * RES, cache_dir=tmp_path / "cache")
+        with rasterio.open(out) as result:
+            data = result.read(1)
+            assert np.isnan(data[:, :4]).all()
+            np.testing.assert_allclose(data[:, 6:], 100)
+
+    def test_resampling_requires_horizontal_crs(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        dem = tmp_path / "no-crs.tif"
+        with rasterio.open(
+            dem,
+            "w",
+            driver="GTiff",
+            width=4,
+            height=4,
+            count=1,
+            dtype="float32",
+            transform=from_origin(7, 47, RES, RES),
+        ) as dst:
+            dst.write(np.ones((4, 4), dtype="float32"), 1)
+        with pytest.raises(ValueError, match="no horizontal CRS"):
+            prepare_dem_for_snap(dem, resolution=RES, cache_dir=tmp_path / "cache")
