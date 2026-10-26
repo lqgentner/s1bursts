@@ -325,7 +325,8 @@ class BurstDatabase:
                 progress=False,
             )
             return OkResult(source=burst, result=burst)
-        except (BurstError, HTTPError, OSError) as e:
+        # freezebase's downloader raises RuntimeError for a non-file response.
+        except (BurstError, HTTPError, OSError, RuntimeError) as e:
             return ErrorResult(source=burst, error=e)
 
     def _download_burst_s3(self, burst: Burst) -> OperationResult[Burst]:
