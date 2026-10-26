@@ -16,6 +16,7 @@ import tempfile
 from typing import TYPE_CHECKING, Any, Final
 import zipfile
 
+from freezebase.errors import RasterWriteError
 from freezebase.raster import (
     build_rasterio_profile,
     get_epsg_string,
@@ -720,7 +721,7 @@ class SNAPClient:
                         ),
                         normalize_nodata=config.replace_zeros_with_nan,
                     )
-                except (BurstError, FileNotFoundError, RuntimeError) as e:
+                except (BurstError, FileNotFoundError, RasterWriteError) as e:
                     logger.exception("Failed to process burst '%s'", burst)
                     return ErrorResult(source=burst, error=e)
 
@@ -802,7 +803,7 @@ class SNAPClient:
                         ),
                         normalize_nodata=config.replace_zeros_with_nan,
                     )
-                except (BurstError, FileNotFoundError, RuntimeError) as e:
+                except (BurstError, FileNotFoundError, RasterWriteError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)
                     return ErrorResult(source=pair, error=e)
 
@@ -882,7 +883,7 @@ class SNAPClient:
                         ),
                         normalize_nodata=config.replace_zeros_with_nan,
                     )
-                except (BurstError, FileNotFoundError, RuntimeError) as e:
+                except (BurstError, FileNotFoundError, RasterWriteError) as e:
                     logger.exception("Failed to process burst pair '%s'", pair)
                     return ErrorResult(source=pair, error=e)
 

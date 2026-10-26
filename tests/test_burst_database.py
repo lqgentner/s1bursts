@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from freezebase.errors import DownloadError
 from pandas import Timestamp
 import pytest
 from requests import HTTPError
@@ -236,12 +237,28 @@ class TestEndpointWrappers:
         )
         db.client = MagicMock()
         # Previously escaped the handler and aborted the whole batch.
-        db.client.download_burst.side_effect = RuntimeError("No downloadable file found")
+        db.client.download_burst.side_effect = DownloadError("No downloadable file found")
 
         result = db._download_burst_odata(burst)
 
         assert isinstance(result, ErrorResult)
-        assert isinstance(result.error, RuntimeError)
+        assert isinstance(result.error, DownloadError)
+
+    def test_odata_unrelated_runtime_error_propagates(self) -> None:
+        """Only freezebase's download failures become a per-burst error."""
+        db = _make_database()
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            cdse_id="cdse-id",
+        )
+        db.client = MagicMock()
+        db.client.download_burst.side_effect = RuntimeError("bug")
+
+        with pytest.raises(RuntimeError, match="bug"):
+            db._download_burst_odata(burst)
 
     def test_odata_without_credentials_returns_clear_error(self) -> None:
         """A missing-credentials failure surfaces as a per-burst BurstDownloadError."""

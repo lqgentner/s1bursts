@@ -8,6 +8,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Literal, TypeGuard
 
+from freezebase.errors import DownloadError
 from freezebase.progress import create_progress
 from requests import HTTPError
 
@@ -325,8 +326,7 @@ class BurstDatabase:
                 progress=False,
             )
             return OkResult(source=burst, result=burst)
-        # freezebase's downloader raises RuntimeError for a non-file response.
-        except (BurstError, HTTPError, OSError, RuntimeError) as e:
+        except (BurstError, DownloadError, HTTPError, OSError) as e:
             return ErrorResult(source=burst, error=e)
 
     def _download_burst_s3(self, burst: Burst) -> OperationResult[Burst]:
