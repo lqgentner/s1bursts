@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Literal, cast, override
 from zipfile import ZipFile
 
 from freezebase.utils import format_valid_options
-from freezebase.vectools import drop_z_if_zero, write_parquet, simplify_multipolygons
+from freezebase.vectools import drop_z_if_zero, simplify_multipolygons, write_parquet
 from freezebase.vectordata import DatasetMetadata, GeoVectorData
 import geopandas as gpd
 from pandas.api.types import CategoricalDtype
