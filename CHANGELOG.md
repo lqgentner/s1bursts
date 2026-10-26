@@ -27,6 +27,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - When no input reaches the cell, both raise the new `EmptyCompositeError`
   (a `ValueError`) and write nothing, instead of writing an all-NaN composite
   and its QA layers.
+- The burst-ID map cache is written as zstd-compressed GeoParquet in bounded
+  row groups through freezebase 0.9's `write_parquet` (128 → 85 MB for IW).
+  Caches written before stay valid. Requires `freezebase>=0.9`.
 
 ### Fixed
 

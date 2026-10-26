@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Literal, cast, override
 from zipfile import ZipFile
 
 from freezebase.utils import format_valid_options
-from freezebase.vectools import drop_z_if_zero, save_and_read_parquet, simplify_multipolygons
+from freezebase.vectools import drop_z_if_zero, simplify_multipolygons, write_parquet
 from freezebase.vectordata import DatasetMetadata, GeoVectorData
 import geopandas as gpd
 from pandas.api.types import CategoricalDtype
@@ -145,7 +145,7 @@ class Sentinel1Bursts(GeoVectorData):
             "orbit_pass": "category",
         }
         bursts = bursts.pipe(drop_z_if_zero).pipe(simplify_multipolygons).astype(dtype_map)
-        save_and_read_parquet(bursts, self.processed_path)
+        write_parquet(bursts, self.processed_path)
 
 
 def download_burst_map(cache_dir: str | Path | None = None, *, mode: Mode = "IW") -> Path:

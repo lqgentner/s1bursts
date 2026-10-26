@@ -144,7 +144,7 @@ class TestPrepare:
         with (
             patch("s1bursts.burstmap.gpd.read_file") as read_file,
             patch(
-                "s1bursts.burstmap.save_and_read_parquet",
+                "s1bursts.burstmap.write_parquet",
             ),
         ):
             read_file.return_value = gpd.GeoDataFrame(
