@@ -8,57 +8,42 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-26
+
 ### Added
 
-- GTC pass composites: `ResolutionWeighter.compose_gtc_by_pass()` aggregates
-  beta-0 GTC products per pass direction without weighting, like
-  `compose_rtc_by_pass()` does for RTC. With the new product types
-  `GTCPassComposite` (`S1_GTC_COMP_{A/D}_…`) and `GTCPassQA`, the
-  `FileManager.find_gtc_pass_composites()` and `find_gtc_pass_qa()` lookups,
-  and `product_tags.gtc_pass_metadata()`.
-- **Python 3.15 support**, verified in CI.
+- Beta-0 pass composites: `ResolutionWeighter.compose_gtc_by_pass()` averages
+  GTC products per pass direction, as `compose_rtc_by_pass()` does for RTC
+  (`S1_GTC_COMP_A_…` / `S1_GTC_COMP_D_…`, each with a QA layer).
+- Python 3.15 support.
 
 ### Changed
 
-- `compose_rtc_lrw()` and `compose_coherence_lrw()` leave out inputs with no
-  valid pixel in the cell. A burst matched to a cell by its footprint can
-  touch the cell without reaching any of its pixels; it no longer counts in
-  `CONTRIBUTING_OBSERVATIONS` or in the `FIRST_ACQUISITION_DATE` and
-  `LAST_ACQUISITION_DATE` tags.
-- When no input reaches the cell, both raise the new `EmptyCompositeError`
-  (a `ValueError`) and write nothing, instead of writing an all-NaN composite
-  and its QA layers.
-- The burst-ID map cache is written as zstd-compressed GeoParquet in bounded
-  row groups through freezebase 0.9's `write_parquet` (128 → 85 MB for IW).
-  Caches written before stay valid.
-- **Breaking:** requires freezebase 0.10 (`freezebase[s3]>=0.10,<0.11`).
-- **Breaking:** a per-burst `ErrorResult` holds only the failures it is meant
-  to record. Other `RuntimeError`s now propagate, so a bug no longer passes for a
-  failed burst:
-  - An OData download keeps freezebase's `DownloadError` (a `RuntimeError`) as
-    the burst's error, as before. Any other `RuntimeError` is raised.
-  - `create_backscatter()`, `create_coherence()` and `create_interferogram()`
-    record freezebase's `RasterWriteError` when the product cannot be written.
-    Band names or units that do not match the graph's bands, which would be an
-    s1bursts bug, raise `ValueError` before anything is written instead of
-    becoming every burst's `RuntimeError`.
-
-  Code that checks `isinstance(result.error, RuntimeError)` keeps working.
+- **Breaking:** requires freezebase 0.10.
+- **Breaking:** an LRW composite for a cell that no burst covers with valid
+  pixels raises `EmptyCompositeError` and writes nothing. Before, it wrote an
+  all-NaN composite. To skip such cells, catch `EmptyCompositeError`.
+- LRW composites count only bursts with valid pixels in the cell. A burst
+  whose footprint merely touches the cell no longer adds to
+  `CONTRIBUTING_OBSERVATIONS` or to the first and last acquisition dates.
+- **Breaking:** failed downloads, SNAP runs and product writes are still
+  recorded per burst, but any other error now stops the run, since it points
+  to a bug. Checks for `isinstance(result.error, RuntimeError)` keep working.
+- The burst-ID map cache is a third smaller (128 → 85 MB for IW). Existing
+  caches stay valid.
 
 ### Fixed
 
-- `prepare_dem_for_snap()` no longer shifts the DEM when the installed SNAP has
-  fixed its half-pixel DEM sampling error (`snap-dem` 14.0.2 or newer). Under
-  such a SNAP, every prepared DEM ended up half a DEM pixel off (about 15 m for
-  a 30 m DEM). SNAP 13, older SNAP 14 and unrecognised installations keep the
-  shift, so their results are unchanged. The new optional `snap_bin` argument
-  names the installation. Cached DEMs are prepared again once.
-- `CDSEAuth` re-authenticates with the password grant when the identity server
-  rejects a refresh token (HTTP 400/401) before its nominal expiry, instead of
-  failing every OData download until the refresh token expires.
-- An OData download answered with something other than a file, or caught in a
-  redirect loop, is recorded as that burst's error. It used to raise and abort
-  the batch even with `continue_on_error`.
+- **Affects results:** with SNAP 14.0.2 or newer, `prepare_dem_for_snap()`
+  shifted external DEMs by half a pixel (15 m for a 30 m DEM), because SNAP
+  now corrects that offset itself. The shift is applied only where SNAP still
+  needs it, so SNAP 13 results are unchanged. Prepared DEMs are rebuilt once;
+  pass `snap_bin` if SNAP is not found through `SNAP_BIN` or `PATH`.
+- When CDSE rejects a login token early, s1bursts logs in again instead of
+  failing every later OData download.
+- An OData download that returns something other than a file, such as a
+  login page, is recorded as that burst's failure instead of stopping the
+  batch.
 
 ## [0.6.0] - 2026-09-24
 
