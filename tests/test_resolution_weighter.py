@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, override
@@ -1635,6 +1636,33 @@ class TestCompositeTags:
             assert tags["METADATA_VOCABULARY"] == product_tags.METADATA_VOCABULARY
             assert src.units == ("linear power",)
             assert src.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+
+    def test_default_aggregation_is_the_mean(self, scene: _Scene) -> None:
+        # Previously the default was the median.
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25"), _rtc("2022-09-06")]
+        for product, value in zip(products, [1.0, 2.0, 9.0], strict=True):
+            _write_raster(scene.manager.get_product_path(product), [_full(value), _full(1.0)])
+
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            assert (
+                src.tags()["COMPOSITING_PARAMETERS"] == "aggregation=mean;clip_max_resolution=none"
+            )
+            assert src.read(1) == pytest.approx(_full(4.0))
+
+    @pytest.mark.parametrize(
+        "method",
+        [
+            ResolutionWeighter.compose_rtc_lrw,
+            ResolutionWeighter.compose_coherence_lrw,
+            ResolutionWeighter.compose_rtc_by_pass,
+            ResolutionWeighter.compose_gtc_by_pass,
+            ResolutionWeighter.compose_coherence_by_pass,
+        ],
+    )
+    def test_every_composite_defaults_to_the_mean(self, method: Any) -> None:
+        assert inspect.signature(method).parameters["aggregation"].default == "mean"
 
     def test_decibel_composite_says_so_in_the_file(self, scene: _Scene) -> None:
         products = [_rtc("2022-08-13")]

@@ -210,11 +210,11 @@ Results (`summary.py`): `OkResult[T]` (`source`, `result`, `skipped`), `ErrorRes
 
 `ResolutionWeighter(file_manager, *, rasterio_profile=None, n_workers=8, checksum=False)`:
 
-- `compose_rtc_lrw(rtc_products, geobox, *, aggregation="median", clip_max_resolution=None, decibel=False, write_qa=False, cqm_decibel=False, overwrite=False)` → `RTCLRWComposite`, or `(composite, (qa_num, qa_cqm))` with `write_qa=True`.
-- `compose_coherence_lrw(coh_products, rtc_products, geobox, *, aggregation="median", clip_max_resolution=None, write_qa=False, cqm_decibel=False, overwrite=False)` → `CohLRWComposite`; the RTC products supply the scattering area of the matching orbit and date.
-- `compose_rtc_by_pass(rtc_products, geobox, *, aggregation="median", decibel=False, write_qa=False, overwrite=False)` → `dict[PassDirection, RTCPassComposite]`, or `(composite, qa_num)` values with `write_qa=True`.
-- `compose_gtc_by_pass(gtc_products, geobox, *, aggregation="median", decibel=False, write_qa=False, overwrite=False)` → `dict[PassDirection, GTCPassComposite]`, the same unweighted composite of beta nought; with no scattering area there is nothing to weight by.
-- `compose_coherence_by_pass(coh_products, geobox, *, aggregation="median", write_qa=False, overwrite=False)` → `dict[PassDirection, CohPassComposite]`.
+- `compose_rtc_lrw(rtc_products, geobox, *, aggregation="mean", clip_max_resolution=None, decibel=False, write_qa=False, cqm_decibel=False, overwrite=False)` → `RTCLRWComposite`, or `(composite, (qa_num, qa_cqm))` with `write_qa=True`.
+- `compose_coherence_lrw(coh_products, rtc_products, geobox, *, aggregation="mean", clip_max_resolution=None, write_qa=False, cqm_decibel=False, overwrite=False)` → `CohLRWComposite`; the RTC products supply the scattering area of the matching orbit and date.
+- `compose_rtc_by_pass(rtc_products, geobox, *, aggregation="mean", decibel=False, write_qa=False, overwrite=False)` → `dict[PassDirection, RTCPassComposite]`, or `(composite, qa_num)` values with `write_qa=True`.
+- `compose_gtc_by_pass(gtc_products, geobox, *, aggregation="mean", decibel=False, write_qa=False, overwrite=False)` → `dict[PassDirection, GTCPassComposite]`, the same unweighted composite of beta nought; with no scattering area there is nothing to weight by.
+- `compose_coherence_by_pass(coh_products, geobox, *, aggregation="mean", write_qa=False, overwrite=False)` → `dict[PassDirection, CohPassComposite]`.
 
 `aggregation` is `"mean"`, `"median"` or a quantile level in `(0, 1)`. Within one relative orbit and acquisition date the bursts are mosaicked by first valid pixel, so seams are never averaged; the resulting orbit-date observations are then aggregated in time.
 
