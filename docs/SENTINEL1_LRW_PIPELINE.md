@@ -226,7 +226,7 @@ w_i = \frac{1}{A_i}, \qquad W_i = \frac{w_i}{\sum_j w_j}, \qquad
 \text{CQM} = \frac{1}{\sum_i W_i A_i}
 $$
 
-where $A_i$ is the local scattering area of observation $i$ and $x_i$ its intensity or coherence. A pixel whose area is zero or non-finite carries no weight, `clip_max_resolution` caps $w_i$ to tame shadow, and `QA-NUM` counts the observations with non-zero weight. Under `median` or a quantile, the CQM aggregates the area with the same weighted quantile as the composite and then inverts it, so it describes the composite that was written; under `mean` this equals the published form.
+where $A_i$ is the local scattering area of observation $i$ and $x_i$ its intensity or coherence. A pixel whose area is zero or non-finite carries no weight, `clip_max_resolution` caps $w_i$ to tame shadow, and `QA-NUM` counts the observations with non-zero weight. The CQM is this weighted mean of the area under every aggregation. Under `median` or a quantile it describes the weighting rather than the written value: a weighted quantile takes its value from the observations that rank there in the measured value, which changes with speckle from pixel to pixel, so their area would be noise, and the weighted quantile of the area itself ranks by area and drifts to the finest acquisition.
 
 ## Pipeline flow
 

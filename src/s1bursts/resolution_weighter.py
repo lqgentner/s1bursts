@@ -239,6 +239,9 @@ class ResolutionWeighter:
             If ``True``, also write two auxiliary QA products alongside the
             composite: a contributing-observations map (``QA-NUM``) and a
             composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
+            ``QA-CQM`` is $1 / \sum_i W_i A_i$ under every ``aggregation``:
+            under ``median`` or a quantile it describes the weighting, not the
+            observations the composite's value was taken from.
         cqm_decibel
             Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
             linear units. Independent of ``decibel``.
@@ -432,6 +435,9 @@ class ResolutionWeighter:
             If ``True``, also write two auxiliary QA products alongside the
             composite: a contributing-observations map (``QA-NUM``) and a
             composite quality map (``QA-CQM``); see [2], items 2.21 and 2.22.
+            ``QA-CQM`` is $1 / \sum_i W_i A_i$ under every ``aggregation``:
+            under ``median`` or a quantile it describes the weighting, not the
+            observations the composite's value was taken from.
         cqm_decibel
             Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
             linear units.
@@ -1259,7 +1265,7 @@ class ResolutionWeighter:
             nodata=0,
             overwrite=overwrite,
         )
-        cqm = self._calc_cqm(values, scattering_area, weights, aggregation)
+        cqm = self._calc_cqm(values, scattering_area, weights)
         self._save(
             self._to_decibel(cqm) if cqm_decibel else cqm,
             qa[QaMetric.CQM],
@@ -1477,28 +1483,24 @@ class ResolutionWeighter:
         values: NDArray[np.floating[Any]],
         scattering_area: NDArray[np.floating[Any]],
         weights: NDArray[np.floating[Any]],
-        aggregation: Literal["mean", "median"] | float,
     ) -> NDArray[np.float32]:
         """Composite quality map (CQM) over the first (N) axis.
 
-        The reciprocal of the local scattering area ``Aᵢ`` combined under the
-        same weights and the same aggregation as the composite itself, so the
-        map describes the composite that was actually written.  Under ``mean``
-        this is ``1 / Σ(Wᵢ · Aᵢ)`` with ``Wᵢ`` normalized to sum to one, the
-        published form (Small et al. 2022, eq. 6; CEOS-ARD SAR v1.3.1,
-        eq. A5.2).  The area is aggregated and then inverted, rather than the
-        resolutions being aggregated, which is what keeps the ``mean`` case
-        equal to that form.
+        ``1 / Σ(Wᵢ · Aᵢ)``, with ``Wᵢ`` normalized to sum to one, the published
+        form (Small et al. 2022, eq. 6; CEOS-ARD SAR v1.3.1, eq. A5.2), whatever
+        the composite's aggregation.  A weighted quantile picks its observations
+        by rank in the measured value, which changes with speckle from pixel to
+        pixel, so the area of the observations it picked is noise rather than a
+        quality summary; the weighted mean of the area describes the weighting
+        those picks are drawn under.
 
         An observation whose value is non-finite did not enter the composite,
         so its weight is zeroed here too and its area does not count.
         """
         contributing = np.where(np.isfinite(values), weights, 0.0)
         with np.errstate(divide="ignore", invalid="ignore"):
-            aggregated_area = cls._aggregate_weighted(scattering_area, contributing, aggregation)
-            cqm = (1.0 / aggregated_area).astype(np.float32)
-        invalid = contributing.sum(axis=0) == 0
-        cqm[invalid] = np.nan
+            cqm = (1.0 / cls._weighted_mean(scattering_area, contributing)).astype(np.float32)
+        cqm[contributing.sum(axis=0) == 0] = np.nan
         return cqm
 
     # ------------------------------------------------------------------
