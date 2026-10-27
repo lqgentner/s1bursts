@@ -8,6 +8,23 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
+  `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
+  keep the previous composites.
+
+### Fixed
+
+- **Breaking:** `QA-CQM` of `median` (previously the default) and quantile
+  composites overstated the local resolution, on an Alpine tile by a median
+  factor of 1.7 and up to 4. It was $1 / \operatorname{wquantile}_q(A;\, W)$ and is now
+  $1 / \sum_i W_i A_i$ (Small et al. 2022, eq. 6; CEOS-ARD SAR v1.3.1,
+  eq. A5.2) under every aggregation, the same map as the `mean` composite of
+  the same inputs. Under `median` or a quantile it describes the resolution
+  weighting, not the acquisitions the composite value was taken from.
+  Regenerate `QA-CQM` built with `median` or a quantile; `mean` is unaffected.
+
 ## [0.7.0] - 2026-10-26
 
 ### Added
