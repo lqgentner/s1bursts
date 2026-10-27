@@ -1,0 +1,22 @@
+name: Clean up container images
+
+# Rebuilding the SNAP image moves its tag and orphans the previous image's
+# manifests and attestations as untagged versions. The action keeps the
+# children a tagged image still references.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 0'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          package: s1bursts-snap
+          keep-n-tagged: 10
+          delete-untagged: true
+          delete-partial-images: true
