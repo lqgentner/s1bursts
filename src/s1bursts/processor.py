@@ -231,14 +231,15 @@ class BurstProcessor:
                     progress.advance(task_id)
             else:
                 with ThreadPoolExecutor(max_workers=n_workers) as executor:
-                    future_to_item = {executor.submit(process_fn, item): item for item in items}
-                    for future in as_completed(future_to_item):
+                    futures = [executor.submit(process_fn, item) for item in items]
+                    for future in as_completed(futures):
                         result = future.result()
                         if isinstance(result, ErrorResult) and not self.continue_on_error:
                             executor.shutdown(wait=False, cancel_futures=True)
                             raise result.error
-                        results.append(result)
                         progress.advance(task_id)
+                # Submission order, so the summary does not depend on thread timing.
+                results.extend(future.result() for future in futures)
             progress.update(task_id, refresh=True)
 
         return OperationSummary.from_results(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
@@ -154,6 +155,30 @@ class TestProcessCollection:
 
         assert summary.n_processed == 3
         assert sorted(summary.products) == ["A", "B", "C"]
+
+    def test_parallel_results_keep_the_submission_order(self, processor: BurstProcessor) -> None:
+        """Results must be listed in input order, not the order the threads finish.
+
+        Previously they were listed as they completed, which composites then
+        inherited as their stitch order.
+        """
+        processor.config.resolved_max_workers = 3
+        items = ["a", "b", "c"]
+        done = {item: threading.Event() for item in items}
+
+        def process_fn(item: str) -> OkResult[str]:
+            # Each item waits for the next one, so they finish in reverse order.
+            following = items.index(item) + 1
+            if following < len(items):
+                assert done[items[following]].wait(timeout=5)
+            done[item].set()
+            return OkResult(source=item, result=item.upper())
+
+        # Plain strings stand in for a collection.
+        # pyrefly: ignore [no-matching-overload]
+        summary = processor._process_collection(items, process_fn, "Test")
+
+        assert summary.products == ["A", "B", "C"]
 
     def test_parallel_raises_when_continue_on_error_false(
         self,

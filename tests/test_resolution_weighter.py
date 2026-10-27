@@ -58,6 +58,8 @@ class _RTCStub(NamedTuple):
     rel_orbit_number: int
     date: Timestamp
     polarization: str
+    burst_id: int = 0
+    sub_swath: str = "IW1"
 
 
 class _CohStub(NamedTuple):
@@ -418,6 +420,34 @@ class TestStitchByOrbitDate:
         assert orbit == 10
         # First non-NaN: pixel0 → 1.0 (from arr1), pixel1 → 5.0 (from arr2)
         np.testing.assert_allclose(mosaic, [[1.0, 5.0]])
+
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [((30346, "IW1"), (30347, "IW1")), ((30346, "IW1"), (30346, "IW2"))],
+    )
+    def test_overlap_is_taken_from_the_same_burst_in_any_input_order(
+        self,
+        first: tuple[int, str],
+        second: tuple[int, str],
+    ) -> None:
+        """The overlap of two bursts must not depend on the order they were passed.
+
+        Previously the first burst in the caller's list won, and a processing
+        run lists its products in completion order.
+        """
+        p1 = _RTCStub(10, self._D1, "VV", burst_id=first[0], sub_swath=first[1])
+        p2 = _RTCStub(10, self._D1, "VV", burst_id=second[0], sub_swath=second[1])
+        arr1 = np.array([[1.0, 2.0, np.nan]])
+        arr2 = np.array([[np.nan, 8.0, 9.0]])
+
+        # Stub carries only the fields read here.
+        # pyrefly: ignore [bad-argument-type]
+        forward = self._weighter()._stitch_by_orbit_date([(p1, arr1), (p2, arr2)])
+        # pyrefly: ignore [bad-argument-type]
+        reverse = self._weighter()._stitch_by_orbit_date([(p2, arr2), (p1, arr1)])
+
+        np.testing.assert_array_equal(next(iter(forward.values())), [[1.0, 2.0, 9.0]])
+        np.testing.assert_array_equal(next(iter(reverse.values())), [[1.0, 2.0, 9.0]])
 
     def test_different_dates_produce_separate_groups(self) -> None:
         """Products with different acquisition dates must produce separate keys."""
@@ -833,6 +863,8 @@ def _rtc_stub(orbit: int, day: int, direction: str = "Ascending") -> SimpleNames
         date=Timestamp(f"2020-01-{day:02d}"),
         rel_orbit_number=orbit,
         pass_direction=direction,
+        burst_id=0,
+        sub_swath="IW1",
     )
 
 
@@ -1177,6 +1209,38 @@ class TestComposeRtcLrw:
             assert src.shape == (_TILE, _TILE)
         # weights 1/100 and 1/1 → (1*0.01 + 9*1) / 1.01
         assert values == pytest.approx(np.full((_TILE, _TILE), (1 * 0.01 + 9) / 1.01), rel=1e-5)
+
+    @pytest.mark.parametrize("write_qa", [False, True])
+    def test_burst_overlaps_do_not_depend_on_the_input_order(
+        self,
+        scene: _Scene,
+        write_qa: bool,
+    ) -> None:
+        """Permuting the inputs must write the same composite and QA-CQM.
+
+        Both bursts of one acquisition cover the whole tile, so every pixel is
+        in their overlap. Previously the caller's first burst won there.
+        """
+        date = "2022-08-13"
+        bursts = [_rtc(date, burst_id=_ASCENDING_BURST), _rtc(date, burst_id=_ASCENDING_BURST + 2)]
+        for product, value, area in zip(bursts, [1.0, 3.0], [2.0, 4.0], strict=True):
+            _write_raster(scene.manager.get_product_path(product), [_full(value), _full(area)])
+
+        written = []
+        for order in (bursts, bursts[::-1]):
+            result = scene.weighter.compose_rtc_lrw(
+                order, scene.geobox, write_qa=write_qa, overwrite=True
+            )
+            outputs = [result[0], result[1][1]] if isinstance(result, tuple) else [result]
+            bands = []
+            for output in outputs:
+                with rasterio.open(scene.manager.get_product_path(output)) as src:
+                    bands.append(src.read(1))
+            written.append(bands)
+
+        np.testing.assert_array_equal(written[0][0], _full(1.0))
+        for forward, reverse in zip(*written, strict=True):
+            np.testing.assert_array_equal(forward, reverse)
 
     def test_rejects_an_out_of_range_quantile_before_reading_inputs(
         self,
