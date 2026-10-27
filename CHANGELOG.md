@@ -11,10 +11,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 ### Changed
 
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
-  `aggregation="mean"` instead of `"median"`. For the LRW composites this is the
-  weighted mean of Small et al. (2022), the only aggregation whose `QA-CQM`
-  describes the written values. Pass `aggregation="median"` to keep the previous
-  composites.
+  `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
+  keep the previous composites.
 
 ### Fixed
 
