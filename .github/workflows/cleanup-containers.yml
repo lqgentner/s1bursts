@@ -1,0 +1,36 @@
+name: Clean up container images
+
+# Rebuilding the SNAP image moves its tag and orphans the previous image's
+# manifests and attestations as untagged versions. The action keeps the
+# children a tagged image still references.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only log what would be deleted"
+        type: boolean
+        default: true
+  schedule:
+    - cron: '0 3 * * 0'
+
+# The action is not safe to run twice against one package.
+concurrency:
+  group: ghcr-s1bursts-snap
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+        with:
+          package: s1bursts-snap
+          keep-n-tagged: 10
+          exclude-tags: latest,snap*
+          delete-untagged: true
+          delete-partial-images: true
+          # Leaves the children of an image that container.yml is still pushing.
+          older-than: 1 day
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
