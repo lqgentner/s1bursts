@@ -1352,10 +1352,14 @@ class ResolutionWeighter:
         ``acquisition_date`` is ``date_primary`` for coherence products and
         ``date`` for RTC products.  Within each group the arrays are combined
         using pixel-wise first non-NaN selection, which avoids averaging along
-        burst seams.
+        burst seams.  Where bursts overlap, the one with the lowest
+        ``(burst_id, sub_swath)`` is kept, whatever order ``loaded`` is in.
         """
         groups: defaultdict[_OrbitDateKey, list[NDArray[np.floating[Any]]]] = defaultdict(list)
-        for prod, data in loaded:
+        # The caller's list order is arbitrary, so it must not decide the overlap.
+        for prod, data in sorted(
+            loaded, key=lambda entry: (entry[0].burst_id, entry[0].sub_swath)
+        ):
             groups[self._group_key(prod)].append(data)
         return {key: self._first_notna(arrays) for key, arrays in sorted(groups.items())}
 

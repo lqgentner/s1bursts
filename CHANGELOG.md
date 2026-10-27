@@ -24,6 +24,16 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   the same inputs. Under `median` or a quantile it describes the resolution
   weighting, not the acquisitions the composite value was taken from.
   Regenerate `QA-CQM` built with `median` or a quantile; `mean` is unaffected.
+- **Breaking:** composites are now reproducible in burst overlaps. Where two
+  bursts of one acquisition overlap, every `ResolutionWeighter.compose_*`
+  method takes the pixel from the burst with the lowest
+  `(burst_id, sub_swath)`. Previously it took whichever burst came first in
+  the input list, which was non-deterministic for runs with multiple workers.
+  Therefore, two runs over the same products could differ in the composite
+  and `QA-CQM`. The burst choice is now deterministic. Composites made with
+  earlier versions remain valid and need not be regenerated.
+- `BurstProcessor` summaries list their results in input order whatever
+  `max_workers` is, instead of in the order the threads finished.
 
 ## [0.7.0] - 2026-10-26
 
