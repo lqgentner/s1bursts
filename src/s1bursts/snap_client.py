@@ -663,8 +663,10 @@ class SNAPClient:
         burst
             Burst to process.
         crs
-            The coordinate reference system of the geocoded output, as a CRS
-            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system of the geocoded output, a WGS 84 /
+            UTM zone, north or south, which product file names record. Given as
+            a CRS object, an authority string such as ``"EPSG:32632"`` or an
+            EPSG code.
         config
             Graph-shape configuration.
         overwrite
@@ -674,6 +676,12 @@ class SNAPClient:
         -------
         OperationResult
             Result of the backscatter processing.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
+            because it would fail every burst.
         """
         product: RTCProduct | GTCProduct
         if config.flatten_terrain:
@@ -746,8 +754,10 @@ class SNAPClient:
         pair
             Burst pair to process.
         crs
-            The coordinate reference system of the geocoded output, as a CRS
-            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system of the geocoded output, a WGS 84 /
+            UTM zone, north or south, which product file names record. Given as
+            a CRS object, an authority string such as ``"EPSG:32632"`` or an
+            EPSG code.
         config
             Graph-shape configuration (window size, DEM, …).
         overwrite
@@ -757,6 +767,12 @@ class SNAPClient:
         -------
         OperationResult
             Result of the coherence processing.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
+            because it would fail every burst.
         """
         product = CoherenceProduct.from_burst_pair(pair, crs=crs)
         product_path = self.manager.get_product_path(product)
@@ -827,8 +843,10 @@ class SNAPClient:
         pair
             Burst pair to process.
         crs
-            The coordinate reference system of the geocoded output, as a CRS
-            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system of the geocoded output, a WGS 84 /
+            UTM zone, north or south, which product file names record. Given as
+            a CRS object, an authority string such as ``"EPSG:32632"`` or an
+            EPSG code.
         config
             Graph-shape configuration.
         overwrite
@@ -838,6 +856,12 @@ class SNAPClient:
         -------
         OperationResult
             Result of the interferogram processing.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
+            because it would fail every burst.
         """
         product = InterferogramProduct.from_burst_pair(pair, crs=crs)
         product_path = self.manager.get_product_path(product)

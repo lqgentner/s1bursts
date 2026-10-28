@@ -225,6 +225,48 @@ class TestDispatch:
         cast("MagicMock", processor.snap_client).create_interferogram.assert_called_once()
         assert summary.products == ["ifg"]
 
+    @pytest.mark.parametrize(
+        "method",
+        ["create_backscatter", "create_coherences", "create_interferograms"],
+    )
+    @pytest.mark.parametrize(
+        "crs",
+        [
+            pytest.param("EPSG:3035", id="laea-europe"),
+            pytest.param(4326, id="geographic"),
+            pytest.param("EPSG:25832", id="etrs89-utm"),
+        ],
+    )
+    def test_crs_that_is_not_a_wgs84_utm_zone_fails_before_processing(
+        self,
+        processor: BurstProcessor,
+        method: str,
+        crs: str | int,
+    ) -> None:
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
+            getattr(processor, method)([MagicMock()], crs=crs)
+
+        assert not cast("MagicMock", processor.snap_client).method_calls
+
+    @pytest.mark.parametrize(
+        "method",
+        ["create_backscatter", "create_coherences", "create_interferograms"],
+    )
+    def test_crs_is_checked_even_without_items(
+        self,
+        processor: BurstProcessor,
+        method: str,
+    ) -> None:
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
+            getattr(processor, method)([], crs="EPSG:3035")
+
+    @pytest.mark.parametrize(
+        "crs",
+        ["EPSG:32601", 32760, "+proj=utm +zone=32 +south +datum=WGS84 +units=m"],
+    )
+    def test_accepts_any_wgs84_utm_zone(self, processor: BurstProcessor, crs: str | int) -> None:
+        processor.create_backscatter([], crs=crs)
+
     def test_invalid_crs_fails_before_processing(self, processor: BurstProcessor) -> None:
         with pytest.raises(CRSError):
             processor.create_backscatter([MagicMock()], crs="EPSG:32632x")

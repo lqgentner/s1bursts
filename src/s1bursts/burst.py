@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload, override
 import warnings
 
+from freezebase.mgrs import UTMZones
 import geopandas as gpd
 import numpy as np
 from odc.geo.geobox import GeoBoxBase
@@ -549,6 +550,75 @@ class BurstPair:
             Number of days between primary and secondary acquisition.
         """
         return (self.secondary.date - self.primary.date).round("D").days
+
+
+def utm_zone_of(burst: Burst | BurstPair) -> CRS:
+    """Return the WGS 84 / UTM zone that holds a burst's footprint.
+
+    The zone is the one containing the centre of the footprint, by the zone
+    boundaries of ``freezebase.mgrs.UTMZones``, the ones the MGRS grid uses,
+    Norway and Svalbard exceptions included. A centre on a border between two
+    zones takes the eastern one, and one on the equator the northern
+    hemisphere. Use it as the ``crs`` of ``BurstProcessor.create_*`` for
+    bursts processed on their own. For a time series, call it once and reuse
+    the zone: each acquisition has its own footprint, so the dates of a burst
+    near a zone border can fall on different sides of it. Do not use it for
+    products meant for a composite: those take the target cell's zone,
+    ``crs=cell.crs``, which need not be the zone of every burst.
+
+    Parameters
+    ----------
+    burst
+        Burst or burst pair whose footprint to locate.
+
+    Returns
+    -------
+    pyproj.CRS
+        The UTM zone, such as EPSG:32632 for zone 32 north.
+
+    Raises
+    ------
+    ValueError
+        If the centre lies outside the UTM zones, north of 84 degrees or south
+        of 80 degrees.
+    BurstMapUnavailableError
+        If the footprint was not propagated and the burst map has not been
+        downloaded (see ``s1bursts.burstmap.download_burst_map``).
+    BurstNotInMapError
+        If the burst is not found in the burst map.
+    """
+    longitude, latitude = _footprint_centre(burst.geometry)
+    zones = UTMZones().find_intersecting(shapely.Point(longitude, latitude))
+    zones = zones[zones.hemisphere == ("N" if latitude >= 0 else "S")]
+    if zones.empty:
+        msg = f"No UTM zone covers the footprint centre at {longitude:.4f}, {latitude:.4f}."
+        raise ValueError(msg)
+    # Zone numbers grow eastward and a centre in [-180, 180) never touches both
+    # zone 60 and zone 1, so the largest number is the eastern zone.
+    return CRS.from_epsg(int(zones.epsg.max()))
+
+
+# Longitude of the antimeridian, where footprints are split.
+_ANTIMERIDIAN = 180.0
+
+
+def _unwrap_longitudes[G: BaseGeometry](shape: G) -> G:
+    """Move negative longitudes by a full turn, joining the halves of a split geometry."""
+    return shapely.transform(
+        shape,
+        lambda xy: np.column_stack([np.where(xy[:, 0] < 0, xy[:, 0] + 360, xy[:, 0]), xy[:, 1]]),
+    )
+
+
+def _footprint_centre(footprint: Polygon | MultiPolygon) -> tuple[float, float]:
+    """Return the longitude and latitude of a footprint's centroid, across the antimeridian too."""
+    west, _, east, _ = footprint.bounds
+    # A footprint split at the antimeridian spans nearly the whole globe; moved
+    # to 0-360 degrees, its halves join again.
+    if east - west > _ANTIMERIDIAN:
+        footprint = _unwrap_longitudes(footprint)
+    centre = footprint.centroid
+    return (centre.x + _ANTIMERIDIAN) % 360.0 - _ANTIMERIDIAN, centre.y
 
 
 class _BaseBurstCollection[TEntry]:

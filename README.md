@@ -61,7 +61,8 @@ bursts = database.search(
 )
 pairs = bursts.find_pairs(baseline=pd.Timedelta(days=12))
 
-# Download and process
+# Download and process. Products are geocoded to a WGS 84 / UTM zone, here
+# the one of the burst; utm_zone_of(bursts[0]) would give the same.
 database.download(bursts, max_workers=3)
 crs = pyproj.CRS("EPSG:32632")
 processor.create_backscatter(bursts, crs=crs)
@@ -74,7 +75,7 @@ processor.create_coherences(pairs, crs=crs)
 `BurstDatabase` / `BurstProcessor` / `ResolutionWeighter` services, and the
 configs they take (`SearchQuery`, `TimeRange`, `SNAPConfig`, `BackscatterConfig`,
 `CoherenceConfig`, `InterferogramConfig`, `GeocodingConfig`), plus
-`download_burst_map` and `prepare_dem_for_snap`.
+`download_burst_map`, `prepare_dem_for_snap` and `utm_zone_of`.
 
 What a pipeline *produces* is returned by those services and imported from the
 module it belongs to:

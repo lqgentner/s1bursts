@@ -9,8 +9,8 @@ import time
 from typing import TYPE_CHECKING
 
 from freezebase.progress import create_progress
-from pyproj import CRS
 
+from s1bursts.product import _utm_zone_crs
 from s1bursts.snap_client import SNAPClient, SNAPConfig
 from s1bursts.snap_graph import (
     BackscatterConfig,
@@ -86,8 +86,11 @@ class BurstProcessor:
             Bursts to process, such as a ``BurstCollection`` or a list of
             ``Burst`` objects.
         crs
-            The coordinate reference system of the geocoded output, as a CRS
-            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system of the geocoded output, a WGS 84 /
+            UTM zone, north or south, which product file names record. Given as
+            a CRS object, an authority string such as ``"EPSG:32632"`` or an
+            EPSG code. For composites, pass the target cell's ``crs``; for
+            single bursts, ``utm_zone_of(burst)`` gives the zone of a burst.
         config
             Graph-shape configuration; defaults to ``BackscatterConfig()``
             (RTC, Copernicus 30m DEM, multilook ``(5, 1)``).
@@ -98,14 +101,20 @@ class BurstProcessor:
         -------
         OperationSummary
             Summary of processing results.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
+            processed.
         """
         cfg = config or BackscatterConfig()
         return self._process_collection(
             bursts,
             partial(
                 self.snap_client.create_backscatter,
-                # Parsed once, so an invalid CRS fails before any burst is processed.
-                crs=CRS.from_user_input(crs),
+                # Checked once, so an invalid CRS fails before any burst is processed.
+                crs=_utm_zone_crs(crs),
                 config=cfg,
                 overwrite=overwrite,
             ),
@@ -128,8 +137,11 @@ class BurstProcessor:
             Burst pairs to process, such as a ``BurstPairCollection`` or a
             list of ``BurstPair`` objects.
         crs
-            The coordinate reference system of the geocoded output, as a CRS
-            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system of the geocoded output, a WGS 84 /
+            UTM zone, north or south, which product file names record. Given as
+            a CRS object, an authority string such as ``"EPSG:32632"`` or an
+            EPSG code. For composites, pass the target cell's ``crs``; for
+            single bursts, ``utm_zone_of(burst)`` gives the zone of a burst.
         config
             Graph-shape configuration; defaults to ``CoherenceConfig()``
             (25x5 window, Copernicus 30m DEM).
@@ -140,13 +152,19 @@ class BurstProcessor:
         -------
         OperationSummary
             Summary of processing results.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
+            processed.
         """
         cfg = config or CoherenceConfig()
         return self._process_collection(
             pairs,
             partial(
                 self.snap_client.create_coherence,
-                crs=CRS.from_user_input(crs),
+                crs=_utm_zone_crs(crs),
                 config=cfg,
                 overwrite=overwrite,
             ),
@@ -169,8 +187,11 @@ class BurstProcessor:
             Burst pairs to process, such as a ``BurstPairCollection`` or a
             list of ``BurstPair`` objects.
         crs
-            The coordinate reference system of the geocoded output, as a CRS
-            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system of the geocoded output, a WGS 84 /
+            UTM zone, north or south, which product file names record. Given as
+            a CRS object, an authority string such as ``"EPSG:32632"`` or an
+            EPSG code. For composites, pass the target cell's ``crs``; for
+            single bursts, ``utm_zone_of(burst)`` gives the zone of a burst.
         config
             Graph-shape configuration; defaults to ``InterferogramConfig()``.
         overwrite
@@ -180,13 +201,19 @@ class BurstProcessor:
         -------
         OperationSummary
             Summary of processing results.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
+            processed.
         """
         cfg = config or InterferogramConfig()
         return self._process_collection(
             pairs,
             partial(
                 self.snap_client.create_interferogram,
-                crs=CRS.from_user_input(crs),
+                crs=_utm_zone_crs(crs),
                 config=cfg,
                 overwrite=overwrite,
             ),

@@ -818,6 +818,35 @@ class TestFinalizeProduct:
         assert np.array_equal(band[[0, 1, 1], [0, 0, 1]], [1.0, 2.0, 3.0])
 
 
+class TestRejectsNonUtmCrs:
+    """A CRS product file names cannot hold fails the call, not just one burst."""
+
+    def test_backscatter(self, client: SNAPClient) -> None:
+        with (
+            patch.object(client, "_run_gpt") as mock_gpt,
+            pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"),
+        ):
+            client.create_backscatter(
+                _make_burst("2022-01-01"),
+                crs="EPSG:25832",
+                config=BackscatterConfig(),
+            )
+
+        mock_gpt.assert_not_called()
+
+    def test_coherence(self, client: SNAPClient) -> None:
+        pair = BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
+
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
+            client.create_coherence(pair, crs="EPSG:3035", config=CoherenceConfig())
+
+    def test_interferogram(self, client: SNAPClient) -> None:
+        pair = BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
+
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
+            client.create_interferogram(pair, crs=4326, config=InterferogramConfig())
+
+
 class TestCreateCoherence:
     CRS_UTM32 = CRS("EPSG:32632")
 

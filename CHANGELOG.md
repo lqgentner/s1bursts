@@ -20,6 +20,10 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - Every `BurstProcessor.create_*` method accepts any iterable of bursts or
   burst pairs, such as a list, not only a `BurstCollection` or
   `BurstPairCollection`.
+- `utm_zone_of(burst)` returns the WGS 84 / UTM zone that holds the centre of
+  a burst's or burst pair's footprint, as the `crs` for bursts processed on
+  their own. Products meant for a composite still take the cell's zone,
+  `crs=cell.crs`.
 - Burst collections can be narrowed without touching `.df`. Each selection
   returns a new collection of the same type:
   `BurstCollection.within(time_range)` keeps the bursts acquired on a day of a
@@ -98,6 +102,21 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   bursts.df[bursts.df._rel_orbit_number == 66]
   # after
   bursts.df[bursts.df.rel_orbit_number == 66]  # or bursts.filter(rel_orbit_number=66)
+  ```
+- **Breaking:** the `crs` of every `BurstProcessor.create_*` and
+  `SNAPClient.create_*` method, and of the products' `from_burst()` and
+  `from_burst_pair()`, must be a WGS 84 / UTM zone, north or south. Anything
+  else raises `ValueError`, in `BurstProcessor` before the first burst is
+  processed. A non-UTM CRS used to fail later with
+  `Could not extract CRS identifier from: …`, and a UTM zone on another datum,
+  such as ETRS89 / UTM zone 32N, was written under the name of the WGS 84 zone
+  and read back as that.
+
+  ```python
+  # before
+  processor.create_coherences(pairs, crs="EPSG:25832")
+  # after
+  processor.create_coherences(pairs, crs="EPSG:32632")  # or crs=utm_zone_of(pairs[0])
   ```
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to

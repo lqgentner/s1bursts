@@ -31,6 +31,25 @@ class CRSLike(Protocol):
 type CRSInput = CRSLike | str | int
 
 
+# WGS 84 / UTM zones 1-60, north (EPSG:326xx) and south (EPSG:327xx).
+_UTM_NORTH_EPSG = range(32601, 32661)
+_UTM_SOUTH_EPSG = range(32701, 32761)
+
+
+def _utm_zone_crs(crs: CRSInput) -> CRS:
+    """Parse ``crs`` and require a WGS 84 / UTM zone, the one CRS product file names hold."""
+    parsed = CRS.from_user_input(crs)
+    epsg = parsed.to_epsg()
+    if epsg in _UTM_NORTH_EPSG or epsg in _UTM_SOUTH_EPSG:
+        return parsed
+    msg = (
+        f"`crs` must be a WGS 84 / UTM zone, north or south (EPSG:326xx or 327xx), "
+        f"received '{parsed.name}'. Product file names record the UTM zone. Pass the "
+        "target cell's `crs`, or `utm_zone_of(burst)` for a single burst."
+    )
+    raise ValueError(msg)
+
+
 class QaMetric(StrEnum):
     """Quality-assurance metric carried by an auxiliary composite product."""
 
@@ -177,20 +196,26 @@ class BackscatterProduct(GeocodedBurst):
         burst
             Burst to create product from.
         crs
-            The coordinate reference system, as a CRS object, an authority string
-            such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system, a WGS 84 / UTM zone, north or
+            south, which product file names record. Given as a CRS object, an
+            authority string such as ``"EPSG:32632"`` or an EPSG code.
 
         Returns
         -------
         BackscatterProduct
             Backscatter product metadata.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone.
         """
         return cls(
             burst_id=burst.burst_id,
             sub_swath=burst.sub_swath,
             polarization=burst.polarization,
             date=burst.date,
-            crs=CRS.from_user_input(crs),
+            crs=_utm_zone_crs(crs),
             _rel_orbit_number=burst.rel_orbit_number,
             # The propagated value only: the public property would fall back to the
             # burst map, which bursts found on disk need not have.
@@ -308,13 +333,19 @@ class CoregisteredProduct(GeocodedBurst, ABC):
         pair
             Burst pair to create product from.
         crs
-            The coordinate reference system, as a CRS object, an authority string
-            such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system, a WGS 84 / UTM zone, north or
+            south, which product file names record. Given as a CRS object, an
+            authority string such as ``"EPSG:32632"`` or an EPSG code.
 
         Returns
         -------
         CoregisteredProduct
             Coregistered product metadata.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone.
         """
         return cls(
             burst_id=pair.primary.burst_id,
@@ -322,7 +353,7 @@ class CoregisteredProduct(GeocodedBurst, ABC):
             date_primary=pair.primary.date,
             date_secondary=pair.secondary.date,
             polarization=pair.primary.polarization,
-            crs=CRS.from_user_input(crs),
+            crs=_utm_zone_crs(crs),
             _rel_orbit_number=pair.rel_orbit_number,
             # See ``BackscatterProduct.from_burst``.
             _pass_direction=pair.primary._pass_direction,  # noqa: SLF001

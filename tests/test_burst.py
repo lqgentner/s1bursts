@@ -18,11 +18,13 @@ import pytest
 from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
 from shapely.geometry import Point, box
 
+import s1bursts
 from s1bursts.burst import (
     Burst,
     BurstCollection,
     BurstPair,
     BurstPairCollection,
+    utm_zone_of,
 )
 from s1bursts.cdse import CDSEResponse
 from s1bursts.errors import BurstNotInMapError
@@ -1115,3 +1117,47 @@ class TestFindPairsBaselineNaming:
         assert (Timestamp(dates[0]), Timestamp(dates[3])) in found
         for pair in pairs:
             assert pair.baseline_days == 12
+
+
+class TestUtmZoneOf:
+    @pytest.mark.parametrize(
+        ("footprint", "epsg"),
+        [
+            pytest.param(box(7.0, 46.0, 8.0, 47.0), 32632, id="north"),
+            pytest.param(box(-70.0, -34.0, -69.0, -33.0), 32719, id="south"),
+            # Centred on the 12 degree border between zones 32 and 33.
+            pytest.param(box(11.0, 46.0, 13.0, 47.0), 32633, id="border-takes-eastern-zone"),
+            pytest.param(
+                ShapelyMultiPolygon(
+                    [box(179.6, -17.0, 180.0, -16.0), box(-180.0, -17.0, -179.8, -16.0)],
+                ),
+                32760,
+                id="antimeridian-west-of-the-line",
+            ),
+            pytest.param(
+                ShapelyMultiPolygon(
+                    [box(179.9, -17.0, 180.0, -16.0), box(-180.0, -17.0, -179.5, -16.0)],
+                ),
+                32701,
+                id="antimeridian-east-of-the-line",
+            ),
+        ],
+    )
+    def test_zone_holds_the_footprint_centre(
+        self,
+        footprint: Polygon | MultiPolygon,
+        epsg: int,
+    ) -> None:
+        assert utm_zone_of(make_burst(geometry=footprint)) == CRS.from_epsg(epsg)
+
+    def test_centre_outside_the_utm_zones_raises(self) -> None:
+        with pytest.raises(ValueError, match="No UTM zone covers"):
+            utm_zone_of(make_burst(geometry=box(10.0, 84.5, 11.0, 85.5)))
+
+    def test_burst_pair_takes_the_zone_of_its_footprint(self) -> None:
+        pair = BurstPair(make_burst("2022-01-01"), make_burst("2022-01-13"))
+
+        assert utm_zone_of(pair) == CRS.from_epsg(32632)
+
+    def test_is_exported_from_the_package(self) -> None:
+        assert s1bursts.utm_zone_of is utm_zone_of
