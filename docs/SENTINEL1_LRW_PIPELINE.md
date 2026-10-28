@@ -152,7 +152,7 @@ The coherence estimation window exists only in `CoherenceConfig` at graph-build 
 - `BurstPair`: primary and secondary `Burst` of one footprint; `baseline_days` is the temporal baseline rounded to whole days.
 - `BurstCollection` / `BurstPairCollection`: GeoDataFrame-backed containers with deduplication, slicing, an HTML preview, and `find_pairs(baseline, max_delta=6)` (days and hours when given as integers; `baseline` must be whole days and `max_delta` under 12 hours, so every pair is named by the requested baseline). Selections return a new collection of the same type: `BurstCollection.within(time_range)` and `BurstPairCollection.starting_within(time_range)` keep the acquisitions (pairs: the primary) on a day of a `TimeRange`; `intersecting(geometry)` keeps the footprints touching a shapely geometry in WGS 84, an `odc.geo` `Geometry` in any CRS, or a `GeoBox` such as an `MGRSGeoBox` (a projected area is tested in its own CRS, with the footprints projected into it, so polar and near-global areas keep their shape); `filter(**fields)` keeps the entries whose columns equal a value or any of an iterable of values. The columns of `.df` are the burst's public field names, `rel_orbit_number` and `pass_direction` among them.
 - `SearchQuery`: validated search parameters; `BurstDatabase.search(query)` turns it into OData filters and returns every match from one catalog request. A query matching more than one page (1000 bursts) raises `TooManyResultsError`; split it and combine the results with `+`.
-- `BurstDatabase.download(bursts, *, overwrite=False, max_workers=5, endpoint=None)`: parallel download via the CDSE OData burst endpoint or by extracting the burst from the parent product in CDSE S3 (`burst_extractor.py`); a failure on one endpoint is retried on the other, and a burst the source does not hold is remembered so it is not requested twice.
+- `BurstDatabase.download(bursts, *, overwrite=False, max_workers=5, endpoint=None)`: takes a `Burst`, a `BurstPair` or any iterable of them, and downloads each distinct burst once, in parallel via the CDSE OData burst endpoint or by extracting the burst from the parent product in CDSE S3 (`burst_extractor.py`); a failure on one endpoint is retried on the other, and a burst the source does not hold is remembered so it is not requested twice.
 
 ### Products (`product.py`)
 
@@ -197,14 +197,14 @@ The SAFE folder inside an SLC zip keeps ESA's `S1{A,B}_SLC_{sensingTime}_{burst_
 
 ### SNAP processing (`snap_graph.py`, `snap_client.py`, `processor.py`)
 
-Graphs are generated at call time from frozen Pydantic configs: `BackscatterConfig`, `CoherenceConfig` and `InterferogramConfig`, all deriving from the abstract `GeocodingConfig` that carries the shared Terrain-Correction tail (`grid_spacing`, `dem`, resampling, standard-grid alignment, external-DEM handling). Each exposes `to_xml(snap_version=...)` and `to_mermaid()`. The band naming of a coregistered stack differs between SNAP 13 and 14, and two Coherence options exist only from SNAP 14, so the client passes the installed version in.
+Graphs are generated at call time from frozen Pydantic configs: `RTCConfig`, `GTCConfig`, `CoherenceConfig` and `InterferogramConfig`, all deriving from the abstract `GeocodingConfig` that carries the shared Terrain-Correction tail (`grid_spacing`, `dem`, resampling, standard-grid alignment, external-DEM handling). `RTCConfig` (terrain-flattened gamma-0 backscatter) and `GTCConfig` (beta-0 backscatter, geocoded only) share the abstract `BackscatterConfig` (`multilook`, `replace_zeros_with_nan`); only `RTCConfig` has the Terrain-Flattening settings `dem_oversampling` and `additional_overlap`. Each exposes `to_xml(snap_version=...)` and `to_mermaid()`. The band naming of a coregistered stack differs between SNAP 13 and 14, and two Coherence options exist only from SNAP 14, so the client passes the installed version in.
 
 `SNAPConfig` is the runtime side: `bin`, `rasterio_profile`, `max_workers`, `max_ram_gb`, `gpt_threads_per_job`, `gpt_cache_ratio`, `auxdata_path`, each defaulting to its `SNAP_*` environment variable, resolved into a per-worker Java heap, tile cache and thread count at construction.
 
-- `SNAPClient(file_manager, config=None)`: `create_backscatter(burst, crs, *, config, overwrite=False)`, `create_coherence(pair, crs, *, config, overwrite=False)`, `create_interferogram(pair, crs, *, config, overwrite=False)`. Each stages the SLC locally if it lives on S3, runs `gpt` in an isolated user directory that shares the auxdata cache, stamps the product's metadata and no-data value, and rewrites the result compressed to its final location.
-- `BurstProcessor(file_manager, config=None, *, show_progress=True, continue_on_error=True)`: the batch wrapper. `create_backscatter(bursts, crs, *, config=None, overwrite=False)`, `create_coherences(pairs, crs, *, config=None, overwrite=False)` and `create_interferograms(pairs, crs, *, config=None, overwrite=False)` run `SNAPConfig.resolved_max_workers` jobs in parallel and return an `OperationSummary`. `crs` must be a WGS 84 / UTM zone, north or south, since product file names record the zone; anything else raises `ValueError` before the first job. `SNAPClient.create_*` and the products' `from_burst()` / `from_burst_pair()` enforce the same. Nothing picks the zone automatically: a composite's inputs take the target cell's (`crs=cell.crs`), and `utm_zone_of(burst)` gives the zone holding a burst's footprint centre for bursts processed on their own.
+- `SNAPClient(file_manager, config=None)`: `create_backscatter(burst, crs, *, config, overwrite=False)` (an `RTCConfig` gives an `RTCProduct`, a `GTCConfig` a `GTCProduct`), `create_coherence(pair, crs, *, config, overwrite=False)`, `create_interferogram(pair, crs, *, config, overwrite=False)`. Each stages the SLC locally if it lives on S3, runs `gpt` in an isolated user directory that shares the auxdata cache, stamps the product's metadata and no-data value, and rewrites the result compressed to its final location.
+- `BurstProcessor(file_manager, config=None, *, show_progress=True, continue_on_error=True)`: the batch wrapper. `create_backscatter(bursts, crs, *, config=None, overwrite=False)` (RTC by default, GTC with `config=GTCConfig()`), `create_coherences(pairs, crs, *, config=None, overwrite=False)` and `create_interferograms(pairs, crs, *, config=None, overwrite=False)` run `SNAPConfig.resolved_max_workers` jobs in parallel and return an `OperationSummary`. `crs` must be a WGS 84 / UTM zone, north or south, since product file names record the zone; anything else raises `ValueError` before the first job. `SNAPClient.create_*` and the products' `from_burst()` / `from_burst_pair()` enforce the same. Nothing picks the zone automatically: a composite's inputs take the target cell's (`crs=cell.crs`), and `utm_zone_of(burst)` gives the zone holding a burst's footprint centre for bursts processed on their own.
 
-Results (`summary.py`): `OkResult[T]` (`source`, `result`, `skipped`), `ErrorResult` (`source`, `error`), and `OperationSummary[T]` with `n_total`, `n_processed`, `n_skipped`, `n_failed`, `products`, `failed_items`, `processing_time` and `print_summary()`. A per-item failure is a `BurstError` subclass and is recorded; a `ConfigurationError` (missing executable, unusable environment) propagates and stops the batch.
+Results (`summary.py`): `OkResult[T]` (`source`, `result`, `skipped`), `ErrorResult` (`source`, `error`), and `OperationSummary[T]` with `n_total`, `n_processed`, `n_skipped`, `n_failed`, `products`, `failed_items`, `processing_time`, `print_summary()` (failures grouped by error type and first message line, with counts) and `raise_on_failure(ignore=())`, which raises `OperationFailedError` listing the failed items and otherwise returns the summary, so it chains: `database.download(bursts).raise_on_failure()`. With `continue_on_error=True`, the default, a batch attempts every item and records the failures, and `raise_on_failure()` then fails once, after every product that could be made is written; the error's `summary` still holds those products, and a rerun skips them and retries only the failures, except bursts a `BurstDatabase` already found missing at the source, which the same database reports again without retrying (and records without raising, even with `continue_on_error=False`). `continue_on_error=False` stops at the first error instead. `ignore` takes error types whose failures are tolerated, such as `BurstNotFoundError` for bursts the source no longer serves; they stay in `failed_items` and are counted in the message. A per-item failure is a `BurstError` subclass and is recorded; a `ConfigurationError` (missing executable, unusable environment) propagates and stops the batch.
 
 ### Compositing (`resolution_weighter.py`)
 
@@ -289,14 +289,14 @@ pairs = cell_bursts.find_pairs(12).starting_within(window)
 ```python
 from pathlib import Path
 
-from s1bursts import BackscatterConfig, FileManager
+from s1bursts import FileManager, RTCConfig
 from s1bursts.snap_client import SNAPClient
 from s1bursts.summary import OkResult
 
 file_manager = FileManager(Path("/path/to/data"))
 snap_client = SNAPClient(file_manager)
 
-result = snap_client.create_backscatter(burst, crs=crs, config=BackscatterConfig())
+result = snap_client.create_backscatter(burst, crs=crs, config=RTCConfig())
 if isinstance(result, OkResult):
     rtc_product = result.result  # RTCProduct
 ```
@@ -304,16 +304,16 @@ if isinstance(result, OkResult):
 ### Process a collection
 
 ```python
-from s1bursts import BackscatterConfig, BurstProcessor
+from s1bursts import BurstProcessor, GTCConfig
 
 processor = BurstProcessor(file_manager)
 
-# Default config: RTC, Copernicus 30 m DEM, multilook (5, 1).
+# Default config: RTCConfig(), Copernicus 30 m DEM, multilook (5, 1).
 rtc_summary = processor.create_backscatter(bursts, crs=crs)
 print(f"Processed {rtc_summary.n_processed}/{rtc_summary.n_total} RTC products")
 
-# GTC instead of RTC
-processor.create_backscatter(bursts, crs=crs, config=BackscatterConfig(flatten_terrain=False))
+# GTC instead of RTC: the config type selects the product
+gtc_products = processor.create_backscatter(bursts, crs=crs, config=GTCConfig()).products
 ```
 
 ### Coherence and interferograms

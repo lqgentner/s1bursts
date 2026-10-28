@@ -24,6 +24,36 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   a burst's or burst pair's footprint, as the `crs` for bursts processed on
   their own. Products meant for a composite still take the cell's zone,
   `crs=cell.crs`.
+- `OperationSummary.raise_on_failure()` raises an `OperationFailedError`
+  listing the failed items, and otherwise returns the summary, so it chains:
+
+  ```python
+  # before
+  summary = database.download(bursts)
+  if summary.n_failed:
+      raise RuntimeError(...)
+  # after
+  database.download(bursts).raise_on_failure()
+  ```
+
+  A batch run with `continue_on_error=True` (the default) attempts every item
+  and still returns normally when every item failed; this is the check to
+  call after it. The error carries the summary, so the products that were made
+  stay within reach as `err.summary.products`, and the failures as
+  `err.failed_items`. Running the batch again skips the existing products and
+  retries only the failures; a `BurstDatabase` reports the bursts it already
+  found missing at the source again without retrying them. `ignore` tolerates
+  failures of the given error types: they do not raise but stay in
+  `failed_items`, and the message counts them.
+
+  ```python
+  # a burst CDSE no longer serves does not stop the run
+  database.download(bursts).raise_on_failure(ignore=BurstNotFoundError)
+  ```
+- `BurstDatabase.download()` accepts any iterable of bursts or burst pairs,
+  such as a list or a generator, besides a single `Burst` or `BurstPair` and
+  the collections. A burst listed more than once, such as one shared by two
+  pairs, is downloaded once.
 - Burst collections can be narrowed without touching `.df`. Each selection
   returns a new collection of the same type:
   `BurstCollection.within(time_range)` keeps the bursts acquired on a day of a
@@ -90,8 +120,6 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   - A burst missing from the burst-ID map raises `BurstNotInMapError`, a
     `LookupError`, instead of `KeyError`: replace `except KeyError:` with
     `except BurstNotInMapError:`.
-- `pyarrow>=17` is a direct dependency, to recognise a corrupt burst-ID map.
-  freezebase already required it, so nothing new is installed.
 - **Breaking:** the relative orbit number and pass direction columns of
   `BurstCollection.df` and `BurstPairCollection.df` lose their underscore,
   matching the `Burst` attributes. A data frame passed to either constructor
@@ -103,6 +131,29 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   # after
   bursts.df[bursts.df.rel_orbit_number == 66]  # or bursts.filter(rel_orbit_number=66)
   ```
+- **Breaking:** `BackscatterConfig` is split, so the config type selects the
+  product. `RTCConfig` gives terrain-flattened gamma-0 backscatter (RTC) and
+  holds the Terrain-Flattening settings `dem_oversampling` and
+  `additional_overlap`; `GTCConfig` gives beta-0 backscatter that is geocoded
+  only (GTC). `BackscatterConfig` remains as their abstract base, and
+  `flatten_terrain` is gone. `create_backscatter()` of `BurstProcessor` and
+  `SNAPClient` returns exactly `RTCProduct` or `GTCProduct` results, with RTC
+  still the default, so the `cast` is no longer needed.
+
+  ```python
+  # before
+  summary = processor.create_backscatter(
+      bursts, crs=crs, config=BackscatterConfig(flatten_terrain=False)
+  )
+  gtc = cast("list[GTCProduct]", summary.products)
+  processor.create_backscatter(bursts, crs=crs, config=BackscatterConfig(dem_oversampling=2.0))
+  # after
+  gtc = processor.create_backscatter(bursts, crs=crs, config=GTCConfig()).products
+  processor.create_backscatter(bursts, crs=crs, config=RTCConfig(dem_oversampling=2.0))
+  ```
+
+  A config annotated as `BackscatterConfig` no longer matches an overload of
+  `create_backscatter()`; annotate it as `RTCConfig | GTCConfig`.
 - **Breaking:** the `crs` of every `BurstProcessor.create_*` and
   `SNAPClient.create_*` method, and of the products' `from_burst()` and
   `from_burst_pair()`, must be a WGS 84 / UTM zone, north or south. Anything
@@ -121,8 +172,14 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.
+- `pyarrow>=17` is a direct dependency, to recognise a corrupt burst-ID map.
+  freezebase already required it, so nothing new is installed.
 - The default `SNAP_MAX_RAM_GB` is 8 GB instead of 4 GB to leave more heap for
   SNAP. Set `SNAP_MAX_RAM_GB=4` to keep the old budget.
+- `OperationSummary.print_summary()` groups failures by error type and the
+  first line of the message, with a count and a few example items each, so an
+  outage prints one row such as `2318 × BurstDownloadError: 503 …` instead
+  of one per burst.
 
 ### Fixed
 

@@ -42,7 +42,9 @@ from s1bursts.snap_graph import (
     BackscatterConfig,
     CoherenceConfig,
     GeocodingConfig,
+    GTCConfig,
     InterferogramConfig,
+    RTCConfig,
 )
 
 if TYPE_CHECKING:
@@ -780,14 +782,14 @@ def backscatter_metadata(
     Raises
     ------
     ValueError
-        If the product and the config disagree on terrain flattening, which
-        would pair a band count from one with units from the other.
+        If the product and the config disagree on terrain flattening, an RTC
+        product with a ``GTCConfig`` or the reverse, which would pair a band
+        count from one with units from the other.
     """
     gamma0 = product.is_terrain_flattened
-    if gamma0 is not config.flatten_terrain:
+    if gamma0 is not isinstance(config, RTCConfig):
         msg = (
-            f"{type(product).__name__} and BackscatterConfig disagree on terrain "
-            f"flattening: product says {gamma0}, config says {config.flatten_terrain}."
+            f"{type(product).__name__} and {type(config).__name__} disagree on terrain flattening."
         )
         raise ValueError(msg)
     tags = {
@@ -948,7 +950,7 @@ def burst_metadata(
         If the product and config do not describe the same kind of product.
     """
     match product, config:
-        case ((RTCProduct() | GTCProduct()), BackscatterConfig()):
+        case (RTCProduct(), RTCConfig()) | (GTCProduct(), GTCConfig()):
             return backscatter_metadata(product, config, snap_version=snap_version)
         case CoherenceProduct(), CoherenceConfig():
             return coherence_metadata(product, config, snap_version=snap_version)

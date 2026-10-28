@@ -13,6 +13,7 @@ import pytest
 from s1bursts.errors import ConfigurationError, SnapProcessingError
 from s1bursts.processor import BurstProcessor
 from s1bursts.snap_client import SNAPConfig
+from s1bursts.snap_graph import CoherenceConfig, GTCConfig, RTCConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationSummary
 
 if TYPE_CHECKING:
@@ -200,6 +201,36 @@ class TestDispatch:
 
         cast("MagicMock", processor.snap_client).create_backscatter.assert_called_once()
         assert summary.products == ["rtc"]
+
+    def test_create_backscatter_defaults_to_rtc(self, processor: BurstProcessor) -> None:
+        client = cast("MagicMock", processor.snap_client)
+        client.create_backscatter.return_value = OkResult(source="b", result="rtc")
+
+        processor.create_backscatter([MagicMock()], crs="EPSG:32632")
+
+        assert isinstance(client.create_backscatter.call_args.kwargs["config"], RTCConfig)
+
+    def test_create_backscatter_passes_a_gtc_config_on(self, processor: BurstProcessor) -> None:
+        client = cast("MagicMock", processor.snap_client)
+        client.create_backscatter.return_value = OkResult(source="b", result="gtc")
+        config = GTCConfig(multilook=None)
+
+        summary = processor.create_backscatter(
+            [MagicMock()],
+            crs="EPSG:32632",
+            config=config,
+        )
+
+        assert client.create_backscatter.call_args.kwargs["config"] is config
+        assert summary.products == ["gtc"]
+
+    def test_create_backscatter_rejects_another_config(self, processor: BurstProcessor) -> None:
+        with pytest.raises(TypeError, match="must be an RTCConfig or a GTCConfig"):
+            # The wrong type is what is under test.
+            # pyrefly: ignore [no-matching-overload]
+            processor.create_backscatter([MagicMock()], crs="EPSG:32632", config=CoherenceConfig())
+
+        cast("MagicMock", processor.snap_client).create_backscatter.assert_not_called()
 
     def test_create_coherences(self, processor: BurstProcessor) -> None:
         pair = MagicMock()

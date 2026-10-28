@@ -359,10 +359,7 @@ def process(scene: Scene, work: Path) -> Path:
         return found
 
     reference, secondary = search(scene.reference_date), search(scene.secondary_date)
-    summary = database.download(reference + secondary, endpoint="odata")
-    if summary.n_failed:
-        msg = f"download failed: {[str(item.error) for item in summary.failed_items]}"
-        raise RuntimeError(msg)
+    database.download(reference + secondary, endpoint="odata").raise_on_failure()
 
     processor = BurstProcessor(
         manager,
@@ -376,9 +373,7 @@ def process(scene: Scene, work: Path) -> Path:
         config=processing_config(),
         overwrite=True,
     )
-    if result.n_failed:
-        msg = f"processing failed: {[str(item.error) for item in result.failed_items]}"
-        raise RuntimeError(msg)
+    result.raise_on_failure()
 
     # `get_product_path` may hand back a UPath for remote stores; these
     # products are always local, so a plain string round-trip is safe.

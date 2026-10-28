@@ -23,7 +23,9 @@ from s1bursts.snap_graph import (
     BackscatterConfig,
     CoherenceConfig,
     GeocodingConfig,
+    GTCConfig,
     InterferogramConfig,
+    RTCConfig,
 )
 from s1bursts.time_range import TimeRange
 
@@ -35,8 +37,10 @@ __all__ = [
     "BurstProcessor",
     "CoherenceConfig",
     "FileManager",
+    "GTCConfig",
     "GeocodingConfig",
     "InterferogramConfig",
+    "RTCConfig",
     "ResolutionWeighter",
     "SNAPConfig",
     "SearchQuery",

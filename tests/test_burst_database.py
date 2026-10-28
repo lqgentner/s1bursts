@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 from freezebase.errors import DownloadError
@@ -10,7 +12,7 @@ import pytest
 from requests import HTTPError
 from shapely.geometry import box
 
-from s1bursts.burst import Burst, BurstPair
+from s1bursts.burst import Burst, BurstCollection, BurstPair
 from s1bursts.cdse import MAX_PAGE_SIZE, CDSEResponse
 from s1bursts.database import BurstDatabase
 from s1bursts.errors import (
@@ -25,6 +27,9 @@ from s1bursts.query import SearchQuery
 from s1bursts.summary import ErrorResult, OkResult
 from s1bursts.time_range import TimeRange
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
 
 def _make_database() -> BurstDatabase:
     file_manager = MagicMock()
@@ -32,12 +37,12 @@ def _make_database() -> BurstDatabase:
     return BurstDatabase(file_manager=file_manager, auth=MagicMock())
 
 
-def _make_burst() -> Burst:
+def _make_burst(date: str = "2016-07-24") -> Burst:
     return Burst(
         burst_id=297227,
         sub_swath="IW3",
         polarization="VV",
-        date=Timestamp("2016-07-24"),
+        date=Timestamp(date),
     )
 
 
@@ -88,12 +93,77 @@ class TestQueryToFilters:
 
 
 class TestDownloadDispatch:
-    def test_rejects_unknown_type(self) -> None:
+    def test_rejects_an_item_that_is_not_a_burst(self) -> None:
         db = _make_database()
 
-        with pytest.raises(TypeError, match="Expected `bursts` of type"):
+        with pytest.raises(TypeError, match="received an item of type 'str'"):
+            # The wrong type is what is under test.
             # pyrefly: ignore [bad-argument-type]
             db.download(["not-a-burst"])
+
+    def test_rejects_a_non_iterable(self) -> None:
+        db = _make_database()
+
+        with pytest.raises(TypeError, match="iterable of them, received 'int'"):
+            # The wrong type is what is under test.
+            # pyrefly: ignore [bad-argument-type]
+            db.download(30346)
+
+    @pytest.mark.parametrize("container", [list, tuple, iter, BurstCollection.from_bursts])
+    def test_accepts_any_iterable_of_bursts(
+        self,
+        container: Callable[[list[Burst]], Iterable[Burst]],
+    ) -> None:
+        db = _make_database()
+        bursts = [_make_burst(), _make_burst(date="2016-08-05")]
+
+        with patch.object(
+            db,
+            "_download_single_burst",
+            side_effect=lambda b, _e: OkResult(source=b, result=b),
+        ) as mock_download:
+            summary = db.download(container(bursts))
+
+        # Downloads run in a thread pool, so the call order is not fixed.
+        assert Counter(c.args[0] for c in mock_download.call_args_list) == Counter(bursts)
+        assert summary.n_processed == 2
+
+    def test_downloads_a_burst_shared_by_two_pairs_once(self) -> None:
+        db = _make_database()
+        first, second, third = (
+            _make_burst(date=d) for d in ("2016-07-24", "2016-08-05", "2016-08-17")
+        )
+        # Equal to `second` but a separate object, as two pairs built from one
+        # search would hold.
+        second_again = _make_burst(date="2016-08-05")
+        assert second_again == second
+        assert second_again is not second
+        pairs = [BurstPair(first, second), BurstPair(second_again, third)]
+
+        with patch.object(
+            db,
+            "_download_single_burst",
+            side_effect=lambda b, _e: OkResult(source=b, result=b),
+        ) as mock_download:
+            summary = db.download(pair for pair in pairs)
+
+        downloaded = Counter(c.args[0] for c in mock_download.call_args_list)
+        assert downloaded == Counter([first, second, third])
+        assert summary.n_total == 3
+
+    def test_accepts_a_mixed_list(self) -> None:
+        db = _make_database()
+        pair = BurstPair(_make_burst(), _make_burst(date="2016-08-05"))
+        single = _make_burst(date="2016-08-17")
+
+        with patch.object(
+            db,
+            "_download_single_burst",
+            side_effect=lambda b, _e: OkResult(source=b, result=b),
+        ):
+            summary = db.download([pair, single])
+
+        assert summary.n_processed == 3
 
     def test_rejects_unknown_endpoint(self) -> None:
         db = _make_database()

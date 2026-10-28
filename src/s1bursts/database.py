@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import threading
@@ -12,12 +13,7 @@ from freezebase.errors import DownloadError
 from freezebase.progress import create_progress
 from requests import HTTPError
 
-from s1bursts.burst import (
-    Burst,
-    BurstCollection,
-    BurstPair,
-    BurstPairCollection,
-)
+from s1bursts.burst import Burst, BurstCollection, BurstPair
 from s1bursts.cdse import MAX_PAGE_SIZE, CDSEAuth, CDSEBurstClient
 from s1bursts.errors import (
     BurstDownloadError,
@@ -62,7 +58,15 @@ class BurstDatabase:
     show_progress
         Whether to show progress bars during downloads.
     continue_on_error
-        Whether to continue downloading after individual failures.
+        Whether to continue downloading after individual failures. ``True``,
+        the default, attempts every burst and records each failure in the
+        summary, so one missing burst does not end a long download; ``False``
+        raises at the first burst that fails on both endpoints. A burst this
+        database already found missing at the source is not requested again:
+        it is recorded as failed without raising, whichever the setting, and a
+        rerun on the same database reports it again rather than retrying it.
+        Follow a run with ``OperationSummary.raise_on_failure()`` to fail once
+        all bursts have been attempted.
     default_endpoint
         Default download endpoint. If a download fails, the other endpoint
         is tried automatically.
@@ -138,7 +142,7 @@ class BurstDatabase:
 
     def download(
         self,
-        bursts: BurstCollection | BurstPairCollection | Burst | BurstPair,
+        bursts: Burst | BurstPair | Iterable[Burst | BurstPair],
         *,
         overwrite: bool = False,
         max_workers: int = 5,
@@ -149,7 +153,11 @@ class BurstDatabase:
         Parameters
         ----------
         bursts
-            Bursts to download.
+            Bursts to download: a single ``Burst`` or ``BurstPair``, or any
+            iterable of them, such as a ``BurstCollection``, a
+            ``BurstPairCollection``, a list or a generator. A pair downloads
+            both of its bursts, and a burst listed more than once, for example
+            one shared by two pairs, is downloaded once.
         overwrite
             Whether to overwrite existing files.
         max_workers
@@ -163,26 +171,14 @@ class BurstDatabase:
         -------
         OperationSummary
             Summary of download results.
+
+        Raises
+        ------
+        TypeError
+            If an item is neither a ``Burst`` nor a ``BurstPair``.
         """
         start_time = time.time()
-
-        # Convert input to burst list
-        match bursts:
-            case BurstCollection():
-                burst_list = list(bursts)
-            case BurstPairCollection():
-                burst_list = list(bursts.unpair())
-            case Burst():
-                burst_list = [bursts]
-            case BurstPair():
-                burst_list = [bursts.primary, bursts.secondary]
-            case _:
-                msg = (
-                    "Expected `bursts` of type "
-                    "BurstCollection | BurstPairCollection | Burst | BurstPair, "
-                    f"received '{type(bursts).__name__}'."
-                )
-                raise TypeError(msg)
+        burst_list = self._unique_bursts(bursts)
 
         results: list[OperationResult[Burst]] = []
 
@@ -233,6 +229,31 @@ class BurstDatabase:
             start_time=start_time,
             end_time=time.time(),
         )
+
+    @staticmethod
+    def _unique_bursts(bursts: Burst | BurstPair | Iterable[Burst | BurstPair]) -> list[Burst]:
+        """Flatten the input of ``download`` to its distinct bursts, in input order."""
+        expected = "Expected `bursts` to be a Burst, a BurstPair or an iterable of them"
+        if isinstance(bursts, (Burst, BurstPair)):
+            items: Iterable[Burst | BurstPair] = [bursts]
+        elif isinstance(bursts, Iterable):
+            items = bursts
+        else:
+            msg = f"{expected}, received '{type(bursts).__name__}'."
+            raise TypeError(msg)
+        # Keyed by burst equality, so concurrent downloads never write one file twice.
+        unique: dict[Burst, None] = {}
+        for item in items:
+            match item:
+                case Burst():
+                    unique[item] = None
+                case BurstPair():
+                    unique[item.primary] = None
+                    unique[item.secondary] = None
+                case _:
+                    msg = f"{expected}, received an item of type '{type(item).__name__}'."
+                    raise TypeError(msg)
+        return list(unique)
 
     def _download_single_burst(self, burst: Burst, endpoint: Endpoint) -> OperationResult[Burst]:
         """Download a single burst using specified endpoint with fallback."""

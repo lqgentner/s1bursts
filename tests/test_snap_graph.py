@@ -13,7 +13,9 @@ from s1bursts.snap_graph import (
     BackscatterConfig,
     CoherenceConfig,
     GeocodingConfig,
+    GTCConfig,
     InterferogramConfig,
+    RTCConfig,
     stack_band_suffixes,
     supports_coherence_options,
     xml_to_mermaid,
@@ -84,17 +86,17 @@ def _assert_xml_equal(expected_xml: str, actual_xml: str) -> None:
 GOLDEN_CASES = [
     pytest.param(
         "S1_SLCtoRTC.xml",
-        BackscatterConfig(),
+        RTCConfig(),
         id="rtc-default",
     ),
     pytest.param(
         "S1_SLCtoRTC-noML.xml",
-        BackscatterConfig(multilook=None),
+        RTCConfig(multilook=None),
         id="rtc-no-multilook",
     ),
     pytest.param(
         "S1_SLCtoGTC.xml",
-        BackscatterConfig(flatten_terrain=False),
+        GTCConfig(),
         id="gtc-default",
     ),
     pytest.param(
@@ -109,7 +111,7 @@ GOLDEN_CASES = [
     ),
     pytest.param(
         "S1_SLCtoRTC-swissALTI3D.xml",
-        BackscatterConfig(dem=_SWISSALTI3D, external_dem_apply_egm=False),
+        RTCConfig(dem=_SWISSALTI3D, external_dem_apply_egm=False),
         id="rtc-swissalti3d",
     ),
     pytest.param(
@@ -127,7 +129,7 @@ GOLDEN_CASES = [
 @pytest.mark.parametrize(("fixture", "config"), GOLDEN_CASES)
 def test_dynamic_graph_matches_fixture(
     fixture: str,
-    config: BackscatterConfig | CoherenceConfig | InterferogramConfig,
+    config: RTCConfig | GTCConfig | CoherenceConfig | InterferogramConfig,
 ) -> None:
     expected_xml = (FIXTURES / fixture).read_text()
     actual_xml = config.to_xml()
@@ -181,9 +183,10 @@ def test_interferogram_intensity_expressions_follow_the_snap_version(
         assert fragment not in xml
 
 
-def test_backscatter_graph_ignores_the_snap_version() -> None:
+@pytest.mark.parametrize("config", [RTCConfig(), GTCConfig()], ids=["rtc", "gtc"])
+def test_backscatter_graph_ignores_the_snap_version(config: RTCConfig | GTCConfig) -> None:
     """It names no stack bands and has no version-dependent options."""
-    assert BackscatterConfig().to_xml(snap_version=(14, 0, 0)) == BackscatterConfig().to_xml()
+    assert config.to_xml(snap_version=(14, 0, 0)) == config.to_xml()
 
 
 # ---------------------------------------------------------------------------
@@ -269,11 +272,11 @@ def test_coherence_mermaid_takes_the_snap_version() -> None:
 
 
 def test_backscatter_output_bands_rtc() -> None:
-    assert BackscatterConfig().output_bands == ["gamma0", "scattering_area"]
+    assert RTCConfig().output_bands == ["gamma0", "scattering_area"]
 
 
 def test_backscatter_output_bands_gtc() -> None:
-    assert BackscatterConfig(flatten_terrain=False).output_bands == ["beta0"]
+    assert GTCConfig().output_bands == ["beta0"]
 
 
 def test_coherence_output_bands() -> None:
@@ -296,7 +299,7 @@ def test_interferogram_output_bands() -> None:
 
 def test_external_dem_path_emits_external_dem_name() -> None:
     dem = Path("/data/dem/swissalti3d-4326-ellipsoid.tif")
-    cfg = BackscatterConfig(dem=dem)
+    cfg = RTCConfig(dem=dem)
     xml = cfg.to_xml()
     root = fromstring(xml)
     dem_names = [el.text for el in root.iter("demName")]
@@ -308,7 +311,7 @@ def test_external_dem_path_emits_external_dem_name() -> None:
 
 
 def test_builtin_dem_emits_no_external_file() -> None:
-    cfg = BackscatterConfig()
+    cfg = RTCConfig()
     root = fromstring(cfg.to_xml())
     for ext in root.iter("externalDEMFile"):
         assert ext.text is None or ext.text == ""
@@ -316,7 +319,7 @@ def test_builtin_dem_emits_no_external_file() -> None:
 
 def test_external_dem_string_path_coerced_to_path() -> None:
     dem = "/data/dem/swissalti3d-4326-ellipsoid.tif"
-    cfg = BackscatterConfig(dem=dem)
+    cfg = RTCConfig(dem=dem)
     root = fromstring(cfg.to_xml())
     dem_names = [el.text for el in root.iter("demName")]
     dem_files = [el.text for el in root.iter("externalDEMFile")]
@@ -330,7 +333,7 @@ def test_external_dem_string_path_coerced_to_path() -> None:
 
 
 def test_multilook_none_skips_multilook_node() -> None:
-    cfg = BackscatterConfig(multilook=None)
+    cfg = RTCConfig(multilook=None)
     xml = cfg.to_xml()
     root = fromstring(xml)
     operators = {n.find("operator").text for n in root.findall("./node")}
@@ -338,7 +341,7 @@ def test_multilook_none_skips_multilook_node() -> None:
 
 
 def test_multilook_tuple_inserts_multilook_node() -> None:
-    cfg = BackscatterConfig(multilook=(7, 2))
+    cfg = RTCConfig(multilook=(7, 2))
     xml = cfg.to_xml()
     root = fromstring(xml)
     ml = root.find('./node[@id="Multilook"]')
@@ -358,10 +361,30 @@ def test_coherence_window_must_be_positive() -> None:
 
 
 def test_config_is_frozen() -> None:
-    cfg = BackscatterConfig()
+    cfg = RTCConfig()
     with pytest.raises(ValueError, match="frozen"):
         # pyrefly: ignore [read-only]
-        cfg.flatten_terrain = False
+        cfg.multilook = None
+
+
+def test_backscatter_config_is_abstract() -> None:
+    # The shared base of RTCConfig and GTCConfig does not say which graph to build.
+    with pytest.raises(TypeError, match="abstract"):
+        # pyrefly: ignore [bad-instantiation]
+        BackscatterConfig()
+
+
+@pytest.mark.parametrize("field", ["dem_oversampling", "additional_overlap", "flatten_terrain"])
+def test_gtc_config_rejects_terrain_flattening_settings(field: str) -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        GTCConfig.model_validate({field: 1.0})
+
+
+def test_rtc_and_gtc_graphs_differ_only_in_terrain_flattening() -> None:
+    assert "Terrain-Flattening" in RTCConfig().to_xml()
+    assert "Terrain-Flattening" not in GTCConfig().to_xml()
+    assert "Terrain-Flattening" in RTCConfig().to_mermaid()
+    assert "Terrain-Flattening" not in GTCConfig().to_mermaid()
 
 
 def test_geocoding_config_is_abstract() -> None:
@@ -378,7 +401,7 @@ def test_geocoding_config_is_abstract() -> None:
 
 
 def test_mermaid_contains_expected_nodes_for_backscatter() -> None:
-    cfg = BackscatterConfig()
+    cfg = RTCConfig()
     mermaid = cfg.to_mermaid()
     assert mermaid.startswith("flowchart LR")
     for op in [
@@ -402,7 +425,7 @@ def test_mermaid_contains_two_orbit_files_for_coherence() -> None:
 
 
 def test_mermaid_passthrough_xml_to_mermaid_function() -> None:
-    cfg = BackscatterConfig()
+    cfg = RTCConfig()
     direct = xml_to_mermaid(cfg.to_xml())
     assert direct == cfg.to_mermaid()
 
@@ -413,28 +436,28 @@ class TestGeocodingValidation:
     @pytest.mark.parametrize("spacing", [0, -10])
     def test_rejects_non_positive_grid_spacing(self, spacing: float) -> None:
         with pytest.raises(ValidationError, match="grid_spacing"):
-            BackscatterConfig(grid_spacing=spacing)
+            RTCConfig(grid_spacing=spacing)
 
     @pytest.mark.parametrize("oversampling", [0, -1.5])
     def test_rejects_non_positive_dem_oversampling(self, oversampling: float) -> None:
         with pytest.raises(ValidationError, match="dem_oversampling"):
-            BackscatterConfig(dem_oversampling=oversampling)
+            RTCConfig(dem_oversampling=oversampling)
 
     def test_rejects_an_unknown_image_resampling_method(self) -> None:
         with pytest.raises(ValidationError, match="img_resampling"):
             # pyrefly: ignore [bad-argument-type]
-            BackscatterConfig(img_resampling="LANCZOS")
+            RTCConfig(img_resampling="LANCZOS")
 
     def test_rejects_an_unknown_dem_resampling_method(self) -> None:
         with pytest.raises(ValidationError, match="dem_resampling"):
             # pyrefly: ignore [bad-argument-type]
-            BackscatterConfig(dem_resampling="MAGIC")
+            RTCConfig(dem_resampling="MAGIC")
 
     def test_rejects_lower_case_resampling_method(self) -> None:
         """SNAP's parameter values are upper case; a lower-case name is silently ignored."""
         with pytest.raises(ValidationError, match="img_resampling"):
             # pyrefly: ignore [bad-argument-type]
-            BackscatterConfig(img_resampling="bilinear_interpolation")
+            RTCConfig(img_resampling="bilinear_interpolation")
 
     @pytest.mark.parametrize(
         "method",
@@ -451,18 +474,18 @@ class TestGeocodingValidation:
     def test_accepts_every_supported_image_resampling_method(self, method: str) -> None:
         # `method` is parametrized as a plain str.
         # pyrefly: ignore [bad-argument-type]
-        config = BackscatterConfig(img_resampling=method)
+        config = RTCConfig(img_resampling=method)
 
         assert f"<imgResamplingMethod>{method}</imgResamplingMethod>" in config.to_xml()
 
     def test_dem_resampling_additionally_accepts_delaunay(self) -> None:
         """SNAP offers Delaunay interpolation for the DEM but not for the image."""
-        config = BackscatterConfig(dem_resampling="DELAUNAY_INTERPOLATION")
+        config = RTCConfig(dem_resampling="DELAUNAY_INTERPOLATION")
 
         assert "DELAUNAY_INTERPOLATION" in config.to_xml()
         with pytest.raises(ValidationError):
             # pyrefly: ignore [bad-argument-type]
-            BackscatterConfig(img_resampling="DELAUNAY_INTERPOLATION")
+            RTCConfig(img_resampling="DELAUNAY_INTERPOLATION")
 
     def test_accepts_a_fine_grid_spacing(self) -> None:
         assert CoherenceConfig(grid_spacing=0.5).grid_spacing == 0.5

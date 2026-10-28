@@ -6,16 +6,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, overload
 
 from freezebase.progress import create_progress
 
 from s1bursts.product import _utm_zone_crs
 from s1bursts.snap_client import SNAPClient, SNAPConfig
 from s1bursts.snap_graph import (
-    BackscatterConfig,
     CoherenceConfig,
+    GTCConfig,
     InterferogramConfig,
+    RTCConfig,
 )
 from s1bursts.summary import ErrorResult, OperationResult, OperationSummary
 
@@ -53,7 +54,11 @@ class BurstProcessor:
     show_progress
         Whether to show progress bars.
     continue_on_error
-        Whether to continue processing after an error.
+        Whether to continue processing after an error. ``True``, the default,
+        attempts every item and records each failure in the summary, so one bad
+        burst does not end a long job; ``False`` raises at the first error.
+        Follow a run with ``OperationSummary.raise_on_failure()`` to fail
+        once all items have been attempted.
     """
 
     def __init__(
@@ -70,15 +75,41 @@ class BurstProcessor:
         self.show_progress = show_progress
         self.continue_on_error = continue_on_error
 
+    @overload
     def create_backscatter(
         self,
         bursts: Iterable[Burst],
         crs: CRSInput,
         *,
-        config: BackscatterConfig | None = None,
+        config: GTCConfig,
         overwrite: bool = False,
-    ) -> OperationSummary[RTCProduct | GTCProduct]:
-        """Create backscatter products from bursts.
+    ) -> OperationSummary[GTCProduct]: ...
+
+    @overload
+    def create_backscatter(
+        self,
+        bursts: Iterable[Burst],
+        crs: CRSInput,
+        *,
+        config: RTCConfig | None = None,
+        overwrite: bool = False,
+    ) -> OperationSummary[RTCProduct]: ...
+
+    def create_backscatter(
+        self,
+        bursts: Iterable[Burst],
+        crs: CRSInput,
+        *,
+        config: RTCConfig | GTCConfig | None = None,
+        overwrite: bool = False,
+    ) -> OperationSummary[RTCProduct] | OperationSummary[GTCProduct]:
+        """Create backscatter products from bursts, terrain-flattened (RTC) or geocoded (GTC).
+
+        The type of ``config`` selects the product. ``RTCConfig``, the default,
+        gives terrain-flattened gamma-0 backscatter (``RTCProduct``), called
+        Normalised Radar Backscatter (NRB) in CEOS-ARD and RTC-S1 by OPERA.
+        ``GTCConfig`` gives beta-0 backscatter that is geocoded only, not
+        terrain-flattened (``GTCProduct``).
 
         Parameters
         ----------
@@ -92,34 +123,47 @@ class BurstProcessor:
             EPSG code. For composites, pass the target cell's ``crs``; for
             single bursts, ``utm_zone_of(burst)`` gives the zone of a burst.
         config
-            Graph-shape configuration; defaults to ``BackscatterConfig()``
-            (RTC, Copernicus 30m DEM, multilook ``(5, 1)``).
+            Graph-shape configuration, ``RTCConfig`` or ``GTCConfig``; defaults
+            to ``RTCConfig()`` (Copernicus 30m DEM, multilook ``(5, 1)``).
         overwrite
             Whether to overwrite existing products.
 
         Returns
         -------
         OperationSummary
-            Summary of processing results.
+            Summary of processing results, holding ``RTCProduct`` or
+            ``GTCProduct`` as ``config`` selects.
 
         Raises
         ------
+        TypeError
+            If ``config`` is neither an ``RTCConfig`` nor a ``GTCConfig``.
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
             processed.
         """
-        cfg = config or BackscatterConfig()
-        return self._process_collection(
-            bursts,
-            partial(
-                self.snap_client.create_backscatter,
-                # Checked once, so an invalid CRS fails before any burst is processed.
-                crs=_utm_zone_crs(crs),
-                config=cfg,
-                overwrite=overwrite,
-            ),
-            item_description="RTC" if cfg.flatten_terrain else "GTC",
-        )
+        # Checked once, so an invalid CRS fails before any burst is processed.
+        utm_crs = _utm_zone_crs(crs)
+        if config is None or isinstance(config, RTCConfig):
+            rtc_config = config or RTCConfig()
+
+            def create_rtc(burst: Burst) -> OperationResult[RTCProduct]:
+                return self.snap_client.create_backscatter(
+                    burst, utm_crs, config=rtc_config, overwrite=overwrite
+                )
+
+            return self._process_collection(bursts, create_rtc, item_description="RTC")
+        if isinstance(config, GTCConfig):
+            gtc_config = config
+
+            def create_gtc(burst: Burst) -> OperationResult[GTCProduct]:
+                return self.snap_client.create_backscatter(
+                    burst, utm_crs, config=gtc_config, overwrite=overwrite
+                )
+
+            return self._process_collection(bursts, create_gtc, item_description="GTC")
+        msg = f"`config` must be an RTCConfig or a GTCConfig, received '{type(config).__name__}'."
+        raise TypeError(msg)
 
     def create_coherences(
         self,

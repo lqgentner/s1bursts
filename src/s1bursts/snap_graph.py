@@ -677,6 +677,8 @@ def _ifg_replace_zeros_target_bands() -> list[dict[str, Any]]:
 
 def build_backscatter_graph(cfg: BackscatterConfig) -> str:
     """Emit the SNAP GPT XML for the backscatter (RTC or GTC) pipeline."""
+    # Only RTC has Terrain-Flattening, and only RTCConfig its settings.
+    rtc = cfg if isinstance(cfg, RTCConfig) else None
     g = _new_graph()
     src = _apply_orbit_file(g, "Apply-Orbit-File", "${source}")
     src = _thermal_noise_removal(g, "ThermalNoiseRemoval", src)
@@ -691,17 +693,17 @@ def build_backscatter_graph(cfg: BackscatterConfig) -> str:
             n_rg_looks=rg,
             n_az_looks=az,
         )
-    if cfg.flatten_terrain:
+    if rtc is not None:
         src = _terrain_flattening(
             g,
             "Terrain-Flattening",
             src,
-            dem=cfg.dem,
-            dem_resampling=cfg.dem_resampling,
-            nodata=cfg.external_dem_nodata,
-            apply_egm=cfg.external_dem_apply_egm,
-            additional_overlap=cfg.additional_overlap,
-            oversampling=cfg.dem_oversampling,
+            dem=rtc.dem,
+            dem_resampling=rtc.dem_resampling,
+            nodata=rtc.external_dem_nodata,
+            apply_egm=rtc.external_dem_apply_egm,
+            additional_overlap=rtc.additional_overlap,
+            oversampling=rtc.dem_oversampling,
         )
     if cfg.replace_zeros_with_nan:
         src = _band_maths(
@@ -709,7 +711,7 @@ def build_backscatter_graph(cfg: BackscatterConfig) -> str:
             "ReplaceZerosWithNoData",
             src,
             target_bands=_replace_zeros_target_bands_backscatter(
-                flatten_terrain=cfg.flatten_terrain,
+                flatten_terrain=rtc is not None,
             ),
         )
     _terrain_correction(
@@ -1017,16 +1019,14 @@ class GeocodingConfig(BaseModel):
 
 
 class BackscatterConfig(GeocodingConfig):
-    """Configuration for the backscatter (RTC / GTC) pipeline.
+    """Settings shared by the backscatter pipelines, RTC and GTC.
 
-    Inherits every parameter of ``GeocodingConfig``.
+    Abstract: pass ``RTCConfig`` for terrain-flattened gamma-0 backscatter or
+    ``GTCConfig`` for beta-0 backscatter that is geocoded only. Inherits every
+    parameter of ``GeocodingConfig``.
 
     Parameters
     ----------
-    flatten_terrain
-        Insert a ``Terrain-Flattening`` step and produce a radiometrically
-        terrain-corrected (RTC, gamma0) product. ``False`` skips it and
-        produces a geometrically terrain-corrected (GTC, beta0) product.
     multilook
         ``(n_rg_looks, n_az_looks)`` applied after debursting, before terrain
         flattening; ``None`` skips the ``Multilook`` step. Multilooking here
@@ -1036,28 +1036,18 @@ class BackscatterConfig(GeocodingConfig):
         SNAP's ``grSquarePixel`` option, which derives the azimuth looks from
         the range looks and the local geometry and discards the requested
         ``n_az_looks`` is pinned off. Therefore, the looks given are the looks applied.
-    dem_oversampling
-        DEM oversampling factor used by ``Terrain-Flattening``. Must be positive.
-    additional_overlap
-        Additional overlap percentage used by ``Terrain-Flattening`` when
-        searching for terrain contributions outside the tile.
     replace_zeros_with_nan
         Convert SNAP's zero fill value to NaN, so no-data does not enter later
         averages as a valid low value.
     """
 
-    flatten_terrain: bool = True
     multilook: tuple[_PositiveInt, _PositiveInt] | None = (5, 1)
-    dem_oversampling: _PositiveFloat = 1.0
-    additional_overlap: float = Field(default=0.2, ge=0.0)
     replace_zeros_with_nan: bool = True
 
     @property
+    @abstractmethod
     def output_bands(self) -> list[str]:
         """Names assigned to the output GeoTIFF bands by the SNAP client."""
-        if self.flatten_terrain:
-            return ["gamma0", "scattering_area"]
-        return ["beta0"]
 
     @override
     def to_xml(self, *, snap_version: tuple[int, ...] | None = None) -> str:
@@ -1067,6 +1057,47 @@ class BackscatterConfig(GeocodingConfig):
         Back-Geocoding bands, so the version does not change it.
         """
         return build_backscatter_graph(self)
+
+
+class RTCConfig(BackscatterConfig):
+    """Configuration for terrain-flattened backscatter (RTC).
+
+    Gamma-0 backscatter, radiometrically terrain corrected: called Normalised
+    Radar Backscatter (NRB) in CEOS-ARD and RTC-S1 by OPERA. The product also
+    carries the local scattering area that terrain flattening divides by.
+    Inherits every parameter of ``BackscatterConfig``.
+
+    Parameters
+    ----------
+    dem_oversampling
+        DEM oversampling factor used by ``Terrain-Flattening``. Must be positive.
+    additional_overlap
+        Additional overlap percentage used by ``Terrain-Flattening`` when
+        searching for terrain contributions outside the tile.
+    """
+
+    dem_oversampling: _PositiveFloat = 1.0
+    additional_overlap: float = Field(default=0.2, ge=0.0)
+
+    @property
+    @override
+    def output_bands(self) -> list[str]:
+        """Names assigned to the output GeoTIFF bands by the SNAP client."""
+        return ["gamma0", "scattering_area"]
+
+
+class GTCConfig(BackscatterConfig):
+    """Configuration for geocoded backscatter (GTC).
+
+    Beta-0 backscatter, geometrically terrain corrected only: geocoded, but not
+    terrain-flattened. Takes exactly the parameters of ``BackscatterConfig``.
+    """
+
+    @property
+    @override
+    def output_bands(self) -> list[str]:
+        """Names assigned to the output GeoTIFF bands by the SNAP client."""
+        return ["beta0"]
 
 
 class CoherenceConfig(GeocodingConfig):
@@ -1173,8 +1204,10 @@ __all__ = [
     "BackscatterConfig",
     "CoherenceConfig",
     "DEMResamplingMethod",
+    "GTCConfig",
     "GeocodingConfig",
     "InterferogramConfig",
+    "RTCConfig",
     "ResamplingMethod",
     "build_backscatter_graph",
     "build_coherence_graph",

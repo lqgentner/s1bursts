@@ -1,7 +1,8 @@
 """Exception hierarchy for the Sentinel-1 pipeline.
 
-The types here separate two kinds of failure so that batch loops can catch only
-the ones worth recording per item and let the rest abort the run:
+The types here separate three kinds of failure, so that batch loops catch only
+the ones worth recording per item and let the rest abort the run, and callers
+can still fail on a batch that finished with failures:
 
 - ``BurstError`` (and subclasses) are *recoverable, per-item* failures — a
   single burst could not be downloaded or processed. Batch loops catch this base
@@ -12,6 +13,9 @@ the ones worth recording per item and let the rest abort the run:
   do not catch it. The one exception is the credentials of a download
   endpoint: ``BurstDatabase`` turns their absence into a per-burst
   ``BurstDownloadError``, so that the other endpoint is still tried.
+- ``OperationFailedError`` reports a *finished batch* with failed items. It is
+  raised on request by ``OperationSummary.raise_on_failure()``, after every
+  item has run, and lists the items that failed.
 
 Every other ``S1BurstsError`` fails the whole call that raised it, as does
 anything that is not one (a plain ``ValueError`` for an invalid argument, a
@@ -20,6 +24,11 @@ problem from being silently logged once per item.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Self
+
+if TYPE_CHECKING:
+    from s1bursts.summary import ErrorResult, OperationSummary
 
 
 class S1BurstsError(Exception):
@@ -54,6 +63,92 @@ class BurstNotInMapError(S1BurstsError, LookupError):
 
 class CatalogError(S1BurstsError, RuntimeError):
     """The CDSE catalog returned a response that cannot be used."""
+
+
+class OperationFailedError(S1BurstsError):
+    """Items of a batch download or processing run failed.
+
+    Raised by ``OperationSummary.raise_on_failure()`` once the batch has
+    finished, so it is never a per-item failure itself. The message lists the
+    failed items and their errors. The error carries the whole summary, so the
+    products of the items that succeeded stay within reach.
+
+    Parameters
+    ----------
+    summary
+        Summary of the batch, with at least one failed item.
+    ignore
+        Error types whose failures did not raise this error. They are counted
+        in the message but not listed.
+
+    Attributes
+    ----------
+    summary
+        Summary of the batch: ``summary.products`` holds the products created
+        or found, ``summary.failed_items`` every failure, ignored ones included.
+    ignore
+        Error types whose failures did not raise this error.
+    """
+
+    def __init__(
+        self,
+        summary: OperationSummary[Any],
+        ignore: tuple[type[BaseException], ...] = (),
+    ) -> None:
+        self.summary = summary
+        self.ignore = ignore
+        super().__init__(
+            _describe_failures(summary.n_total, self.failed_items, ignored=self._ignored())
+        )
+
+    @property
+    def failed_items(self) -> list[ErrorResult]:
+        """Results of the failures that raised this error, each with its source and error.
+
+        Returns
+        -------
+        list[ErrorResult]
+            The summary's ``failed_items`` without the ignored ones.
+        """
+        return [r for r in self.summary.failed_items if not isinstance(r.error, self.ignore)]
+
+    def _ignored(self) -> list[ErrorResult]:
+        """Return the failures whose error type is ignored."""
+        return [r for r in self.summary.failed_items if isinstance(r.error, self.ignore)]
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        type[Self],
+        tuple[OperationSummary[Any], tuple[type[BaseException], ...]],
+        dict[str, Any],
+    ]:
+        """Pickle from the summary, which the message is built from, keeping notes."""
+        return type(self), (self.summary, self.ignore), self.__dict__
+
+
+# Beyond this many, the message of ``OperationFailedError`` only counts the rest.
+_MAX_LISTED_FAILURES = 20
+
+
+def _describe_failures(
+    n_total: int,
+    failed: list[ErrorResult],
+    *,
+    ignored: list[ErrorResult],
+) -> str:
+    """Return a message listing a batch's failed items and their errors."""
+    lines = [
+        f"  {result.source}: {type(result.error).__name__}: {result.error}"
+        for result in failed[:_MAX_LISTED_FAILURES]
+    ]
+    if len(failed) > len(lines):
+        lines.append(f"  ... and {len(failed) - len(lines)} more, see `failed_items`")
+    head = f"{len(failed)} of {n_total} items failed"
+    if ignored:
+        names = ", ".join(sorted({type(r.error).__name__ for r in ignored}))
+        head += f", besides {len(ignored)} ignored ({names})"
+    return f"{head}:\n" + "\n".join(lines)
 
 
 class EmptyCompositeError(S1BurstsError, ValueError):
