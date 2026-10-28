@@ -88,7 +88,7 @@ validation = [
 # Documentation toolchain. `great-docs` renders the site via Quarto,
 # installed separately.
 docs = [
-    "great-docs>=0.17",
+    "great-docs[svg]>=0.17",
     "matplotlib>=3.11.2",
     "pyarrow>=26.0.0",
     "python-dotenv>=1.2.2",

@@ -39,6 +39,16 @@ jobs:
       - name: Build site
         run: uv run great-docs build
 
+      # Great Docs renders every favicon from one source and ignores the
+      # `favicon.apple_touch` key its config template documents, so the
+      # home-screen icon, which has room for the full design, is redrawn here.
+      - name: Render Apple touch icon
+        run: >-
+          uv run python -c "import cairosvg;
+          cairosvg.svg2png(url='assets/s1burst-favicon.svg',
+          write_to='great-docs/_site/apple-touch-icon.png',
+          output_width=180, output_height=180)"
+
       - name: Upload site artifact
         uses: actions/upload-artifact@v7
         with:

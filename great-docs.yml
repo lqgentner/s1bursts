@@ -27,6 +27,15 @@ authors:
     github: lqgentner
     orcid: 0009-0006-4453-0881
 
+# Logo & Favicon
+# --------------
+# The logo already spells out the package name, so the hero hides its own.
+logo: assets/s1burst-logo.svg
+# The bursts are illegible at tab size, so the favicon is the bare "S1". Great
+# Docs derives its Apple touch icon from the same file; the docs workflow
+# replaces that with `assets/s1burst-favicon.svg`.
+favicon: assets/s1burst-favicon-small.svg
+
 hero:
   name: false
 
