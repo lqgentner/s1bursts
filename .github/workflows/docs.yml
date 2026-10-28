@@ -30,11 +30,12 @@ jobs:
       # The `docs` group carries great-docs itself; the guide executes against
       # the installed package, so the runtime dependencies are needed too.
       - name: Install dependencies
-        run: uv sync --all-extras --group docs
+        run: |
+          uv sync --locked --all-extras --group docs
+          uv run python -m ipykernel install --sys-prefix --name python3
 
-      # "Finding bursts" queries the public CDSE burst catalog (no credentials),
-      # so this step needs network egress. Nothing here downloads a burst or
-      # runs SNAP.
+      # Versioned _freeze/ outputs supply the expensive CDSE/SNAP tutorials.
+      # CI requires neither credentials nor a SNAP installation.
       - name: Build site
         run: uv run great-docs build
 

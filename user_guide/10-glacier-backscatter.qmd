@@ -1,0 +1,166 @@
+---
+title: "Glacier backscatter time series"
+guide-section: "Tutorials"
+freeze: true
+---
+
+# Glacier backscatter time series
+
+This tutorial follows the Aletsch glacier in the Swiss Alps through 2022, one
+acquisition per month. It shows how backscatter changes with the seasons and
+how to turn a stack of products into a time series for one site.
+
+```{python}
+#| include: false
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+root = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "pyproject.toml").exists())
+load_dotenv(root / ".env")
+(root / "cache/docs").mkdir(parents=True, exist_ok=True)
+os.chdir(root / "cache/docs")
+```
+
+## Process one acquisition per month
+
+The search covers a year of one burst footprint over the glacier. Keeping the
+first acquisition of each month leaves twelve, which are downloaded and
+processed into RTC backscatter at 20 m pixel size:
+
+```{python}
+from pathlib import Path
+
+from pyproj import CRS
+from s1bursts import BackscatterConfig, BurstDatabase, BurstProcessor, FileManager, SearchQuery, TimeRange
+from s1bursts.burst import BurstCollection
+
+fm = FileManager(Path("data/glacier"))
+database = BurstDatabase(fm)
+bursts = database.search(SearchQuery(
+    time_range=TimeRange("2022-01-01", "2022-12-31"),
+    burst_id=30346, sub_swath="IW1", polarization="VV",
+), max_items=200)
+
+df = bursts.df.sort_values("date")
+monthly = BurstCollection(df.groupby(df.date.dt.month).head(1))
+print(f"{len(bursts)} acquisitions in 2022, {len(monthly)} selected")
+```
+
+```{python}
+#| output: false
+database.download(monthly)
+processor = BurstProcessor(fm)
+rtc = processor.create_backscatter(
+    monthly, crs=CRS("EPSG:32632"), config=BackscatterConfig(grid_spacing=20),
+)
+```
+
+```{python}
+#| include: false
+assert not rtc.n_failed, rtc.failed_items
+```
+
+## Map the glacier
+
+The map shows the glacier in January and in May. The Great Aletsch Glacier
+starts at Konkordiaplatz, where its tributaries meet near the top centre, and
+flows south-east, then south-west towards its tongue. In May the glacier and
+much of the terrain around it are far darker than in January.
+
+```{python}
+#| fig-cap: "RTC backscatter around the Aletsch glacier in January and May 2022. The white rectangle is the sample area of the time series."
+import matplotlib.pyplot as plt
+import numpy as np
+import rasterio
+from rasterio.warp import transform_bounds
+from rasterio.windows import from_bounds
+from shapely.geometry import box
+
+view = (7.95, 46.38, 8.15, 46.55)  # lon/lat bounds of the map
+sample = box(8.065, 46.472, 8.072, 46.477)  # on the glacier below Konkordiaplatz
+products = sorted(rtc.products, key=lambda p: p.date)
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), sharey=True)
+for ax, product in zip(axes, [products[0], products[4]]):
+    with rasterio.open(fm.get_product_path(product)) as src:
+        left, bottom, right, top = transform_bounds("EPSG:4326", src.crs, *view)
+        gamma0 = src.read(1, window=from_bounds(left, bottom, right, top, src.transform))
+        x0, y0, x1, y1 = transform_bounds("EPSG:4326", src.crs, *sample.bounds)
+    extent = [v / 1000 for v in (left, right, bottom, top)]
+    image = ax.imshow(10 * np.log10(gamma0), extent=extent, cmap="gray", vmin=-25, vmax=0)
+    ax.add_patch(plt.Rectangle((x0 / 1000, y0 / 1000), (x1 - x0) / 1000, (y1 - y0) / 1000,
+                               fill=False, edgecolor="white"))
+    ax.set(title=f"{product.date:%d %B %Y}", xlabel="Easting (km)")
+axes[0].set_ylabel("Northing (km)")
+fig.colorbar(image, ax=axes, shrink=0.8, label="Gamma-0 (dB)")
+plt.show()
+```
+
+## Extract a time series
+
+The time series is the median backscatter within the sample rectangle on the
+glacier. The median is taken in linear units and converted to decibels
+afterwards, because averaging decibels gives a biased result.
+
+```{python}
+import pandas as pd
+from rasterio.mask import mask
+from rasterio.warp import transform_geom
+from shapely.geometry import mapping
+
+records = []
+for product in products:
+    with rasterio.open(fm.get_product_path(product)) as src:
+        region = transform_geom("EPSG:4326", src.crs, mapping(sample))
+        values, _ = mask(src, [region], indexes=1, crop=True, filled=False)
+    valid = values.compressed()
+    valid = valid[np.isfinite(valid)]
+    records.append({"date": product.date, "gamma0_db": 10 * np.log10(np.median(valid))})
+series = pd.DataFrame(records)
+```
+
+```{python}
+#| fig-cap: "Median RTC backscatter in the sample rectangle, one acquisition per month in 2022."
+fig, ax = plt.subplots(figsize=(8, 3.5))
+ax.plot(series.date, series.gamma0_db, "o-")
+ax.set(xlabel="Acquisition date", ylabel="Median gamma-0 (dB)")
+ax.grid(alpha=0.25)
+fig.autofmt_xdate()
+plt.show()
+```
+
+## Interpret the curve
+
+Backscatter on the glacier stays near −10.5 dB from January to April, drops to
+−18.5 dB on 9 May, and recovers to about −9 dB in August and September. Wet
+snow is a likely cause of the drop: liquid water in the snowpack absorbs much
+of the radar signal, as described in the
+[Copernicus snow product manual](https://land.copernicus.eu/en/technical-library/product-user-manual-high-resolution-snow-products-europe/@@download/file).
+From October, values settle around −12 to −13 dB.
+
+A single curve does not establish the cause. Check the dates against
+temperature, snowfall and snow-cover records before drawing conclusions, and
+keep orbit, polarization and processing settings fixed across the series.
+Monthly sampling can also miss short melt or snowfall events, since each month
+contributes a single evening acquisition.
+
+The [next tutorial](glacier-coherence.qmd) computes coherence for the same
+burst.
+
+```{python}
+#| echo: false
+#| output: asis
+from datetime import date
+from importlib.metadata import version
+
+from s1bursts import SNAPConfig
+
+snap_version = ".".join(map(str, SNAPConfig().resolved_snap_version))
+print(
+    '::: {.callout-note collapse="true"}\n## Run details\n\n'
+    f"Run on {date.today():%d %B %Y} with s1bursts {version('s1bursts')} and "
+    f"ESA SNAP {snap_version}. Contains modified Copernicus Sentinel data (2022).\n:::"
+)
+```

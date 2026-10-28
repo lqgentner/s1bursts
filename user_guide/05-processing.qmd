@@ -1,0 +1,127 @@
+---
+title: "Processing with SNAP"
+guide-section: "How-to Guides"
+---
+
+# Processing with SNAP
+
+`BurstProcessor` turns downloaded bursts into map-projected GeoTIFFs. It runs
+SNAP once for every burst, or once for every pair of bursts, and skips products
+that already exist.
+
+## How a processing call works
+
+Every `create_*` method takes the bursts, the output map projection, and
+optionally a settings object. From the settings, s1bursts builds the SNAP
+processing graph, the chain of SNAP steps that turns a burst into a product.
+The settings describe how to process and suit every burst alike. The projection
+depends on where the bursts are, so it is passed separately as `crs`:
+
+```{.python}
+from pyproj import CRS
+from s1bursts import BackscatterConfig, BurstProcessor
+
+processor = BurstProcessor(fm)
+rtc = processor.create_backscatter(
+    bursts, crs=CRS("EPSG:32632"), config=BackscatterConfig(grid_spacing=20),
+)
+```
+
+For `crs`, the UTM zone of your study area is usually the right choice. Use the
+same projection for every product you want to compare or composite. If you plan
+to [composite](compositing.qmd), choose it before processing: composites accept
+only products in the UTM zone and pixel size of their grid square. Without
+`config`, the defaults apply, and they suit most uses.
+
+Each product has its own method and settings object:
+
+| Method | Input | Settings | Product |
+|---|---|---|---|
+| `create_backscatter()` | Bursts | `BackscatterConfig` | Backscatter of each acquisition |
+| `create_coherences()` | Pairs | `CoherenceConfig` | Coherence between two acquisitions |
+| `create_interferograms()` | Pairs | `InterferogramConfig` | Phase difference between two acquisitions |
+
+The settings objects share most fields. The one you are most likely to change
+is the pixel size, `grid_spacing`, which is 10 m by default; a smaller pixel
+size does not add detail beyond what the radar resolves. The
+[API reference](../reference/snap_graph.BackscatterConfig.qmd) lists every
+setting and its default.
+
+[SNAP processing](snap-processing.qmd) explains the steps each graph runs and
+how to inspect the graph your settings produce.
+
+## Backscatter
+
+Backscatter describes how strongly the ground reflects the radar signal on one
+date. In mountains, it also depends on the angle of each slope to the
+satellite: slopes facing the satellite look bright, and slopes facing away look
+dark. By default, s1bursts removes this effect with radiometric terrain
+correction (RTC), following the terrain-flattening method of
+[Small (2011)](https://doi.org/10.1109/TGRS.2011.2120616). RTC divides each
+pixel by the area of ground that contributed to it, so the remaining
+differences in brightness come from the surface itself. The result is called
+gamma-0 (`gamma0`).
+
+Use RTC unless you have a reason not to; only RTC products can be composited
+with [resolution weighting](resolution-weighting.qmd). Set
+`flatten_terrain=False` for geometrically terrain-corrected (GTC) backscatter,
+called beta-0 (`beta0`), which places pixels correctly on the map but keeps the
+slope brightness:
+
+```{.python}
+gtc = processor.create_backscatter(
+    bursts, crs=crs, config=BackscatterConfig(flatten_terrain=False),
+)
+```
+
+## Coherence
+
+Coherence measures how similar two acquisitions of the same footprint are, from
+0 to 1. It drops wherever the surface changed between the two dates, for
+example through snowfall, melt or vegetation growth. The pairs come from
+[`find_pairs()`](finding-and-downloading.qmd#pair-acquisitions):
+
+```{.python}
+pairs = bursts.find_pairs(baseline=12)
+coherence = processor.create_coherences(pairs, crs=crs)
+```
+
+Coherence is estimated over a small window of neighbouring pixels, set by
+`CoherenceConfig(window=...)`. A larger window gives smoother values at a
+coarser resolution.
+
+`create_interferograms()` takes the same pairs and writes the interferometric
+phase. s1bursts does not unwrap that phase, so turning it into displacement
+needs other software.
+
+## Run several jobs at once
+
+`SNAPConfig` sets how many SNAP processes run in parallel and how much memory
+they share. Pass it to the processor to override the
+[environment variables](environment-variables.qmd#snap):
+
+```{.python}
+from s1bursts import SNAPConfig
+
+processor = BurstProcessor(fm, config=SNAPConfig(max_workers=2, max_ram_gb=16))
+```
+
+More processes finish a batch sooner but split the memory budget between them.
+If SNAP runs out of memory, use fewer processes or a larger budget.
+
+## Reprocessing and failures
+
+A product whose file already exists is not processed again, so a script can be
+rerun after an interruption.
+
+::: {.callout-warning}
+## Changed settings do not trigger reprocessing
+
+Filenames describe the burst and date, not the settings. Write each experiment
+to its own `FileManager` directory, or pass `overwrite=True`.
+:::
+
+A failed burst does not stop the batch by default. Each call returns an
+`OperationSummary`; check its `failed_items` before using the results, since a
+time series with silent gaps can mislead. Pass `continue_on_error=False` to
+`BurstProcessor` to stop at the first failure instead.

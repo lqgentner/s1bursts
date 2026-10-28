@@ -1,0 +1,78 @@
+---
+title: "Compositing"
+guide-section: "How-to Guides"
+---
+
+# Compositing
+
+A composite combines many burst products into one image per grid square.
+`ResolutionWeighter` writes composites on the 10 km squares of the MGRS grid,
+so results from different bursts, orbits and dates line up pixel for pixel.
+
+## Get the grid squares
+
+`MGRSGrid` from [freezebase](https://github.com/lqgentner/freezebase) lists the
+grid squares that overlap an area. Its `resolution` is the pixel size of the
+composite and must equal the `grid_spacing` the products were processed with:
+
+```{.python}
+from freezebase.mgrs import MGRSGrid
+from shapely.geometry import box
+
+aoi = box(170.12, -43.62, 170.16, -43.58)
+squares = list(MGRSGrid(aoi, resolution=20))
+```
+
+The products must also be in the UTM zone of the grid square. Process them with
+that zone as `crs`, for example EPSG:32759 for zone 59 South, and keep the
+default `align_to_standard_grid=True`. A product on a different grid is
+rejected with an error that names it.
+
+## Compose backscatter
+
+The main method, `compose_rtc_lrw()`, combines all RTC products that cover a
+square, whatever their orbit or direction. Each pixel is weighted towards the
+acquisitions that see it in the finest detail. This is called local resolution
+weighting (LRW); [Local resolution weighting](resolution-weighting.qmd) explains
+how it works.
+
+```{.python}
+from s1bursts import ResolutionWeighter, TimeRange
+
+weighter = ResolutionWeighter(fm)
+window = TimeRange("2022-01-01", "2022-01-31")
+for square in squares:
+    composite, (num, cqm) = weighter.compose_rtc_lrw(
+        rtc.products, square, write_qa=True, time_range=window,
+    )
+```
+
+With `write_qa=True`, two quality layers are written beside the composite:
+`QA-NUM` counts the acquisitions that contributed to each pixel, and `QA-CQM`
+rates how fine the combined detail is. Pass the `TimeRange` of your search as
+`time_range`, so that every square records the same compositing window.
+
+## Other composites
+
+Four more methods cover other inputs and groupings:
+
+| Method | Combines | Use it for |
+|---|---|---|
+| `compose_coherence_lrw()` | Coherence, weighted like RTC | Coherence composites; also needs the RTC products of the same dates |
+| `compose_rtc_by_pass()` | RTC, one composite per pass direction | Keeping ascending and descending orbits apart |
+| `compose_gtc_by_pass()` | GTC, one composite per pass direction | Backscatter without terrain flattening |
+| `compose_coherence_by_pass()` | Coherence, one composite per pass direction | Coherence by viewing direction |
+
+The per-pass methods return a dictionary keyed by pass direction. They take a
+plain average without resolution weights.
+
+## Choose how to combine
+
+Every method averages by default. Pass `aggregation="median"`, or a number
+between 0 and 1 for a quantile, to reduce the influence of outliers. Averaging
+always happens on linear values; `decibel=True` converts the result to
+decibels afterwards.
+
+All inputs of one composite must share a polarization, and coherence inputs
+must share a temporal baseline. The two LRW methods raise `EmptyCompositeError`
+and write nothing for a grid square that none of the products reaches.

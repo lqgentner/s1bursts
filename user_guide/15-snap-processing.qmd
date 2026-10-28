@@ -1,0 +1,190 @@
+---
+title: "SNAP processing"
+guide-section: "Background"
+---
+
+# SNAP processing
+
+s1bursts relies on ESA SNAP for the radar processing. This page describes the
+steps SNAP applies to a burst, how to inspect them for your own settings, which
+SNAP problems s1bursts corrects, and how the supported SNAP versions differ.
+
+## The processing steps
+
+Each product runs through a fixed chain of SNAP operators, called a processing
+graph. s1bursts builds the graph from the product's settings object, so the
+settings decide which steps run and with which parameters. The default
+backscatter graph has eight steps:
+
+| Step | What it does | Setting |
+|---|---|---|
+| `Apply-Orbit-File` | Replaces the predicted satellite orbit with the precise one | |
+| `ThermalNoiseRemoval` | Removes the instrument's own noise | |
+| `Calibration` | Converts the raw values to radar brightness | |
+| `TOPSAR-Deburst` | Joins the burst into one seamless image | |
+| `Multilook` | Averages neighbouring pixels to reduce noise and runtime | `multilook` |
+| `Terrain-Flattening` | Corrects brightness for the slope of the terrain | `flatten_terrain` |
+| `ReplaceZerosWithNoData` | Marks the empty border of the burst as missing ([why](#corrections-s1bursts-applies)) | `replace_zeros_with_nan` |
+| `Terrain-Correction` | Places every pixel on the map, using the DEM | `grid_spacing`, `dem` |
+
+Coherence compares two acquisitions, so its graph differs. Both acquisitions
+get precise orbits, then `Back-Geocoding` aligns the second onto the first
+pixel by pixel, using the DEM. `Coherence` estimates the similarity of the two
+within a moving window, set by `window`, and the last three steps match the
+backscatter graph. The interferogram graph replaces `Coherence` with
+`Interferogram` and keeps the phase together with each acquisition's
+brightness.
+
+## Inspect a graph
+
+Every settings object can show the graph it produces, as a diagram or as the
+XML file that SNAP runs. Inspect it to check what your settings change, or to
+describe the processing in a publication.
+
+### As a diagram
+
+`to_mermaid()` returns the graph as text in the
+[Mermaid](https://mermaid.js.org/) diagram language. In a notebook, the
+[mermaid-py](https://github.com/ouhammmourachid/mermaid-py) package draws it.
+Install it separately, since s1bursts does not depend on it:
+
+```{.python}
+from mermaid import Mermaid
+from s1bursts import BackscatterConfig
+
+config = BackscatterConfig(grid_spacing=20)
+Mermaid(config.to_mermaid())
+```
+
+mermaid-py draws the diagram through the online mermaid.ink service. Without
+internet access, paste the text into a `mermaid` code block on GitHub or in
+Quarto instead. For the settings above, the graph looks like this:
+
+```{python}
+#| echo: false
+#| output: asis
+from s1bursts import BackscatterConfig
+
+config = BackscatterConfig(grid_spacing=20)
+print(f"```{{mermaid}}\n{config.to_mermaid().replace('flowchart LR', 'flowchart TD')}\n```")
+```
+
+### As XML
+
+`to_xml()` returns the graph in SNAP's own XML format, with every parameter
+SNAP receives:
+
+```{python}
+xml = config.to_xml()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(f':::{{.callout-note collapse="true"}}\n## The full graph\n\n```xml\n{xml}\n```\n:::')
+```
+
+The graph leaves two placeholders, `${source}` for the burst file and `${crs}`
+for the projection. s1bursts fills them in for every burst it processes, which
+is why the projection is passed to the `create_*` methods rather than stored in
+the settings. Save the XML beside your results to record exactly how they were
+made:
+
+```{.python}
+from pathlib import Path
+
+Path("backscatter-graph.xml").write_text(xml)
+```
+
+### From functions
+
+The same graphs are available as functions, which suits scripts that work with
+XML files. `build_backscatter_graph()`, `build_coherence_graph()` and
+`build_interferogram_graph()` return the XML for a settings object, and
+`xml_to_mermaid()` turns any graph XML into a diagram, including one saved
+earlier:
+
+```{python}
+from s1bursts import CoherenceConfig
+from s1bursts.snap_graph import build_coherence_graph, xml_to_mermaid
+
+xml = build_coherence_graph(CoherenceConfig())
+diagram = xml_to_mermaid(xml)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"```{{mermaid}}\n{diagram.replace('flowchart LR', 'flowchart TD')}\n```")
+```
+
+### For your SNAP version
+
+The coherence and interferogram graphs differ slightly between SNAP 13 and 14.
+Without a version, s1bursts builds the graph for SNAP 13. Pass the version of
+your installation to see the exact graph that processing will run:
+
+```{.python}
+from s1bursts import SNAPConfig
+
+version = SNAPConfig().resolved_snap_version
+xml = CoherenceConfig().to_xml(snap_version=version)
+```
+
+## Corrections s1bursts applies
+
+s1bursts works around four reported SNAP problems, so you do not need to:
+
+- **External DEMs are read half a pixel off.** `prepare_dem_for_snap()` shifts
+  the DEM to compensate for this
+  [problem](https://forum.step.esa.int/t/external-dem-is-sampled-half-a-pixel-off/46042),
+  but only for SNAP versions before the 14.0.2 update, which fixed it.
+- **DEM heights use the wrong sea-level model.** SNAP knows only the EGM96 model,
+  [even for DEMs](https://forum.step.esa.int/t/copernicus-dem-built-in-path-applies-egm96-while-the-data-is-egm2008/46041)
+  based on another. `prepare_dem_for_snap()` converts external DEM heights
+  itself; see [Using an external DEM](external-dems.qmd). The built-in
+  Copernicus DEM is affected too. To avoid it, download the Copernicus DEM and
+  prepare it as an external DEM with `source_crs="EPSG:4326+3855"`.
+- **Burst edges come out too dark.** SNAP 13 mixes the empty border of the
+  input into the edge pixels during terrain correction, which leaves dark seams
+  along the burst edges
+  ([forum report](https://forum.step.esa.int/t/sentinel-1-slc-terrain-correction-operator-uses-zero-values-in-interpolation-instead-of-treating-them-as-no-data/45336)).
+  s1bursts marks that border as missing before terrain correction. SNAP 14
+  fixed the problem, so this matters only for SNAP 13.
+- **Areas without DEM coverage become zeros.** Where the DEM has no data, for
+  example over the sea at the edge of a burst, SNAP can write zeros instead of
+  missing values. s1bursts turns these into `NaN`.
+
+## SNAP versions
+
+s1bursts works with SNAP 13 and 14. It reads the installed version and adapts
+the graphs to it, so the same code runs on either. The version is recorded in
+every product's `PROCESSING_SOFTWARE_VERSION` tag.
+
+::: {.callout-note}
+## Keep one SNAP version per study
+
+SNAP versions give slightly different results for the same burst, so a time
+series that switches version contains an artificial step. Between SNAP 13 and
+14, backscatter differs by about 0.05 dB and coherence by about 0.004.
+:::
+
+SNAP 14 also adds two coherence options, exposed as
+`CoherenceConfig.correct_coherence_bias` and `remove_local_phase_ramp`. Both
+are off by default, and enabling either under SNAP 13 raises an error.
+
+## Validation
+
+s1bursts products are checked against products of the same bursts from
+independent processors. Backscatter is compared with
+[OPERA RTC-S1](https://hyp3-docs.asf.alaska.edu/guides/opera_rtc_product_guide/)
+from NASA/JPL, and coherence with
+[ASF HyP3](https://hyp3-docs.asf.alaska.edu/guides/burst_insar_product_guide)
+burst InSAR products. Both use the same Copernicus DEM, so the comparison tests
+the processing itself.
+
+Backscatter agrees with OPERA within 0.07 dB over whole scenes. Over very dark
+surfaces, near the instrument's noise level, s1bursts reads lower, because
+OPERA sets negative values to zero before averaging. HyP3 estimates coherence
+with a different method and reads about 0.18 higher at the median, so coherence
+thresholds from one product do not transfer to the other.

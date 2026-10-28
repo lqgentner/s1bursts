@@ -1,0 +1,82 @@
+---
+title: "Introduction"
+guide-section: "Getting Started"
+---
+
+# Introduction
+
+s1bursts makes Sentinel-1 synthetic aperture radar (SAR) data easy to use from
+Python. It searches and downloads the data from the
+[Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu/) (CDSE),
+processes it with [ESA SNAP](https://step.esa.int/main/toolboxes/snap/) into
+maps of backscatter and coherence, and combines those maps into composites on a
+fixed grid.
+
+## What the maps show
+
+Sentinel-1 carries a synthetic aperture radar, which sends microwave pulses to
+the ground and records their echo. It sees through clouds and works at night,
+so it images the same place on a regular schedule. s1bursts turns these echoes
+into two kinds of map:
+
+- **Backscatter** is how much of the pulse returns to the satellite. It depends
+  on the roughness, moisture and structure of the surface; wet snow, for
+  example, looks much darker than dry snow. Use it to follow the state of a
+  surface through time.
+- **Coherence** compares two acquisitions of the same place, from 0 (unrelated)
+  to 1 (unchanged). It drops where the surface melted, moved, grew or was
+  disturbed between the two dates. Use it to detect change.
+
+s1bursts can also write interferograms, the phase difference between two
+acquisitions, as input for your own interferometric analysis.
+
+## What is a burst?
+
+s1bursts works with bursts, the smallest part of a Sentinel-1 acquisition that
+can be processed on its own. Each acquisition is made of three strips side by
+side, called sub-swaths, and each sub-swath is a sequence of overlapping bursts
+about 20 km long. A burst download is roughly 100 MB, compared with about 4 GB
+for the full scene, so a study area of a few kilometres no longer costs a whole
+scene.
+
+The same burst is imaged again on every orbit repeat, which makes bursts a
+natural unit for time series. s1bursts identifies one acquisition by four
+fields:
+
+| Field | Meaning |
+|---|---|
+| `burst_id` | Number of the burst footprint, unique within a sub-swath |
+| `sub_swath` | Sub-swath of the footprint: `IW1` to `IW3` (or `EW1` to `EW5`) |
+| `polarization` | `VV`, `VH`, `HH` or `HV` |
+| `date` | Acquisition time |
+
+Together, `burst_id` and `sub_swath` name a footprint: the same patch of ground
+on every repeat.
+
+## From search to composite
+
+A typical workflow has four steps, each handled by one class:
+
+| Step | Class | Result |
+|---|---|---|
+| Search | `BurstDatabase.search()` | A `BurstCollection` of catalog records |
+| Download | `BurstDatabase.download()` | Single-burst files |
+| Process | `BurstProcessor` | GeoTIFFs of backscatter and coherence |
+| Composite | `ResolutionWeighter` | GeoTIFFs on 10 km MGRS grid squares |
+
+A `FileManager` decides where every file is stored, on local disk or on S3, so
+each step finds the output of the previous one.
+
+## Scope
+
+s1bursts processes Sentinel-1 single-look complex (SLC) data, the product that
+keeps the phase of the radar signal and is needed for coherence. It does not
+process the other Sentinel-1 products, such as ground range detected (GRD)
+scenes. It also does not unwrap interferometric phase, estimate displacement,
+or run operations that need several adjacent bursts at once.
+
+## Next steps
+
+Start with [Installation](installation.qmd), then run the
+[Quickstart](quickstart.qmd). The [tutorials](glacier-backscatter.qmd) show
+complete analyses on real data.

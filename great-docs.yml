@@ -3,7 +3,9 @@
 
 display_name: s1bursts
 parser: numpy
-dynamic: false
+module: s1bursts
+dynamic: true
+freeze: auto
 
 # GitHub Integration
 # ------------------
@@ -25,28 +27,10 @@ authors:
     github: lqgentner
     orcid: 0009-0006-4453-0881
 
-# Logo & Favicon
-# --------------
-# No logo assets exist yet. Once `assets/logo.png`, `assets/logo-dark.png`, and
-# `assets/favicon.png` are added (as in freezebase), uncomment:
-#
-# logo:
-#   light: assets/logo.png
-#   dark: assets/logo-dark.png
-#
-# favicon: assets/favicon.png
-
 hero:
   name: false
 
-# SEO
-# ---
-# Quarto already writes correct <title>s ("s1bursts" on the homepage,
-# "Finding bursts – s1bursts" elsewhere). Great Docs' post-render step then
-# appends "| {site_name}" on top, producing "s1bursts | s1bursts", because
-# its "already templated?" guard tests for an ASCII " - " while Quarto joins
-# with an en dash (U+2013). Emitting just the page title suppresses the second
-# append. Revisit if great-docs > 0.16.0 fixes post-render.py:430.
+# Avoid duplicating the site name in page titles.
 seo:
   title_template: "{page_title}"
 
@@ -59,11 +43,14 @@ navbar_style: mint
 # -----
 nav_icons:
   sidebar:
-    Installation and setup: download
-    Finding bursts: search
-    Downloading and storage: cloud-download
+    Installation: download
+    Environment variables: settings
+    Quickstart: rocket
+    Finding and downloading bursts: search
     Processing with SNAP: workflow
+    Using an external DEM: mountain
     Compositing: layers
+    Storing products on S3: cloud
     Contributing: wrench
 
 # API Reference Structure
@@ -81,6 +68,7 @@ reference:
         Query the CDSE burst catalog and fetch single bursts over OData or S3.
       contents:
         - query.SearchQuery
+        - time_range.TimeRange
         - database.BurstDatabase
 
     - title: Burst data model
@@ -119,7 +107,7 @@ reference:
 
     - title: Compositing
       desc: >-
-        Locally resolution weighted and per-orbit-pass MGRS tile composites.
+        Locally resolution weighted and per-pass 10 km MGRS grid-square composites.
       contents:
         - resolution_weighter.ResolutionWeighter
 
@@ -141,10 +129,12 @@ reference:
         - product.CohLRWComposite
         - product.RTCPassComposite
         - product.CohPassComposite
+        - product.GTCPassComposite
         - product.RTCLRWQA
         - product.CohLRWQA
         - product.RTCPassQA
         - product.CohPassQA
+        - product.GTCPassQA
         - product.QaMetric
 
     - title: Results and errors
@@ -157,6 +147,7 @@ reference:
         - summary.ErrorResult
         - errors.S1BurstsError
         - errors.ConfigurationError
+        - errors.EmptyCompositeError
         - errors.BurstError
         - errors.BurstNotFoundError
         - errors.BurstDownloadError
@@ -169,7 +160,7 @@ reference:
       contents:
         - burstmap.download_burst_map
         - burstmap.Sentinel1Bursts
-        - dem.compensate_dem_for_snap
+        - dem.prepare_dem_for_snap
         - cdse.CDSEAuth
         - cdse.CDSEBurstClient
         - cdse.CDSEResponse

@@ -1,0 +1,70 @@
+---
+title: "Products and bands"
+guide-section: "Background"
+---
+
+# Products and bands
+
+Every product is a GeoTIFF, described in Python by a small metadata record. The
+record holds the product's identity, such as burst, date and type, and
+`FileManager.get_product_path()` turns it into the file's location. This page
+describes what the files contain.
+
+## Bands and units
+
+Each product type has a fixed set of bands, named in the GeoTIFF's band
+descriptions:
+
+| Product | Bands | Values |
+|---|---|---|
+| RTC backscatter | `gamma0`, `scattering_area` | Linear power; area without units |
+| GTC backscatter | `beta0` | Linear power |
+| Coherence | `coherence` | 0 to 1, without units |
+| Interferogram | `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` | Uncalibrated |
+| Composite | Same quantity as its inputs | As the inputs, or decibels with `decibel=True` |
+| `QA-NUM` | `num_obs` | Number of contributing acquisitions |
+| `QA-CQM` | `cqm` | Composite quality, linear or decibels |
+
+Backscatter is stored as linear power, not decibels. Convert with
+`10 * log10(value)` only after averaging, since the mean of decibels is not the
+decibel of the mean. The `scattering_area` band describes how much ground each
+pixel covers; [Local resolution weighting](resolution-weighting.qmd) explains
+how composites use it.
+
+The interferogram's phase is the angle of the complex number
+`ifg_real + i·ifg_imag`, in radians from −π to π. Its two intensity bands show
+the brightness of each acquisition.
+
+## Missing values
+
+Pixels without data are `NaN`, for example outside the burst. Keep them
+missing in statistics and plots rather than replacing them with zero. The one
+exception is `QA-NUM`, an integer layer that marks pixels without data as 0. Rasterio
+returns them masked with `src.read(1, masked=True)`.
+
+## Metadata tags
+
+Each GeoTIFF also carries tags that say how to read it and how it was made.
+They include the units of the stored values, the acquisition dates, the DEM,
+and the SNAP and s1bursts versions:
+
+```{.python}
+import rasterio
+
+with rasterio.open(fm.get_product_path(product)) as src:
+    print(src.descriptions)
+    print(src.tags())
+```
+
+These tags make a file understandable on its own, even when separated from the
+code that wrote it. Their names follow the vocabulary of the
+[CEOS-ARD SAR specification](https://ceos.org/ard/), so a term can be looked up
+there. s1bursts borrows the vocabulary only and does not claim conformance with
+the specification.
+
+## Filenames
+
+Filenames contain only what is needed to tell products apart, such as product
+type, orbit, footprint, polarization and date. Processing settings are not part
+of the name, which is why a product made with different settings is skipped
+rather than reprocessed. Record your settings alongside your results.

@@ -1,0 +1,60 @@
+---
+title: "Environment variables"
+guide-section: "Getting Started"
+---
+
+# Environment variables
+
+s1bursts reads credentials and SNAP settings from environment variables. Set
+them in your shell, or keep them in a `.env` file:
+
+```{.bash filename=".env"}
+CDSE_USERNAME=your-account-name
+CDSE_PASSWORD=your-password
+SNAP_MAX_RAM_GB=16
+```
+
+s1bursts does not read `.env` by itself. Run your script with
+`uv run --env-file .env script.py`, or call `dotenv.load_dotenv()` from
+[python-dotenv](https://pypi.org/project/python-dotenv/) at its start. Keep the
+file out of version control.
+
+## CDSE credentials
+
+Downloads need a [CDSE account](https://dataspace.copernicus.eu/); searching
+needs none. The S3 keys are optional and enable a second download route, which
+[takes over](finding-and-downloading.qmd#when-the-burst-service-fails) when
+CDSE's burst service fails:
+
+| Variable | Purpose |
+|---|---|
+| `CDSE_USERNAME`, `CDSE_PASSWORD` | CDSE account, used by the burst service |
+| `CDSE_S3_ACCESS_KEY_ID`, `CDSE_S3_SECRET_ACCESS_KEY` | CDSE S3 keys, from the [S3 key manager](https://eodata-s3keysmanager.dataspace.copernicus.eu/) |
+| `CDSE_S3_PROFILE` | Instead of the two keys: a profile in `~/.aws/credentials` that holds them |
+
+## SNAP
+
+SNAP needs plenty of memory. `SNAP_MAX_RAM_GB` is the total budget shared by all
+parallel SNAP processes. s1bursts reserves 3 GB of it for overhead and splits
+the rest between the processes, so the default of 8 GB gives one process 5 GB.
+That is enough for backscatter and coherence. Raise the budget when you run
+several processes in parallel:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `SNAP_BIN` | The SNAP installation's `bin` directory | `gpt` on `PATH` |
+| `SNAP_MAX_WORKERS` | SNAP processes run in parallel | 1 |
+| `SNAP_MAX_RAM_GB` | Memory budget across those processes, in GB | 8 |
+| `SNAP_THREADS_PER_JOB` | Threads per SNAP process | CPU count divided by workers |
+| `SNAP_CACHE_RATIO` | Share of each process's memory used as tile cache | 0.7 |
+| `SNAP_AUXDATA_PATH` | Cache for orbit files and DEM tiles | `~/.snap/auxdata` |
+| `SNAP_DEM_CACHE` | Cache for [prepared external DEMs](external-dems.qmd) | `~/.s1bursts/dem` |
+
+`SNAPConfig` sets the same values in code and takes precedence over the
+environment; see [Processing with SNAP](processing.qmd#run-several-jobs-at-once).
+
+## Temporary files
+
+SNAP writes large uncompressed files while it works, in the folder that
+`TMPDIR` names. Point `TMPDIR` at a local disk with several GB free, since on
+many systems the default `/tmp` is held in memory.

@@ -1,0 +1,129 @@
+---
+title: "Quickstart"
+guide-section: "Getting Started"
+freeze: true
+---
+
+# Quickstart
+
+This example processes two acquisitions of one burst over the Aletsch glacier
+in the Swiss Alps. It produces terrain-corrected backscatter for each date and
+the coherence between them. Complete [Installation](installation.qmd) first, and
+run the script with your
+[credentials in the environment](environment-variables.qmd). The example
+downloads about 200 MB and runs SNAP.
+
+```{python}
+#| include: false
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+root = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "pyproject.toml").exists())
+load_dotenv(root / ".env")
+(root / "cache/docs").mkdir(parents=True, exist_ok=True)
+os.chdir(root / "cache/docs")
+```
+
+## Find a pair of acquisitions
+
+A search returns the catalog records that match a query. This one asks for one
+month of one burst footprint, then picks the first pair of acquisitions
+12 days apart:
+
+```{python}
+from pathlib import Path
+
+from pyproj import CRS
+from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery, TimeRange
+
+fm = FileManager(Path("data/quickstart"))
+database = BurstDatabase(fm)
+
+bursts = database.search(SearchQuery(
+    time_range=TimeRange("2022-08-01", "2022-08-31"),
+    burst_id=30346, sub_swath="IW1", polarization="VV",
+))
+pair = bursts.find_pairs(baseline=12)[:1]
+```
+
+## Download and process
+
+The download stores both acquisitions under `data/quickstart/s1-slc`.
+Processing then writes one GeoTIFF per product under `data/quickstart/s1-prod`,
+in the UTM zone of the glacier (EPSG:32632):
+
+```{python}
+#| output: false
+database.download(pair)
+
+processor = BurstProcessor(fm)
+crs = CRS("EPSG:32632")
+rtc = processor.create_backscatter(pair.unpair(), crs=crs)
+coherence = processor.create_coherences(pair, crs=crs)
+```
+
+```{python}
+#| include: false
+assert not rtc.n_failed and not coherence.n_failed
+```
+
+Running the script again skips every file that already exists.
+
+## Look at the result
+
+Each product is a GeoTIFF that any GIS or raster library can open. This plots
+the backscatter of the first date in decibels above the coherence:
+
+```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+import rasterio
+
+with rasterio.open(fm.get_product_path(rtc.products[0])) as src:
+    gamma0 = src.read(1, masked=True)
+with rasterio.open(fm.get_product_path(coherence.products[0])) as src:
+    coh = src.read(1, masked=True)
+
+fig, (top, bottom) = plt.subplots(2, 1, figsize=(10, 6), layout="constrained")
+fig.colorbar(top.imshow(10 * np.log10(gamma0), cmap="gray", vmin=-25, vmax=5),
+             ax=top, label="Backscatter (dB)")
+fig.colorbar(bottom.imshow(coh, cmap="viridis", vmin=0, vmax=1), ax=bottom, label="Coherence")
+for ax in (top, bottom):
+    ax.set_axis_off()
+plt.show()
+```
+
+The burst covers a strip of the Alps about 85 km long. Coherence is high
+(yellow) where the ground changed little in the 12 days, such as bare rock and
+meadows, and low (dark blue) where it changed, for example on the melting
+glaciers and in forests.
+
+## What you get
+
+The two calls return two kinds of GeoTIFF:
+
+- **Backscatter** (one file per date): how strongly the ground reflects the
+  radar signal, corrected for terrain.
+- **Coherence** (one file): how similar the two acquisitions are, from 0 (no
+  similarity) to 1.
+
+[Products and bands](products.qmd) explains each band and its units. The
+[glacier tutorials](glacier-backscatter.qmd) take the same burst further.
+
+```{python}
+#| echo: false
+#| output: asis
+from datetime import date
+from importlib.metadata import version
+
+from s1bursts import SNAPConfig
+
+snap_version = ".".join(map(str, SNAPConfig().resolved_snap_version))
+print(
+    '::: {.callout-note collapse="true"}\n## Run details\n\n'
+    f"Run on {date.today():%d %B %Y} with s1bursts {version('s1bursts')} and "
+    f"ESA SNAP {snap_version}. Contains modified Copernicus Sentinel data (2022).\n:::"
+)
+```

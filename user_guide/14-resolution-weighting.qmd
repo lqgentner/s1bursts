@@ -1,0 +1,68 @@
+---
+title: "Local resolution weighting"
+guide-section: "Background"
+---
+
+# Local resolution weighting
+
+Local resolution weighting (LRW) combines acquisitions so that each pixel comes
+mostly from the acquisitions that see it in the finest detail. The method was
+introduced by Small et al. (2022)[^small] and is how s1bursts composes RTC
+backscatter and coherence.
+
+## Why mountains need it
+
+A radar sees mountain slopes very unevenly. A slope facing the satellite is
+squeezed into a few pixels, so its detail is coarse. A slope facing away is
+stretched over many pixels and seen in fine detail, unless it is so steep that
+it falls into shadow. Which slopes are seen well depends on the direction the
+satellite looks from, so different orbits complement each other.
+
+## How the weights work
+
+The weight of each acquisition comes from its `scattering_area` band. This band
+gives, for every pixel, the area of ground that the radar mixed into it,
+relative to a reference: large on slopes facing the satellite, small on slopes
+facing away. Its inverse is the local resolution, and LRW uses it as the
+weight:
+
+$$
+W_i = \frac{1/A_i}{\sum_j 1/A_j}, \qquad
+\text{composite} = \sum_i W_i \, \gamma^0_i
+$$
+
+Here $A_i$ is the scattering area of acquisition $i$ and $\gamma^0_i$ its
+backscatter. An acquisition that sees a pixel twice as finely counts twice as
+much there. A pixel without a valid area, such as one in shadow, gets no
+weight.
+
+Bursts from the same orbit and date are joined first, so the overlap between
+neighbouring bursts is not counted twice.
+
+## The quality layers
+
+Two quality layers describe each composite. `QA-NUM` counts the acquisitions
+that contributed to each pixel. `QA-CQM`, the composite quality map, rates the
+combined resolution:
+
+$$
+\text{CQM} = \frac{1}{\sum_i W_i A_i}
+$$
+
+A higher CQM means finer combined detail. CQM describes viewing geometry only;
+it is not an uncertainty and says nothing about how accurate the backscatter
+is. With `aggregation="median"` or a quantile, CQM is still computed from the
+weighted mean of the areas, so it describes the weighting rather than the
+particular acquisitions that supplied each value.
+
+## Limiting extreme weights
+
+A slope facing almost directly away from the satellite can get a very small
+area and therefore a very large weight. `clip_max_resolution` caps the weight
+to keep one acquisition from dominating such pixels. Report the cap if you use
+it.
+
+[^small]: Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
+    (2022). Wide-area analysis-ready radar backscatter composites. *IEEE
+    Transactions on Geoscience and Remote Sensing*, 60, 5201814.
+    <https://doi.org/10.1109/TGRS.2021.3055562>

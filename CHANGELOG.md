@@ -10,6 +10,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Added
 
+- A [documentation site](https://lqgentner.github.io/s1bursts/) with a user
+  guide, three tutorials on real data, and the API reference.
 - `FileManager` accepts strings for local directories, and
   `prepare_dem_for_snap()` a string for `dem`.
 - The `crs` of every `BurstProcessor.create_*` method, and of the products'

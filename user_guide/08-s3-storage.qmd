@@ -1,0 +1,44 @@
+---
+title: "Storing products on S3"
+guide-section: "How-to Guides"
+---
+
+# Storing products on S3
+
+`FileManager` can keep bursts, products and composites in an S3 bucket instead
+of on local disk. Give it an S3 path from
+[freezebase](https://lqgentner.github.io/freezebase/) instead of a local
+`Path`; everything else in your workflow stays the same.
+
+## Point the FileManager at a bucket
+
+`make_s3_upath()` builds the S3 path. Its `profile` names an entry in your AWS
+configuration files, which holds the access keys and, for S3 services other
+than AWS, the endpoint URL:
+
+```{.python}
+from pathlib import Path
+from freezebase.s3 import make_s3_upath
+from s1bursts import FileManager
+
+fm = FileManager(
+    make_s3_upath("s3://my-bucket/s1bursts", profile="my-profile"),
+    slc_dir=Path("cache/slc"),
+)
+```
+
+freezebase's [Accessing S3](https://lqgentner.github.io/freezebase/user-guide/accessing-s3.html)
+guide shows how to set up a profile and the other ways to give credentials.
+
+This example writes products and composites to the bucket but keeps the
+downloaded bursts on local disk, which saves storage costs for files you can
+download again. Omit `slc_dir` to store everything in the bucket.
+
+Your bucket is unrelated to CDSE's S3 storage. The `CDSE_S3_*` settings are
+only for [downloading bursts](finding-and-downloading.qmd#when-the-burst-service-fails).
+
+::: {.callout-note}
+SNAP reads and writes only local files. s1bursts therefore copies each input to
+a temporary local folder, runs SNAP there, and uploads the result, so some local
+disk space is still needed.
+:::
