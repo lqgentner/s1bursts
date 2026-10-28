@@ -20,6 +20,22 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - Every `BurstProcessor.create_*` method accepts any iterable of bursts or
   burst pairs, such as a list, not only a `BurstCollection` or
   `BurstPairCollection`.
+- Burst collections can be narrowed without touching `.df`. Each selection
+  returns a new collection of the same type:
+  `BurstCollection.within(time_range)` keeps the bursts acquired on a day of a
+  `TimeRange`, `BurstPairCollection.starting_within(time_range)` the pairs
+  whose primary burst was, and on both `intersecting(geometry)` keeps the
+  footprints that touch a geometry and `filter(**fields)` the entries whose
+  columns equal a value or any of an iterable of values. `intersecting` takes
+  a shapely geometry in WGS 84, an `odc.geo` `Geometry` in any CRS, or a
+  `GeoBox` such as an MGRS cell. A projected area is tested in its own CRS,
+  so polar and near-global areas work:
+
+  ```python
+  cell_bursts = bursts.intersecting(cell)  # an MGRSGeoBox
+  in_window = bursts.within(window).filter(rel_orbit_number=[66, 139])
+  pairs = bursts.find_pairs(12).starting_within(window)
+  ```
 
 ### Changed
 
@@ -72,6 +88,17 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
     `except BurstNotInMapError:`.
 - `pyarrow>=17` is a direct dependency, to recognise a corrupt burst-ID map.
   freezebase already required it, so nothing new is installed.
+- **Breaking:** the relative orbit number and pass direction columns of
+  `BurstCollection.df` and `BurstPairCollection.df` lose their underscore,
+  matching the `Burst` attributes. A data frame passed to either constructor
+  uses the new names too.
+
+  ```python
+  # before
+  bursts.df[bursts.df._rel_orbit_number == 66]
+  # after
+  bursts.df[bursts.df.rel_orbit_number == 66]  # or bursts.filter(rel_orbit_number=66)
+  ```
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.

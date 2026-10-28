@@ -5,11 +5,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+from freezebase.mgrs import MGRSGeoBox
 import geopandas as gpd
+import numpy as np
+from odc.geo.geobox import GeoBox
+from odc.geo.geom import Geometry
+from odc.geo.geom import box as odc_box
+import pandas as pd
 from pandas import Timedelta, Timestamp
-from pyproj import CRS
+from pyproj import CRS, Transformer
 import pytest
-from shapely.geometry import box
+from shapely.geometry import MultiPolygon as ShapelyMultiPolygon
+from shapely.geometry import Point, box
 
 from s1bursts.burst import (
     Burst,
@@ -20,13 +27,14 @@ from s1bursts.burst import (
 from s1bursts.cdse import CDSEResponse
 from s1bursts.errors import BurstNotInMapError
 from s1bursts.product import CoherenceProduct
+from s1bursts.time_range import TimeRange
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator
 
     from shapely.geometry import MultiPolygon, Polygon
 
-    from s1bursts.query import Polarization, SubSwath
+    from s1bursts.query import PassDirection, Polarization, SubSwath
 
 BURST_ID = 30346
 SUB_SWATH: SubSwath = "IW1"
@@ -428,6 +436,504 @@ class TestBurstPairCollection:
         assert isinstance(bursts, BurstCollection)
         # 2 pairs share one burst -> 3 unique bursts
         assert len(bursts) == 3
+
+
+WEST = box(7.0, 46.0, 8.0, 47.0)
+EAST = box(9.0, 46.0, 10.0, 47.0)
+
+
+def make_located_burst(
+    date: str,
+    burst_id: int = BURST_ID,
+    geometry: Polygon | MultiPolygon | None = WEST,
+    rel_orbit: int | None = 66,
+    direction: PassDirection | None = "Ascending",
+    sub_swath: SubSwath = SUB_SWATH,
+) -> Burst:
+    return Burst(
+        burst_id=burst_id,
+        sub_swath=sub_swath,
+        polarization="VV",
+        date=Timestamp(date),
+        _geometry=geometry,
+        _rel_orbit_number=rel_orbit,
+        _pass_direction=direction,
+    )
+
+
+class TestPublicColumns:
+    def test_footprint_columns_have_public_names(self) -> None:
+        collection = BurstCollection.from_bursts([make_located_burst("2022-01-01")])
+
+        assert {"rel_orbit_number", "pass_direction"} <= set(collection.df.columns)
+        assert not [c for c in collection.df.columns if c.startswith("_")]
+        assert collection.df.rel_orbit_number.tolist() == [66]
+
+    def test_pair_columns_have_public_names(self) -> None:
+        bursts = BurstCollection.from_bursts(
+            [make_located_burst("2022-01-01"), make_located_burst("2022-01-13")],
+        )
+
+        pairs = bursts.find_pairs(12)
+
+        assert pairs.df.pass_direction.tolist() == ["Ascending"]
+        assert not [c for c in pairs.df.columns if c.startswith("_")]
+
+    def test_cdse_columns_round_trip_to_bursts(self) -> None:
+        collection = BurstCollection.from_cdse_response(TestFromCdseResponse._response())
+
+        assert collection.df.rel_orbit_number.tolist() == [88]
+        assert collection.df.pass_direction.tolist() == ["Descending"]
+
+
+class TestWithin:
+    def test_keeps_every_day_of_the_window(self) -> None:
+        collection = BurstCollection.from_bursts(
+            [
+                make_located_burst("2022-01-01 00:00"),
+                make_located_burst("2022-01-13 23:59"),
+                # Another sub-swath, else it would merge with the burst a minute before.
+                make_located_burst("2022-01-14 00:00", sub_swath="IW2"),
+            ],
+        )
+
+        selected = collection.within(TimeRange("2022-01-01", "2022-01-13"))
+
+        assert isinstance(selected, BurstCollection)
+        assert [b.date for b in selected] == [
+            Timestamp("2022-01-01 00:00"),
+            Timestamp("2022-01-13 23:59"),
+        ]
+        assert len(collection) == 3
+
+    def test_zoned_dates_are_compared_by_their_utc_day(self) -> None:
+        collection = BurstCollection.from_cdse_response(TestFromCdseResponse._response())
+
+        assert len(collection.within(TimeRange("2022-01-01", "2022-01-01"))) == 1
+        assert len(collection.within(TimeRange("2022-01-02", "2022-01-31"))) == 0
+
+    def test_empty_collection_stays_empty(self) -> None:
+        selected = BurstCollection().within(TimeRange("2022-01-01", "2022-01-31"))
+
+        assert isinstance(selected, BurstCollection)
+        assert len(selected) == 0
+
+    def test_selections_chain_without_copying(self) -> None:
+        collection = BurstCollection.from_bursts(
+            [
+                make_located_burst("2022-01-01"),
+                make_located_burst("2022-01-13", geometry=EAST, burst_id=BURST_ID + 1),
+                make_located_burst("2022-03-01"),
+            ],
+        )
+
+        selected = collection.within(TimeRange("2022-01-01", "2022-01-31")).intersecting(WEST)
+        selected.df["note"] = "kept"
+
+        assert len(selected) == 1
+        assert "note" not in collection.df.columns
+
+
+class TestIntersecting:
+    def test_keeps_footprints_that_intersect(self) -> None:
+        collection = BurstCollection.from_bursts(
+            [
+                make_located_burst("2022-01-01"),
+                make_located_burst("2022-01-01", geometry=EAST, burst_id=BURST_ID + 1),
+            ],
+        )
+
+        selected = collection.intersecting(box(7.5, 46.5, 7.6, 46.6))
+
+        assert [b.burst_id for b in selected] == [BURST_ID]
+
+    def test_a_touching_footprint_intersects(self) -> None:
+        collection = BurstCollection.from_bursts([make_located_burst("2022-01-01")])
+
+        assert len(collection.intersecting(box(8.0, 46.0, 9.0, 47.0))) == 1
+
+    def test_missing_footprint_is_looked_up_in_the_burst_map(self) -> None:
+        collection = BurstCollection.from_bursts(
+            [make_located_burst("2022-01-01", geometry=None)],
+        )
+
+        assert len(collection.intersecting(box(7.5, 46.5, 7.6, 46.6))) == 1
+        assert len(collection.intersecting(EAST)) == 0
+
+    def test_selects_pairs(self) -> None:
+        bursts = BurstCollection.from_bursts(
+            [
+                make_located_burst(date, burst_id=burst_id, geometry=geometry)
+                for date in ("2022-01-01", "2022-01-13")
+                for burst_id, geometry in ((BURST_ID, WEST), (BURST_ID + 1, EAST))
+            ],
+        )
+
+        selected = bursts.find_pairs(12).intersecting(EAST)
+
+        assert isinstance(selected, BurstPairCollection)
+        assert [p.burst_id for p in selected] == [BURST_ID + 1]
+
+
+def _utm_box(lon: float, lat: float, crs: str, half_width: float = 1000.0) -> Geometry:
+    """Return a square in a projected CRS around a WGS 84 point."""
+    x, y = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform(lon, lat)
+    return odc_box(x - half_width, y - half_width, x + half_width, y + half_width, crs)
+
+
+def _projected_box(west: float, south: float, east: float, north: float, crs: str) -> Geometry:
+    """Return the box in ``crs`` whose corners are the given WGS 84 corners."""
+    to_crs = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+    x0, y0 = to_crs.transform(west, south)
+    x1, y1 = to_crs.transform(east, north)
+    return odc_box(x0, y0, x1, y1, crs)
+
+
+def _collection_of(*footprints: Polygon | MultiPolygon) -> BurstCollection:
+    """Return one burst per footprint, its burst ID offset by its position."""
+    return BurstCollection.from_bursts(
+        [
+            make_located_burst("2022-01-01", geometry=footprint, burst_id=BURST_ID + i)
+            for i, footprint in enumerate(footprints)
+        ],
+    )
+
+
+def _ids(collection: BurstCollection) -> list[int]:
+    """Return the positions passed to ``_collection_of`` of the bursts kept."""
+    return sorted(b.burst_id - BURST_ID for b in collection)
+
+
+class TestIntersectingOdcGeometry:
+    @staticmethod
+    def make_west_and_east() -> BurstCollection:
+        return BurstCollection.from_bursts(
+            [
+                make_located_burst("2022-01-01"),
+                make_located_burst("2022-01-01", geometry=EAST, burst_id=BURST_ID + 1),
+            ],
+        )
+
+    def test_utm_geometry_is_reprojected(self) -> None:
+        selected = self.make_west_and_east().intersecting(_utm_box(7.5, 46.5, "EPSG:32632"))
+
+        assert [b.burst_id for b in selected] == [BURST_ID]
+
+    def test_geographic_geometry_is_used_as_it_is(self) -> None:
+        lon_lat = Geometry(box(9.5, 46.5, 9.6, 46.6), "EPSG:4326")
+
+        selected = self.make_west_and_east().intersecting(lon_lat)
+
+        assert [b.burst_id for b in selected] == [BURST_ID + 1]
+
+    def test_geometry_without_crs_is_taken_as_wgs84(self) -> None:
+        unlocated = Geometry(box(9.5, 46.5, 9.6, 46.6))
+
+        selected = self.make_west_and_east().intersecting(unlocated)
+
+        assert [b.burst_id for b in selected] == [BURST_ID + 1]
+
+    def test_geobox_stands_for_its_extent(self) -> None:
+        cell = GeoBox.from_bbox(_utm_box(9.5, 46.5, "EPSG:32632").boundingbox, resolution=10)
+
+        selected = self.make_west_and_east().intersecting(cell)
+
+        assert [b.burst_id for b in selected] == [BURST_ID + 1]
+
+    def test_mgrs_cell_and_its_extent_select_alike(self) -> None:
+        cell = MGRSGeoBox.from_mgrs("32TMT64", resolution=10.0)  # near 8.5 E, 47.35 N
+        collection = BurstCollection.from_bursts(
+            [
+                make_located_burst("2022-01-01", geometry=box(8.0, 47.0, 9.0, 48.0)),
+                make_located_burst("2022-01-01", geometry=EAST, burst_id=BURST_ID + 1),
+            ],
+        )
+
+        by_cell = collection.intersecting(cell)
+        by_extent = collection.intersecting(cell.extent)
+
+        assert [b.burst_id for b in by_cell] == [BURST_ID]
+        assert [b.burst_id for b in by_extent] == [BURST_ID]
+
+    def test_utm_area_across_the_antimeridian(self) -> None:
+        collection = _collection_of(
+            box(-179.99, -17.05, -179.9, -16.95),
+            # Split at the antimeridian, as CDSE delivers such a footprint.
+            ShapelyMultiPolygon(
+                [box(179.95, -17.02, 180.0, -16.98), box(-180.0, -17.02, -179.98, -16.98)],
+            ),
+            # Inside the longitude span of the area's corners, outside the area.
+            box(-1.0, -17.05, 1.0, -16.95),
+        )
+
+        selected = collection.intersecting(_utm_box(180.0, -17.0, "EPSG:32760", 5000.0))
+
+        assert _ids(selected) == [0, 1]
+
+    def test_wide_web_mercator_area(self) -> None:
+        collection = _collection_of(
+            box(10.0, 0.0, 11.0, 1.0),
+            box(-60.0, 0.0, -59.0, 1.0),
+            box(170.0, 0.0, 171.0, 1.0),
+        )
+
+        selected = collection.intersecting(_projected_box(-120.0, -60.0, 120.0, 60.0, "EPSG:3857"))
+
+        assert _ids(selected) == [0, 1]
+
+    def test_near_global_web_mercator_area(self) -> None:
+        collection = _collection_of(
+            box(10.0, 0.0, 11.0, 1.0),
+            box(179.5, 0.0, 179.9, 1.0),
+        )
+
+        selected = collection.intersecting(_projected_box(-179.0, -80.0, 179.0, 80.0, "EPSG:3857"))
+
+        assert _ids(selected) == [0]
+
+    def test_polar_area_containing_the_pole(self) -> None:
+        collection = _collection_of(
+            box(30.0, -85.0, 40.0, -84.0),
+            box(30.0, -60.0, 31.0, -59.0),
+            # Northern hemisphere: far outside the area, and far from where the
+            # projection is usable.
+            box(30.0, 60.0, 31.0, 61.0),
+            box(30.0, 89.5, 31.0, 89.9),
+        )
+
+        selected = collection.intersecting(odc_box(-2e6, -2e6, 2e6, 2e6, "EPSG:3031"))
+
+        assert _ids(selected) == [0]
+
+    def test_ring_around_the_pole(self) -> None:
+        to_polar = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
+        inner = to_polar.transform(0.0, -85.0)[1]
+        outer = to_polar.transform(0.0, -75.0)[1]
+        ring = Geometry(
+            Point(0.0, 0.0).buffer(abs(outer)).difference(Point(0.0, 0.0).buffer(abs(inner))),
+            "EPSG:3031",
+        )
+        collection = _collection_of(
+            box(120.0, -81.0, 125.0, -80.0),
+            box(120.0, -89.0, 125.0, -88.0),
+            box(120.0, -70.0, 125.0, -69.0),
+        )
+
+        assert _ids(collection.intersecting(ring)) == [0]
+
+    def test_north_polar_area(self) -> None:
+        collection = _collection_of(
+            box(-40.0, 75.0, -38.0, 76.0),
+            box(-40.0, -75.0, -38.0, -74.0),
+        )
+
+        selected = collection.intersecting(odc_box(-2e6, -3e6, 1e6, 0.0, "EPSG:3413"))
+
+        assert _ids(selected) == [0]
+
+    def test_footprint_edges_follow_their_course_in_the_area_crs(self) -> None:
+        # The footprint's edges run along parallels, which are circles around the
+        # pole in polar stereographic. Joined straight from corner to corner, the
+        # outer edge would cut the circle short and miss the area.
+        to_polar = Transformer.from_crs("EPSG:4326", "EPSG:3031", always_xy=True)
+        x, y = to_polar.transform(45.0, -79.6)
+        collection = _collection_of(box(0.0, -80.0, 90.0, -79.0))
+
+        selected = collection.intersecting(
+            odc_box(x - 1e3, y - 1e3, x + 1e3, y + 1e3, "EPSG:3031")
+        )
+
+        assert _ids(selected) == [0]
+
+    @pytest.mark.parametrize(
+        "crs",
+        [
+            pytest.param("EPSG:3832", id="metres"),
+            pytest.param("+proj=merc +lon_0=150 +datum=WGS84 +units=km", id="kilometres"),
+        ],
+    )
+    def test_footprint_torn_by_the_crs_does_not_intersect(self, crs: str) -> None:
+        # Pacific-centred Mercator cuts the globe at 30 W. A footprint across the
+        # cut would otherwise span the whole map at its latitudes.
+        collection = _collection_of(
+            box(-30.5, -1.0, -29.5, 1.0),
+            box(150.0, 0.0, 151.0, 1.0),
+        )
+
+        selected = collection.intersecting(_projected_box(140.0, -10.0, 160.0, 10.0, crs))
+
+        assert _ids(selected) == [1]
+
+    @pytest.mark.parametrize(
+        ("crs", "torn"),
+        [
+            # Paris meridian in grads: the cut is at 177.66 W.
+            pytest.param("EPSG:4807", box(-177.9, 10.0, -177.4, 10.8), id="paris-grads"),
+            pytest.param(
+                "+proj=longlat +datum=WGS84 +pm=90 +no_defs",
+                box(-90.3, 10.0, -89.7, 10.8),
+                id="prime-meridian-90",
+            ),
+        ],
+    )
+    def test_footprint_torn_by_a_shifted_prime_meridian_does_not_intersect(
+        self,
+        crs: str,
+        torn: Polygon,
+    ) -> None:
+        # The CRS's antimeridian is not 180 degrees, so a footprint across it is
+        # torn into a band around the globe at its latitudes.
+        collection = _collection_of(torn, box(24.0, 10.0, 25.0, 11.0))
+
+        selected = collection.intersecting(_projected_box(20.0, 9.0, 30.0, 12.0, crs))
+
+        assert _ids(selected) == [1]
+
+    def test_footprint_torn_near_the_far_pole_of_a_cone_does_not_intersect(self) -> None:
+        # Near the pole, Alaska Albers's cut at 26 E jumps less than 1000 km. The
+        # area sits between the two halves the cut leaves of the footprint.
+        to_alaska = Transformer.from_crs("EPSG:4326", "EPSG:3338", always_xy=True)
+        x, y = np.mean(
+            [to_alaska.transform(25.8, 84.65), to_alaska.transform(26.2, 84.65)], axis=0
+        )
+        collection = _collection_of(box(25.6, 84.5, 26.4, 84.8))
+
+        selected = collection.intersecting(Geometry(Point(x, y).buffer(5000.0), "EPSG:3338"))
+
+        assert _ids(selected) == []
+
+    def test_footprint_in_alaska_albers(self) -> None:
+        collection = _collection_of(box(-150.0, 61.0, -149.0, 62.0), box(25.0, 61.0, 26.0, 62.0))
+
+        selected = collection.intersecting(_projected_box(-155.0, 58.0, -145.0, 65.0, "EPSG:3338"))
+
+        assert _ids(selected) == [0]
+
+    def test_footprint_the_crs_cannot_project_does_not_intersect(self) -> None:
+        # On the equator 90 degrees from the zone's meridian, UTM has no coordinates.
+        collection = _collection_of(box(8.0, 0.0, 9.0, 1.0), box(98.5, -0.5, 99.5, 0.5))
+
+        selected = collection.intersecting(_utm_box(9.0, 0.0, "EPSG:32632", 5e6))
+
+        assert _ids(selected) == [0]
+
+    def test_area_in_another_geographic_crs(self) -> None:
+        collection = _collection_of(box(7.0, 46.0, 8.0, 47.0), box(9.0, 46.0, 10.0, 47.0))
+
+        selected = collection.intersecting(Geometry(box(7.4, 46.4, 7.6, 46.6), "EPSG:4258"))
+
+        assert _ids(selected) == [0]
+
+    def test_empty_collection_in_a_projected_area(self) -> None:
+        assert len(BurstCollection().intersecting(odc_box(-1e6, -1e6, 1e6, 1e6, "EPSG:3031"))) == 0
+
+
+class TestFilter:
+    @staticmethod
+    def make_mixed() -> BurstCollection:
+        return BurstCollection.from_bursts(
+            [
+                make_located_burst("2022-01-01", rel_orbit=66),
+                make_located_burst("2022-01-02", rel_orbit=139, direction="Descending"),
+                make_located_burst("2022-01-03", rel_orbit=15, sub_swath="IW2"),
+            ],
+        )
+
+    def test_keeps_matching_value(self) -> None:
+        selected = self.make_mixed().filter(rel_orbit_number=66)
+
+        assert isinstance(selected, BurstCollection)
+        assert [b.rel_orbit_number for b in selected] == [66]
+
+    def test_a_list_keeps_any_of_its_values(self) -> None:
+        selected = self.make_mixed().filter(rel_orbit_number=[66, 139])
+
+        assert sorted(b.rel_orbit_number for b in selected) == [66, 139]
+
+    @pytest.mark.parametrize(
+        "orbits",
+        [
+            pytest.param(np.array([66, 139]), id="ndarray"),
+            pytest.param(pd.Series([66, 139]), id="series"),
+            pytest.param(pd.Index([66, 139]), id="index"),
+            pytest.param(range(66, 140, 73), id="range"),
+            pytest.param((o for o in (66, 139)), id="generator"),
+        ],
+    )
+    def test_any_iterable_keeps_any_of_its_values(self, orbits: Iterable[int]) -> None:
+        selected = self.make_mixed().filter(rel_orbit_number=orbits)
+
+        assert sorted(b.rel_orbit_number for b in selected) == [66, 139]
+
+    def test_unique_values_of_another_collection_select_its_orbits(self) -> None:
+        other = self.make_mixed().filter(pass_direction="Ascending")
+
+        selected = self.make_mixed().filter(rel_orbit_number=other.df.rel_orbit_number.unique())
+
+        assert sorted(b.rel_orbit_number for b in selected) == [15, 66]
+
+    def test_a_string_is_one_value(self) -> None:
+        selected = self.make_mixed().filter(sub_swath="IW2")
+
+        assert [b.sub_swath for b in selected] == ["IW2"]
+
+    def test_every_keyword_must_match(self) -> None:
+        selected = self.make_mixed().filter(
+            rel_orbit_number=(66, 15),
+            pass_direction="Ascending",
+            sub_swath="IW2",
+        )
+
+        assert [b.rel_orbit_number for b in selected] == [15]
+
+    def test_no_keywords_keeps_everything(self) -> None:
+        assert len(self.make_mixed().filter()) == 3
+
+    def test_missing_footprint_values_are_looked_up_in_the_burst_map(self) -> None:
+        collection = BurstCollection.from_bursts(
+            [
+                make_located_burst("2022-01-01", rel_orbit=None, direction=None),
+                make_located_burst("2022-01-13", rel_orbit=66),
+            ],
+        )
+
+        assert len(collection.filter(rel_orbit_number=15, pass_direction="Ascending")) == 1
+        assert len(collection.filter(rel_orbit_number={15, 66})) == 2
+
+    @pytest.mark.parametrize("field", ["rel_orbit", "date", "geometry", "_lines_per_burst"])
+    def test_rejects_unknown_and_unfilterable_fields(self, field: str) -> None:
+        with pytest.raises(ValueError, match=f"Cannot filter on '{field}'"):
+            self.make_mixed().filter(**{field: 1})
+
+    def test_selects_pairs(self) -> None:
+        bursts = BurstCollection.from_bursts(
+            [
+                make_located_burst(date, rel_orbit=orbit, sub_swath=sub_swath)
+                for date in ("2022-01-01", "2022-01-13")
+                for orbit, sub_swath in ((66, "IW1"), (139, "IW2"))
+            ],
+        )
+
+        selected = bursts.find_pairs(12).filter(rel_orbit_number=139)
+
+        assert isinstance(selected, BurstPairCollection)
+        assert [p.sub_swath for p in selected] == ["IW2"]
+
+
+class TestStartingWithin:
+    def test_selects_pairs_by_primary_date(self) -> None:
+        bursts = BurstCollection.from_bursts(
+            [make_located_burst(d) for d in ("2022-01-19", "2022-01-31", "2022-02-12")],
+        )
+
+        selected = bursts.find_pairs(12).starting_within(TimeRange("2022-01-01", "2022-01-31"))
+
+        assert isinstance(selected, BurstPairCollection)
+        # The pair starting on the last day is kept though it ends after the window.
+        assert [(p.primary.date.day, p.secondary.date.day) for p in selected] == [
+            (19, 31),
+            (31, 12),
+        ]
 
 
 class TestFindPairsValidation:

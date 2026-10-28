@@ -24,6 +24,8 @@ practical.
   polarization, orbit, and more (`BurstDatabase`, `SearchQuery`)
 - **Download** single bursts via the CDSE OData API or by extracting them
   directly from CDSE S3 object storage, with automatic endpoint fallback
+- **Select** part of a search by time, area or field (`within`,
+  `intersecting`, `filter`)
 - **Pair** bursts into InSAR pairs with a chosen temporal baseline
   (`BurstCollection.find_pairs`)
 - **Process** with dynamically generated SNAP GPT graphs:

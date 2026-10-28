@@ -150,7 +150,7 @@ The coherence estimation window exists only in `CoherenceConfig` at graph-build 
 
 - `Burst`: one acquisition of one footprint, identified by `burst_id`, `sub_swath`, `polarization` and the calendar day of `date`. Relative orbit number, pass direction and footprint geometry are propagated from the CDSE response or an SLC filename; a burst that carries none falls back to the SAR-MPC burst-ID map, an opt-in download (`download_burst_map()`).
 - `BurstPair`: primary and secondary `Burst` of one footprint; `baseline_days` is the temporal baseline rounded to whole days.
-- `BurstCollection` / `BurstPairCollection`: GeoDataFrame-backed containers with deduplication, slicing, an HTML preview, and `find_pairs(baseline, max_delta=6)` (days and hours when given as integers; `baseline` must be whole days and `max_delta` under 12 hours, so every pair is named by the requested baseline).
+- `BurstCollection` / `BurstPairCollection`: GeoDataFrame-backed containers with deduplication, slicing, an HTML preview, and `find_pairs(baseline, max_delta=6)` (days and hours when given as integers; `baseline` must be whole days and `max_delta` under 12 hours, so every pair is named by the requested baseline). Selections return a new collection of the same type: `BurstCollection.within(time_range)` and `BurstPairCollection.starting_within(time_range)` keep the acquisitions (pairs: the primary) on a day of a `TimeRange`; `intersecting(geometry)` keeps the footprints touching a shapely geometry in WGS 84, an `odc.geo` `Geometry` in any CRS, or a `GeoBox` such as an `MGRSGeoBox` (a projected area is tested in its own CRS, with the footprints projected into it, so polar and near-global areas keep their shape); `filter(**fields)` keeps the entries whose columns equal a value or any of an iterable of values. The columns of `.df` are the burst's public field names, `rel_orbit_number` and `pass_direction` among them.
 - `SearchQuery`: validated search parameters; `BurstDatabase.search(query)` turns it into OData filters and returns every match from one catalog request. A query matching more than one page (1000 bursts) raises `TooManyResultsError`; split it and combine the results with `+`.
 - `BurstDatabase.download(bursts, *, overwrite=False, max_workers=5, endpoint=None)`: parallel download via the CDSE OData burst endpoint or by extracting the burst from the parent product in CDSE S3 (`burst_extractor.py`); a failure on one endpoint is retried on the other, and a burst the source does not hold is remembered so it is not requested twice.
 
@@ -267,6 +267,22 @@ config = SNAPConfig(
 - CEOS-ARD PFS: Synthetic Aperture Radar v1.3.1 (2026-07-07). <https://ceos.org/ard/>
 
 ## Example workflows
+
+### Select part of a search
+
+```python
+from freezebase.mgrs import MGRSGeoBox
+
+from s1bursts import TimeRange
+
+window = TimeRange("2022-06-01", "2022-08-31")
+cell = MGRSGeoBox.from_mgrs("32TMT64", resolution=10.0)
+
+# The bursts of one MGRS cell from an AOI search
+cell_bursts = bursts.intersecting(cell)
+summer = cell_bursts.within(window).filter(rel_orbit_number=[66, 139])
+pairs = cell_bursts.find_pairs(12).starting_within(window)
+```
 
 ### Process a single burst
 
