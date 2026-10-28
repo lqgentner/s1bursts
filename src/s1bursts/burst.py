@@ -17,6 +17,7 @@ from s1bursts.burstmap import (
     create_s1_orbit_number_lut,
     create_s1_pass_direction_lut,
 )
+from s1bursts.errors import BurstNotInMapError
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterator
@@ -80,7 +81,7 @@ class BurstFootprintMixin:
                 f"Burst (burst_id={self.burst_id}, sub_swath='{self.sub_swath}') "
                 "not found in the Sentinel-1 burst map."
             )
-            raise KeyError(msg) from None
+            raise BurstNotInMapError(msg) from None
 
     @property
     def rel_orbit_number(self) -> int:
@@ -93,10 +94,10 @@ class BurstFootprintMixin:
 
         Raises
         ------
-        FileNotFoundError
+        BurstMapUnavailableError
             If the value was not propagated and the burst map has not been
             downloaded (see ``s1bursts.burstmap.download_burst_map``).
-        KeyError
+        BurstNotInMapError
             If the burst is not found in the map.
         """
         if self._rel_orbit_number is not None:
@@ -114,10 +115,10 @@ class BurstFootprintMixin:
 
         Raises
         ------
-        FileNotFoundError
+        BurstMapUnavailableError
             If the value was not propagated and the burst map has not been
             downloaded (see ``s1bursts.burstmap.download_burst_map``).
-        KeyError
+        BurstNotInMapError
             If the burst is not found in the map.
         """
         if self._pass_direction is not None:
@@ -135,10 +136,10 @@ class BurstFootprintMixin:
 
         Raises
         ------
-        FileNotFoundError
+        BurstMapUnavailableError
             If the geometry was not propagated and the burst map has not been
             downloaded (see ``s1bursts.burstmap.download_burst_map``).
-        KeyError
+        BurstNotInMapError
             If the burst is not found in the map.
         """
         if self._geometry is not None:
@@ -158,10 +159,10 @@ class BurstFootprintMixin:
 
         Raises
         ------
-        FileNotFoundError
+        BurstMapUnavailableError
             If ``rel_orbit_number`` was not propagated and the burst map has not
             been downloaded (see ``s1bursts.burstmap.download_burst_map``).
-        KeyError
+        BurstNotInMapError
             If the burst is not found in the burst map.
         """
         return f"{self.rel_orbit_number:03}_{self.burst_id:06}_{self.sub_swath}"
@@ -332,7 +333,10 @@ class BurstPair:
 
         Raises
         ------
-        KeyError
+        BurstMapUnavailableError
+            If the value was not propagated and the burst map has not been
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
+        BurstNotInMapError
             If the burst is not found in the burst map.
         """
         return self.primary.full_burst_id
@@ -381,7 +385,10 @@ class BurstPair:
 
         Raises
         ------
-        KeyError
+        BurstMapUnavailableError
+            If the value was not propagated and the burst map has not been
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
+        BurstNotInMapError
             If the burst is not found in the burst map.
         """
         return self.primary.rel_orbit_number
@@ -397,7 +404,10 @@ class BurstPair:
 
         Raises
         ------
-        KeyError
+        BurstMapUnavailableError
+            If the value was not propagated and the burst map has not been
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
+        BurstNotInMapError
             If the burst is not found in the burst map.
         """
         return self.primary.pass_direction
@@ -413,7 +423,10 @@ class BurstPair:
 
         Raises
         ------
-        KeyError
+        BurstMapUnavailableError
+            If the value was not propagated and the burst map has not been
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
+        BurstNotInMapError
             If the burst is not found in the burst map.
         """
         return self.primary.geometry

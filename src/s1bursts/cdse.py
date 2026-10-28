@@ -20,6 +20,7 @@ from requests.auth import AuthBase
 
 from s1bursts.burst_extractor import extract_burst_from_s3
 from s1bursts.config import get_settings
+from s1bursts.errors import CatalogError, ConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -84,7 +85,7 @@ class CDSEAuth(AuthBase):
 
     Raises
     ------
-    ValueError
+    ConfigurationError
         If credentials are not provided as arguments and not found in the
         environment.
     """
@@ -102,7 +103,7 @@ class CDSEAuth(AuthBase):
                 "CDSE credentials not configured. Pass username/password explicitly, "
                 "or set CDSE_USERNAME and CDSE_PASSWORD in your environment."
             )
-            raise ValueError(msg)
+            raise ConfigurationError(msg)
 
         self._username = username
         self._password = SecretStr(password)
@@ -250,7 +251,7 @@ class CDSEResponse:
 
         Raises
         ------
-        RuntimeError
+        CatalogError
             If an unknown EPSG code is found in the geometry definitions.
         """
         df_results = pd.DataFrame(self.value)
@@ -264,7 +265,7 @@ class CDSEResponse:
             epsg_codes = extracted[0].astype(int)
             if not (epsg_codes == EPSG_WGS84).all():
                 msg = f"Found unknown EPSG codes:\n{epsg_codes}"
-                raise RuntimeError(msg)
+                raise CatalogError(msg)
             geometry = gpd.GeoSeries.from_wkt(extracted[1], crs=EPSG_WGS84)
 
         df_results = df_results.reindex(columns=_RESPONSE_COLS_KEEP)
@@ -309,7 +310,7 @@ class CDSEResponse:
 
         Raises
         ------
-        AttributeError
+        CatalogError
             If count is None.
         """
         if self.count is None:
@@ -317,7 +318,7 @@ class CDSEResponse:
                 "Cannot determine completeness because count is None. "
                 "Set `count=True` during burst search."
             )
-            raise AttributeError(msg)
+            raise CatalogError(msg)
         return len(self) == self.count
 
 
@@ -392,7 +393,7 @@ class CDSEBurstClient:
 
         Raises
         ------
-        RuntimeError
+        CatalogError
             If the API response is malformed or invalid.
         requests.HTTPError
             If the search request fails.
@@ -408,11 +409,11 @@ class CDSEBurstClient:
         content_type = response.headers.get("Content-Type", "")
         if not content_type.startswith("application/json"):
             msg = f"Failed to query bursts: \n{response.text}"
-            raise RuntimeError(msg)
+            raise CatalogError(msg)
         json_ = response.json()
         if not isinstance(json_, dict) or json_.get("@odata.context") != "$metadata#Bursts":
             msg = f"Failed to query bursts: \n{json_}"
-            raise RuntimeError(msg)
+            raise CatalogError(msg)
         return CDSEResponse.from_dict(json_)
 
     def download_burst(

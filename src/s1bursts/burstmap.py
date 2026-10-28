@@ -13,6 +13,9 @@ from freezebase.vectools import drop_z_if_zero, simplify_multipolygons, write_pa
 from freezebase.vectordata import DatasetMetadata, GeoVectorData
 import geopandas as gpd
 from pandas.api.types import CategoricalDtype
+from pyarrow import ArrowInvalid
+
+from s1bursts.errors import BurstMapUnavailableError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -133,7 +136,7 @@ class Sentinel1Bursts(GeoVectorData):
                     break
             if filename is None:
                 msg = f"Couldn't locate SpatiaLite database in '{self.raw_path.name}'."
-                raise FileNotFoundError(msg)
+                raise BurstMapUnavailableError(msg)
             bursts = gpd.read_file(BytesIO(zf.read(filename)))
 
         # Convert column dtypes
@@ -170,6 +173,11 @@ def download_burst_map(cache_dir: str | Path | None = None, *, mode: Mode = "IW"
     -------
     Path
         Path to the prepared GeoParquet file.
+
+    Raises
+    ------
+    BurstMapUnavailableError
+        If the downloaded archive holds no burst-ID map for ``mode``.
     """
     dataset = Sentinel1Bursts(cache_dir=cache_dir, mode=mode)
     dataset.get_data(download=True)
@@ -179,18 +187,37 @@ def download_burst_map(cache_dir: str | Path | None = None, *, mode: Mode = "IW"
 def _load_indexed_burst_map(cache_dir: str | Path | None, mode: Mode) -> gpd.GeoDataFrame:
     """Load the prepared burst map indexed by ``(burst_id, subswath_name)``.
 
-    Does not download: the map is opt-in. Raises a clear error, pointing at
-    ``download_burst_map``, when the data has not been fetched yet.
+    Does not download: the map is opt-in. Raises ``BurstMapUnavailableError``,
+    pointing at ``download_burst_map``, when the data has not been fetched yet
+    or its cached copy is corrupt.
     """
+    dataset = Sentinel1Bursts(cache_dir=cache_dir, mode=mode)
+    download = f"`s1bursts.download_burst_map(mode='{mode}')`"
     try:
-        df = Sentinel1Bursts(cache_dir=cache_dir, mode=mode).get_data(download=False)
+        df = dataset.get_data(download=False)
     except FileNotFoundError as e:
         msg = (
             f"The Sentinel-1 {mode} burst-ID map is required to look up this burst's "
             "orbit/geometry, but it has not been downloaded. Fetch it once (~500 MB "
-            f"download) with `s1bursts.download_burst_map(mode='{mode}')`."
+            f"download) with {download}."
         )
-        raise FileNotFoundError(msg) from e
+        raise BurstMapUnavailableError(msg) from e
+    except ArrowInvalid as e:
+        msg = (
+            f"The prepared Sentinel-1 {mode} burst-ID map is unreadable. Delete "
+            f"'{dataset.processed_path}' and prepare it again with {download}."
+        )
+        raise BurstMapUnavailableError(msg) from e
+    except ValueError as e:
+        # freezebase reports a corrupt download as a plain ValueError; any other
+        # ValueError is not about the cached files and keeps its type.
+        if not str(e).startswith("Checksum mismatch"):
+            raise
+        msg = (
+            f"The downloaded Sentinel-1 {mode} burst-ID map is corrupt. Delete "
+            f"'{dataset.raw_path}' and download it again with {download}."
+        )
+        raise BurstMapUnavailableError(msg) from e
     return df.set_index(["burst_id", "subswath_name"])
 
 
@@ -223,6 +250,12 @@ def create_s1_pass_direction_lut(
     -------
     dict[tuple[int, SubSwath], str]
         Mapping of ``(burst_id, subswath_name)`` → pass direction string.
+
+    Raises
+    ------
+    BurstMapUnavailableError
+        If the burst-ID map has not been downloaded (see ``download_burst_map``)
+        or cannot be read.
     """
     df = _load_indexed_burst_map(cache_dir, mode)
     # The burst map spells the directions upper case; the package uses the
@@ -260,6 +293,12 @@ def create_s1_orbit_number_lut(
     -------
     dict[tuple[int, SubSwath], int]
         Mapping of ``(burst_id, subswath_name)`` → relative orbit number.
+
+    Raises
+    ------
+    BurstMapUnavailableError
+        If the burst-ID map has not been downloaded (see ``download_burst_map``)
+        or cannot be read.
     """
     df = _load_indexed_burst_map(cache_dir, mode)
     return cast("dict[tuple[int, SubSwath], int]", df["relative_orbit_number"].to_dict())
@@ -293,6 +332,12 @@ def create_s1_geometry_lut(
     -------
     dict[tuple[int, SubSwath], Polygon | MultiPolygon]
         Mapping of ``(burst_id, subswath_name)`` → footprint geometry.
+
+    Raises
+    ------
+    BurstMapUnavailableError
+        If the burst-ID map has not been downloaded (see ``download_burst_map``)
+        or cannot be read.
     """
     df = _load_indexed_burst_map(cache_dir, mode)
     return cast("dict[tuple[int, SubSwath], Polygon | MultiPolygon]", df["geometry"].to_dict())

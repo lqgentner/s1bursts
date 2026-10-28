@@ -21,6 +21,7 @@ from rasterio.errors import RasterioError
 import rasterio.windows
 
 from s1bursts.config import get_settings
+from s1bursts.errors import TransformationGridError
 from s1bursts.snap_client import external_dem_needs_half_pixel_shift
 
 logger = logging.getLogger(__name__)
@@ -235,7 +236,7 @@ def _download_grids(group: TransformerGroup) -> None:
             f"No directly downloadable open-license PROJ grid is available for "
             f"{', '.join(_missing_grid_names(group))}. Install the required grid manually."
         )
-        raise RuntimeError(msg)
+        raise TransformationGridError(msg)
     logger.info("Downloading PROJ transformation grid(s): %s", ", ".join(names))
 
     user_dir: Path | None = None
@@ -252,14 +253,14 @@ def _download_grids(group: TransformerGroup) -> None:
     except (OSError, RuntimeError) as err:
         location = f" to '{user_dir}'" if user_dir is not None else ""
         msg = f"Could not download PROJ transformation grid(s) {', '.join(names)}{location}"
-        raise RuntimeError(msg) from err
+        raise TransformationGridError(msg) from err
 
     if not published:
         msg = (
             f"PROJ reported {', '.join(names)} as downloadable but produced no file. "
             f"Install the required grid manually."
         )
-        raise RuntimeError(msg)
+        raise TransformationGridError(msg)
 
 
 def _unavailable_transformation_error(
@@ -267,7 +268,7 @@ def _unavailable_transformation_error(
     group: TransformerGroup,
     *,
     download_missing_grids: bool,
-) -> RuntimeError:
+) -> TransformationGridError:
     """Build the error explaining why no exact transformation could be built.
 
     Missing grids are reported by what the caller can do about them: PROJ can
@@ -292,7 +293,7 @@ def _unavailable_transformation_error(
     elif blocked:
         parts.append("Install them manually into the PROJ user data directory.")
 
-    return RuntimeError(" ".join(parts))
+    return TransformationGridError(" ".join(parts))
 
 
 def _get_transformer(source_crs: CRS, *, download_missing_grids: bool) -> Transformer:
@@ -473,8 +474,9 @@ def prepare_dem_for_snap(
         If ``dem`` does not exist.
     ValueError
         If the source CRS is invalid or inconsistent with the DEM.
-    RuntimeError
-        If no exact vertical transformation is available.
+    TransformationGridError
+        If no exact vertical transformation is available, because a PROJ grid
+        it needs is missing or could not be downloaded.
     pyproj.exceptions.ProjError
         If any DEM pixel falls outside the selected transformation's valid area.
     ConfigurationError

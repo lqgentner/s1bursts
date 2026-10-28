@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 from zipfile import ZipFile
 
 import geopandas as gpd
+from pyarrow import ArrowInvalid
 import pytest
 from shapely.geometry import Polygon, box
 
 from s1bursts import burstmap
+from s1bursts.errors import BurstMapUnavailableError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -63,9 +66,62 @@ class TestOptInLoading:
                 "get_data",
                 side_effect=FileNotFoundError("Dataset not found."),
             ),
-            pytest.raises(FileNotFoundError, match="download_burst_map"),
+            pytest.raises(BurstMapUnavailableError, match="download_burst_map"),
         ):
             burstmap.create_s1_orbit_number_lut(cache_dir=tmp_path, mode="IW")
+
+    def test_unreadable_archive_is_not_reported_as_missing(self, tmp_path: Path) -> None:
+        """A downloaded archive without a database names that, not a missing download."""
+        # Previously reported as "has not been downloaded", because the archive's
+        # FileNotFoundError was caught as the dataset's own.
+        dataset = burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode="IW")
+        dataset.raw_path.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(dataset.raw_path, "w") as archive:
+            archive.writestr("S1_burstid_20220530/readme.txt", "no database here")
+        checksum = hashlib.sha256(dataset.raw_path.read_bytes()).hexdigest()
+
+        with (
+            patch.object(burstmap, "_BURSTMAP_SHA256", checksum),
+            pytest.raises(BurstMapUnavailableError, match="Couldn't locate SpatiaLite"),
+        ):
+            burstmap.create_s1_orbit_number_lut(cache_dir=tmp_path, mode="IW")
+
+    def test_corrupt_download_names_the_file_to_delete(self, tmp_path: Path) -> None:
+        """A truncated download fails freezebase's checksum."""
+        dataset = burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode="IW")
+        dataset.raw_path.parent.mkdir(parents=True, exist_ok=True)
+        dataset.raw_path.write_bytes(b"truncated")
+
+        with pytest.raises(BurstMapUnavailableError, match="is corrupt") as error:
+            burstmap.create_s1_orbit_number_lut(cache_dir=tmp_path, mode="IW")
+
+        assert str(dataset.raw_path) in str(error.value)
+        assert "download_burst_map(mode='IW')" in str(error.value)
+        assert isinstance(error.value.__cause__, ValueError)
+
+    def test_corrupt_prepared_map_names_the_file_to_delete(self, tmp_path: Path) -> None:
+        dataset = burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode="IW")
+        dataset.processed_path.parent.mkdir(parents=True, exist_ok=True)
+        dataset.processed_path.write_bytes(b"PAR1garbage")
+
+        with pytest.raises(BurstMapUnavailableError, match="is unreadable") as error:
+            burstmap.create_s1_orbit_number_lut(cache_dir=tmp_path, mode="IW")
+
+        assert str(dataset.processed_path) in str(error.value)
+        assert isinstance(error.value.__cause__, ArrowInvalid)
+
+    def test_unrelated_value_error_keeps_its_type(self, tmp_path: Path) -> None:
+        with (
+            patch.object(
+                burstmap.Sentinel1Bursts,
+                "get_data",
+                side_effect=ValueError("bug"),
+            ),
+            pytest.raises(ValueError, match="bug") as error,
+        ):
+            burstmap.create_s1_orbit_number_lut(cache_dir=tmp_path, mode="IW")
+
+        assert not isinstance(error.value, BurstMapUnavailableError)
 
     def test_factories_do_not_auto_download(self, tmp_path: Path) -> None:
         """The LUT factories must load without triggering a download."""
@@ -120,7 +176,7 @@ class TestPrepare:
         with ZipFile(dataset.raw_path, "w") as archive:
             archive.writestr("S1_burstid_20220530/readme.txt", "no database here")
 
-        with pytest.raises(FileNotFoundError, match="Couldn't locate SpatiaLite database"):
+        with pytest.raises(BurstMapUnavailableError, match="Couldn't locate SpatiaLite database"):
             dataset._prepare()
 
     def test_ignores_a_database_belonging_to_the_other_mode(self, tmp_path: Path) -> None:
@@ -130,7 +186,7 @@ class TestPrepare:
         with ZipFile(dataset.raw_path, "w") as archive:
             archive.writestr("S1_burstid/IW/sqlite/burstid.sqlite3", "not the EW map")
 
-        with pytest.raises(FileNotFoundError, match="Couldn't locate SpatiaLite database"):
+        with pytest.raises(BurstMapUnavailableError, match="Couldn't locate SpatiaLite database"):
             dataset._prepare()
 
     def test_reads_the_database_matching_the_requested_mode(self, tmp_path: Path) -> None:
