@@ -121,13 +121,13 @@ def burst_granule(scene: Scene, acquisition: str) -> str:
     # this module's helpers without it installed.
     import asf_search  # noqa: PLC0415
 
-    start, end = scene.search_window(acquisition)
+    window = scene.search_window(acquisition)
     results = asf_search.search(
         dataset="SLC-BURST",
         fullBurstID=scene.full_burst_id,
         polarization=scene.polarization,
-        start=start,
-        end=end,
+        start=str(window.start),
+        end=str(window.end),
     )
     granules = sorted(product.properties["sceneName"] for product in results)
     if len(granules) != 1:

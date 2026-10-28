@@ -33,6 +33,7 @@ from s1bursts import (
     InterferogramConfig,
     SearchQuery,
     SNAPConfig,
+    TimeRange,
 )
 from s1bursts.config import get_settings
 from s1bursts.dem import _get_transformer
@@ -58,11 +59,11 @@ pytestmark = pytest.mark.integration
 BURST_ID = 30346
 SUB_SWATH = "IW1"
 POLARIZATION = "VV"
-TIME_RANGE = ("2022-08-20", "2022-08-30")
+TIME_RANGE = TimeRange("2022-08-20", "2022-08-29")
 # Interferometric processing needs a second acquisition of the same burst: the
 # 12-day repeat that follows the one above, which is also the pair the HyP3
 # coherence validation uses for this burst (see tests/insar_validation.py).
-PAIR_TIME_RANGE = ("2022-08-20", "2022-09-10")
+PAIR_TIME_RANGE = TimeRange("2022-08-20", "2022-09-09")
 PAIR_BASELINE_DAYS = 12
 
 _settings = get_settings()
@@ -147,7 +148,7 @@ class TestCatalogSearch:
         burst = bursts[0]
         assert burst.burst_id == BURST_ID
         assert burst.sub_swath == SUB_SWATH
-        assert burst.date >= Timestamp(TIME_RANGE[0], tz="UTC")
+        assert burst.date in TIME_RANGE
         assert burst.cdse_id is not None
         assert burst.parent_product_name is not None
 
@@ -165,7 +166,7 @@ class TestCatalogSearch:
             burst_id=78124,
             sub_swath="IW1",
             polarization="VH",
-            time_range=("2018-07-24", "2018-07-27"),
+            time_range=TimeRange("2018-07-24", "2018-07-26"),
         )
 
         with pytest.warns(UserWarning, match="most complete"):

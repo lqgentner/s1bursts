@@ -385,12 +385,12 @@ class BurstDatabase:
 
         filters = [expr for value, expr in simple_filters if value is not None]
 
-        if query.time_range:
-            start, end = query.time_range
+        if query.time_range is not None:
+            start, end = query.time_range.half_open()
             fmt = "%Y-%m-%dT%H:%M:%SZ"
             # ContentDate/Start maps to BeginningDateTime (sensingTime),
-            # which matches Burst.date. The stop is exclusive, so a TimeRange's
-            # stop, the midnight after its last day, keeps that whole day.
+            # which matches Burst.date. The stop is exclusive, so the midnight
+            # after the window's last day keeps that whole day.
             filters.append(
                 f"ContentDate/Start ge {start.strftime(fmt)} and "
                 f"ContentDate/Start lt {end.strftime(fmt)}",

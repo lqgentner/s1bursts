@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pandas as pd
 from pandas import Timestamp
 import pytest
 from shapely.geometry import box
@@ -14,46 +13,36 @@ from s1bursts.time_range import TimeRange
 
 
 class TestTimeRange:
-    def test_converts_strings_to_timestamps(self) -> None:
-        query = SearchQuery(time_range=("2022-01-01", "2022-02-01"))
+    def test_stores_the_window_as_given(self) -> None:
+        window = TimeRange("2022-01-01", "2022-01-31")
 
-        assert query.time_range == (Timestamp("2022-01-01"), Timestamp("2022-02-01"))
+        query = SearchQuery(time_range=window)
 
-    def test_accepts_timestamps(self) -> None:
-        start, end = Timestamp("2022-01-01"), Timestamp("2022-02-01")
-        query = SearchQuery(time_range=(start, end))
-
-        assert query.time_range == (start, end)
-
-    def test_a_window_becomes_the_half_open_instants_covering_its_days(self) -> None:
-        query = SearchQuery(time_range=TimeRange("2022-01-01", "2022-01-31"))
-
-        assert query.time_range == (Timestamp("2022-01-01"), Timestamp("2022-02-01"))
+        assert query.time_range is window
 
     def test_none_stays_none(self) -> None:
         assert SearchQuery().time_range is None
 
-    def test_rejects_non_sequence(self) -> None:
-        with pytest.raises(TypeError, match="must be of type tuple"):
-            # pyrefly: ignore [bad-argument-type]
-            SearchQuery(time_range=pd.Timestamp("2022-01-01"))
-
     @pytest.mark.parametrize(
         "time_range",
-        [("2022-01-01",), ("2022-01-01", "2022-02-01", "2022-03-01")],
+        [
+            ("2022-01-01", "2022-02-01"),
+            (Timestamp("2022-01-01"), Timestamp("2022-02-01")),
+            Timestamp("2022-01-01"),
+        ],
     )
-    def test_rejects_wrong_length(self, time_range: tuple[str, ...]) -> None:
-        with pytest.raises(ValueError, match="exactly 2 elements"):
+    def test_rejects_anything_but_a_time_range(self, time_range: object) -> None:
+        # Previously a tuple was accepted as a half-open pair of instants, which
+        # dropped every acquisition on the day written as its end.
+        with pytest.raises(TypeError, match=r"must be a TimeRange.*inclusive"):
+            # The test passes a non-TimeRange on purpose.
             # pyrefly: ignore [bad-argument-type]
             SearchQuery(time_range=time_range)
 
-    def test_rejects_start_after_end(self) -> None:
-        with pytest.raises(ValueError, match="must be before end time"):
-            SearchQuery(time_range=("2022-02-01", "2022-01-01"))
+    def test_repr_shows_the_window_days(self) -> None:
+        query = SearchQuery(time_range=TimeRange("2022-01-01", "2022-01-31"))
 
-    def test_rejects_start_equal_end(self) -> None:
-        with pytest.raises(ValueError, match="must be before end time"):
-            SearchQuery(time_range=("2022-01-01", "2022-01-01"))
+        assert repr(query) == "SearchQuery(time_range=2022-01-01..2022-01-31)"
 
 
 class TestGeometry:

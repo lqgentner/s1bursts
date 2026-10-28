@@ -65,18 +65,6 @@ class TestQueryToFilters:
     def test_empty_query_produces_no_filters(self) -> None:
         assert BurstDatabase._convert_query_to_filters(SearchQuery()) == []
 
-    def test_time_range_filter(self) -> None:
-        query = SearchQuery(time_range=("2022-01-01", "2022-02-01"))
-
-        filters = BurstDatabase._convert_query_to_filters(query)
-
-        assert filters == [
-            (
-                "ContentDate/Start ge 2022-01-01T00:00:00Z and "
-                "ContentDate/Start lt 2022-02-01T00:00:00Z"
-            ),
-        ]
-
     def test_time_range_window_filter_keeps_its_last_day(self) -> None:
         query = SearchQuery(time_range=TimeRange("2022-01-01", "2022-01-31"))
 

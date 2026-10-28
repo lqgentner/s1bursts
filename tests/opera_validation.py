@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from s1bursts.time_range import TimeRange
 from tests.raster_comparison import block_mean
 
 if TYPE_CHECKING:
@@ -65,10 +66,10 @@ class Scene:
         """
         return self.burst_tag.replace("-", "_")
 
-    def search_window(self, acquisition: str) -> tuple[str, str]:
-        """Return a +/-1 day window around an acquisition date, for ``SearchQuery``."""
+    def search_window(self, acquisition: str) -> TimeRange:
+        """Return the day before an acquisition through the day after, for ``SearchQuery``."""
         day = _date.fromisoformat(acquisition)
-        return (str(day - timedelta(days=1)), str(day + timedelta(days=1)))
+        return TimeRange(day - timedelta(days=1), day + timedelta(days=1))
 
 
 SCENES: tuple[Scene, ...] = (

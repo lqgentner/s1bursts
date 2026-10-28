@@ -34,6 +34,13 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   bursts; request `count=True` to tell whether more match. Replace
   `client.search_bursts(filters, top=100)` with
   `client.search_bursts(filters)` and take the first 100 of its `value`.
+- **Breaking:** `SearchQuery(time_range=...)` accepts only a `TimeRange`, and
+  `query.time_range` is that `TimeRange` rather than a `(start, stop)` tuple of
+  Timestamps, so it can be passed on to `compose_*(time_range=...)`. A tuple
+  raises `TypeError`. The tuple was a half-open pair of instants and dropped
+  every acquisition on its end date, whereas a `TimeRange` keeps all its days.
+  Replace `SearchQuery(time_range=("2022-01-01", "2023-01-01"))` with
+  `SearchQuery(time_range=TimeRange("2022-01-01", "2022-12-31"))`.
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.
