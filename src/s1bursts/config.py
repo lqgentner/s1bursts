@@ -82,7 +82,9 @@ class SNAPSettings(BaseSettings):
     auxdata_path: Path = Path.home() / ".snap/auxdata"
     dem_cache: Path = Path.home() / ".s1bursts/dem"
     max_workers: int = Field(default=1, ge=1)
-    max_ram_gb: float = Field(default=4.0, gt=0)
+    # Leaves a 5 GB heap after the JVM and OS overhead, enough for one backscatter
+    # or coherence job; the integration tests run those with 6 and 8 GB.
+    max_ram_gb: float = Field(default=8.0, gt=0)
     # A ratio above 1 would size the GPT tile cache larger than the heap it has
     # to fit inside; a ratio of 0 or below would disable caching entirely.
     cache_ratio: float = Field(default=0.70, gt=0, le=1)

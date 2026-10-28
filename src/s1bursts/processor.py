@@ -6,9 +6,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 import logging
 import time
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING
 
 from freezebase.progress import create_progress
+from pyproj import CRS
 
 from s1bursts.snap_client import SNAPClient, SNAPConfig
 from s1bursts.snap_graph import (
@@ -19,18 +20,13 @@ from s1bursts.snap_graph import (
 from s1bursts.summary import ErrorResult, OperationResult, OperationSummary
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
-    from s1bursts.burst import (
-        Burst,
-        BurstCollection,
-        BurstPair,
-        BurstPairCollection,
-    )
+    from s1bursts.burst import Burst, BurstPair
     from s1bursts.filemanager import FileManager
     from s1bursts.product import (
         CoherenceProduct,
-        CRSLike,
+        CRSInput,
         GTCProduct,
         InterferogramProduct,
         RTCProduct,
@@ -44,8 +40,8 @@ class BurstProcessor:
 
     Runs one SNAP GPT job per burst or pair with progress tracking, skips
     products that already exist, records failures per item, and returns an
-    ``OperationSummary``. Takes ``BurstCollection`` and
-    ``BurstPairCollection`` rather than product classes.
+    ``OperationSummary``. Takes bursts and burst pairs, as collections or
+    lists, rather than product classes.
 
     Parameters
     ----------
@@ -76,20 +72,22 @@ class BurstProcessor:
 
     def create_backscatter(
         self,
-        bursts: BurstCollection,
-        crs: CRSLike,
+        bursts: Iterable[Burst],
+        crs: CRSInput,
         *,
         config: BackscatterConfig | None = None,
         overwrite: bool = False,
     ) -> OperationSummary[RTCProduct | GTCProduct]:
-        """Create backscatter products from burst collection.
+        """Create backscatter products from bursts.
 
         Parameters
         ----------
         bursts
-            Collection of bursts to process.
+            Bursts to process, such as a ``BurstCollection`` or a list of
+            ``Burst`` objects.
         crs
-            The coordinate reference system of the geocoded output.
+            The coordinate reference system of the geocoded output, as a CRS
+            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
         config
             Graph-shape configuration; defaults to ``BackscatterConfig()``
             (RTC, Copernicus 30m DEM, multilook ``(5, 1)``).
@@ -106,7 +104,8 @@ class BurstProcessor:
             bursts,
             partial(
                 self.snap_client.create_backscatter,
-                crs=crs,
+                # Parsed once, so an invalid CRS fails before any burst is processed.
+                crs=CRS.from_user_input(crs),
                 config=cfg,
                 overwrite=overwrite,
             ),
@@ -115,20 +114,22 @@ class BurstProcessor:
 
     def create_coherences(
         self,
-        pairs: BurstPairCollection,
-        crs: CRSLike,
+        pairs: Iterable[BurstPair],
+        crs: CRSInput,
         *,
         config: CoherenceConfig | None = None,
         overwrite: bool = False,
     ) -> OperationSummary[CoherenceProduct]:
-        """Create coherence products from burst pair collection.
+        """Create coherence products from burst pairs.
 
         Parameters
         ----------
         pairs
-            Collection of burst pairs to process.
+            Burst pairs to process, such as a ``BurstPairCollection`` or a
+            list of ``BurstPair`` objects.
         crs
-            The coordinate reference system of the geocoded output.
+            The coordinate reference system of the geocoded output, as a CRS
+            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
         config
             Graph-shape configuration; defaults to ``CoherenceConfig()``
             (25x5 window, Copernicus 30m DEM).
@@ -145,7 +146,7 @@ class BurstProcessor:
             pairs,
             partial(
                 self.snap_client.create_coherence,
-                crs=crs,
+                crs=CRS.from_user_input(crs),
                 config=cfg,
                 overwrite=overwrite,
             ),
@@ -154,20 +155,22 @@ class BurstProcessor:
 
     def create_interferograms(
         self,
-        pairs: BurstPairCollection,
-        crs: CRSLike,
+        pairs: Iterable[BurstPair],
+        crs: CRSInput,
         *,
         config: InterferogramConfig | None = None,
         overwrite: bool = False,
     ) -> OperationSummary[InterferogramProduct]:
-        """Create interferogram products from burst pair collection.
+        """Create interferogram products from burst pairs.
 
         Parameters
         ----------
         pairs
-            Collection of burst pairs to process.
+            Burst pairs to process, such as a ``BurstPairCollection`` or a
+            list of ``BurstPair`` objects.
         crs
-            The coordinate reference system of the geocoded output.
+            The coordinate reference system of the geocoded output, as a CRS
+            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
         config
             Graph-shape configuration; defaults to ``InterferogramConfig()``.
         overwrite
@@ -183,36 +186,22 @@ class BurstProcessor:
             pairs,
             partial(
                 self.snap_client.create_interferogram,
-                crs=crs,
+                crs=CRS.from_user_input(crs),
                 config=cfg,
                 overwrite=overwrite,
             ),
             item_description="Interferogram",
         )
 
-    @overload
-    def _process_collection[T](
+    def _process_collection[I, T](
         self,
-        collection: BurstCollection,
-        process_fn: Callable[[Burst], OperationResult[T]],
+        collection: Iterable[I],
+        process_fn: Callable[[I], OperationResult[T]],
         item_description: str,
-    ) -> OperationSummary[T]: ...
-    @overload
-    def _process_collection[T](
-        self,
-        collection: BurstPairCollection,
-        process_fn: Callable[[BurstPair], OperationResult[T]],
-        item_description: str,
-    ) -> OperationSummary[T]: ...
-    def _process_collection(
-        self,
-        collection: BurstCollection | BurstPairCollection,
-        process_fn: Callable[[Any], OperationResult[Any]],
-        item_description: str,
-    ) -> OperationSummary[Any]:
+    ) -> OperationSummary[T]:
         """Process bursts with progress tracking."""
         start_time = time.time()
-        results: list[OperationResult[Any]] = []
+        results: list[OperationResult[T]] = []
         items = list(collection)
         n_workers = self.config.resolved_max_workers
 

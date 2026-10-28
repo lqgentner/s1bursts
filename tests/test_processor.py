@@ -7,6 +7,7 @@ import threading
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
+from pyproj.exceptions import CRSError
 import pytest
 
 from s1bursts.errors import ConfigurationError, SnapProcessingError
@@ -106,8 +107,6 @@ class TestProcessCollection:
         items = ["a", "b", "c"]
         process_fn = MagicMock(side_effect=lambda i: OkResult(source=i, result=i.upper()))
 
-        # Plain strings stand in for a collection.
-        # pyrefly: ignore [no-matching-overload]
         summary = processor._process_collection(items, process_fn, "Test")
 
         assert isinstance(summary, OperationSummary)
@@ -124,8 +123,6 @@ class TestProcessCollection:
         ]
         process_fn = MagicMock(side_effect=results)
 
-        # Plain strings stand in for a collection.
-        # pyrefly: ignore [no-matching-overload]
         summary = processor._process_collection(["a", "b", "c"], process_fn, "Test")
 
         assert summary.n_processed == 2
@@ -142,15 +139,12 @@ class TestProcessCollection:
         )
 
         with pytest.raises(SnapProcessingError, match="boom"):
-            # pyrefly: ignore [no-matching-overload]
             processor._process_collection(["a"], process_fn, "Test")
 
     def test_parallel_collects_results(self, processor: BurstProcessor) -> None:
         processor.config.resolved_max_workers = 3
         process_fn = MagicMock(side_effect=lambda i: OkResult(source=i, result=i.upper()))
 
-        # Plain strings stand in for a collection.
-        # pyrefly: ignore [no-matching-overload]
         summary = processor._process_collection(["a", "b", "c"], process_fn, "Test")
 
         assert summary.n_processed == 3
@@ -174,8 +168,6 @@ class TestProcessCollection:
             done[item].set()
             return OkResult(source=item, result=item.upper())
 
-        # Plain strings stand in for a collection.
-        # pyrefly: ignore [no-matching-overload]
         summary = processor._process_collection(items, process_fn, "Test")
 
         assert summary.products == ["A", "B", "C"]
@@ -191,7 +183,6 @@ class TestProcessCollection:
         )
 
         with pytest.raises(SnapProcessingError, match="boom"):
-            # pyrefly: ignore [no-matching-overload]
             processor._process_collection(["a", "b"], process_fn, "Test")
 
 
@@ -205,9 +196,7 @@ class TestDispatch:
             result="rtc",
         )
 
-        # A mock burst suffices to assert dispatch.
-        # pyrefly: ignore [bad-argument-type]
-        summary = processor.create_backscatter([burst], crs=MagicMock())
+        summary = processor.create_backscatter([burst], crs="EPSG:32632")
 
         cast("MagicMock", processor.snap_client).create_backscatter.assert_called_once()
         assert summary.products == ["rtc"]
@@ -219,9 +208,7 @@ class TestDispatch:
             result="coh",
         )
 
-        # A mock pair suffices to assert dispatch.
-        # pyrefly: ignore [bad-argument-type]
-        summary = processor.create_coherences([pair], crs=MagicMock())
+        summary = processor.create_coherences([pair], crs="EPSG:32632")
 
         cast("MagicMock", processor.snap_client).create_coherence.assert_called_once()
         assert summary.products == ["coh"]
@@ -233,9 +220,13 @@ class TestDispatch:
             result="ifg",
         )
 
-        # A mock pair suffices to assert dispatch.
-        # pyrefly: ignore [bad-argument-type]
-        summary = processor.create_interferograms([pair], crs=MagicMock())
+        summary = processor.create_interferograms([pair], crs="EPSG:32632")
 
         cast("MagicMock", processor.snap_client).create_interferogram.assert_called_once()
         assert summary.products == ["ifg"]
+
+    def test_invalid_crs_fails_before_processing(self, processor: BurstProcessor) -> None:
+        with pytest.raises(CRSError):
+            processor.create_backscatter([MagicMock()], crs="EPSG:32632x")
+
+        cast("MagicMock", processor.snap_client).create_backscatter.assert_not_called()

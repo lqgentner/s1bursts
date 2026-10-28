@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import logging
 from operator import attrgetter
+from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, Self
 
@@ -20,7 +21,7 @@ from s1bursts.product import (
     CohLRWQA,
     CohPassComposite,
     CohPassQA,
-    CRSLike,
+    CRSInput,
     GTCPassComposite,
     GTCPassQA,
     GTCProduct,
@@ -34,7 +35,6 @@ from s1bursts.product import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from upath import UPath
 
@@ -47,6 +47,29 @@ class _Parseable(Protocol):
 
 
 logger = logging.getLogger(__name__)
+
+
+# Two or more scheme characters, so a Windows drive such as "C://data" stays local.
+_URL_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]+://")
+
+
+def _as_path(directory: str | Path | UPath) -> Path | UPath:
+    """Turn a string into a local ``Path``; remote storage needs a ``UPath``."""
+    if not isinstance(directory, str):
+        return directory
+    # An empty string would silently mean the working directory.
+    if not directory:
+        msg = "A directory must not be an empty string."
+        raise ValueError(msg)
+    # A bare URL carries no credentials or endpoint, and as a Path it would
+    # silently become a local folder named after the scheme.
+    if _URL_SCHEME.match(directory):
+        msg = (
+            f"{directory!r} is a URL. Pass a UPath instead; for S3, one from "
+            "freezebase.s3.make_s3_upath() carries the credentials and endpoint."
+        )
+        raise ValueError(msg)
+    return Path(directory).expanduser()
 
 
 class FieldSpec(NamedTuple):
@@ -155,7 +178,8 @@ class FileManager:
 
     All filename generation logic is centralized here.  Storage directories
     (``base_dir``, ``slc_dir``, …) may point to either local paths or S3
-    locations via ``upath.UPath``.
+    locations via ``upath.UPath``. A directory given as a string is read as a
+    local path, with ``~`` expanded.
 
     Parameters
     ----------
@@ -168,6 +192,12 @@ class FileManager:
         Directory for processed products. Defaults to ``base_dir/s1-prod``.
     comp_dir
         Directory for composites. Defaults to ``base_dir/s1-comp``.
+
+    Raises
+    ------
+    ValueError
+        If a directory is given as an empty string, or as a URL string rather
+        than a ``UPath``.
     """
 
     base_dir: Path | UPath
@@ -181,17 +211,17 @@ class FileManager:
 
     def __init__(
         self,
-        base_dir: Path | UPath,
-        slc_dir: Path | UPath | None = None,
-        prod_dir: Path | UPath | None = None,
-        comp_dir: Path | UPath | None = None,
+        base_dir: str | Path | UPath,
+        slc_dir: str | Path | UPath | None = None,
+        prod_dir: str | Path | UPath | None = None,
+        comp_dir: str | Path | UPath | None = None,
     ) -> None:
-        self.base_dir = base_dir
+        self.base_dir = _as_path(base_dir)
 
         # Set default subdirectories if not provided
-        self.slc_dir = slc_dir or base_dir / "s1-slc"
-        self.prod_dir = prod_dir or base_dir / "s1-prod"
-        self.comp_dir = comp_dir or base_dir / "s1-comp"
+        self.slc_dir = _as_path(slc_dir) if slc_dir else self.base_dir / "s1-slc"
+        self.prod_dir = _as_path(prod_dir) if prod_dir else self.base_dir / "s1-prod"
+        self.comp_dir = _as_path(comp_dir) if comp_dir else self.base_dir / "s1-comp"
 
         # Create all directories (UPath.mkdir on S3 is a no-op)
         for directory in [self.slc_dir, self.prod_dir, self.comp_dir]:
@@ -330,7 +360,7 @@ class FileManager:
         burst_id: int | None = None,
         sub_swath: str | None = None,
         polarization: str | None = None,
-        crs: CRSLike | None = None,
+        crs: CRSInput | None = None,
     ) -> list[RTCProduct]:
         """Find RTC backscatter products matching criteria.
 
@@ -378,7 +408,7 @@ class FileManager:
         burst_id: int | None = None,
         sub_swath: str | None = None,
         polarization: str | None = None,
-        crs: CRSLike | None = None,
+        crs: CRSInput | None = None,
     ) -> list[GTCProduct]:
         """Find GTC backscatter products matching criteria.
 
@@ -428,7 +458,7 @@ class FileManager:
         sub_swath: str | None = None,
         polarization: str | None = None,
         baseline_days: int | None = None,
-        crs: CRSLike | None = None,
+        crs: CRSInput | None = None,
     ) -> list[CoherenceProduct]:
         """Find coherence products matching criteria.
 
@@ -481,7 +511,7 @@ class FileManager:
         sub_swath: str | None = None,
         polarization: str | None = None,
         baseline_days: int | None = None,
-        crs: CRSLike | None = None,
+        crs: CRSInput | None = None,
     ) -> list[InterferogramProduct]:
         """Find interferogram products matching criteria.
 

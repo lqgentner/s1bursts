@@ -9,6 +9,7 @@ from unittest.mock import patch
 from pandas import Timestamp
 from pyproj import CRS
 import pytest
+import rasterio.crs
 
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.product import (
@@ -65,6 +66,38 @@ class TestBackscatterProducts:
         assert product.date == Timestamp("2022-01-01")
         assert isinstance(product.crs, CRS)
 
+    @pytest.mark.parametrize("crs", ["EPSG:32632", 32632, CRS_UTM32])
+    def test_from_burst_accepts_any_crs_input(self, crs: str | int | CRS) -> None:
+        product = RTCProduct.from_burst(make_burst("2022-01-01"), crs=crs)
+
+        assert product.crs == CRS_UTM32
+
+    def test_direct_construction_normalizes_crs_like(self) -> None:
+        product = RTCProduct(
+            BURST_ID, SUB_SWATH, rasterio.crs.CRS.from_epsg(32632), Timestamp("2022-01-01"), "VV"
+        )
+
+        assert isinstance(product.crs, CRS)
+        assert product.crs == CRS_UTM32
+
+    def test_from_burst_carries_pass_direction(self) -> None:
+        burst = Burst(
+            burst_id=BURST_ID,
+            sub_swath=SUB_SWATH,
+            polarization="VV",
+            date=Timestamp("2022-01-01"),
+            _pass_direction="Descending",
+        )
+        product = RTCProduct.from_burst(burst, crs=CRS_UTM32)
+
+        with patch(
+            "s1bursts.burst.create_s1_pass_direction_lut",
+            side_effect=AssertionError("must not resolve the burst map"),
+        ):
+            assert product.pass_direction == "Descending"
+        # File names do not record the direction, so it must not affect equality.
+        assert product == RTCProduct.from_burst(make_burst("2022-01-01"), crs=CRS_UTM32)
+
     def test_product_types_and_flattening(self) -> None:
         rtc = RTCProduct.from_burst(make_burst("2022-01-01"), crs=CRS_UTM32)
         gtc = GTCProduct.from_burst(make_burst("2022-01-01"), crs=CRS_UTM32)
@@ -92,7 +125,8 @@ class TestBackscatterProducts:
         assert text.startswith("RTCProduct(")
         assert "2022-01-01" in text
 
-    def test_from_dict_ignores_non_init_fields(self) -> None:
+    def test_from_dict_keeps_parsed_footprint_values(self) -> None:
+        # Previously dropped, so products found on disk fell back to the burst map.
         product = RTCProduct.from_dict(
             {
                 "burst_id": BURST_ID,
@@ -100,11 +134,56 @@ class TestBackscatterProducts:
                 "polarization": "VV",
                 "date": Timestamp("2022-01-01"),
                 "crs": CRS_UTM32,
-                "rel_orbit_number": 999,  # init=False -> dropped
+                "rel_orbit_number": 66,
+                "pass_direction": "Ascending",
+                "unknown": "ignored",
+            },
+        )
+
+        with patch(
+            "s1bursts.burst.create_s1_orbit_number_lut",
+            side_effect=AssertionError("must not resolve the burst map"),
+        ):
+            assert product.rel_orbit_number == 66
+        assert product.pass_direction == "Ascending"
+
+    def test_from_dict_prefers_explicit_override(self) -> None:
+        product = RTCProduct.from_dict(
+            {
+                "burst_id": BURST_ID,
+                "sub_swath": SUB_SWATH,
+                "polarization": "VV",
+                "date": Timestamp("2022-01-01"),
+                "crs": CRS_UTM32,
+                "rel_orbit_number": 66,
+                "_rel_orbit_number": 15,
             },
         )
 
         assert product.rel_orbit_number == 15
+
+    def test_propagated_orbit_does_not_affect_equality(self) -> None:
+        # Previously a product found on disk, which carries the orbit from its file
+        # name, differed from the same product built without one.
+        found = RTCProduct(
+            BURST_ID, SUB_SWATH, CRS_UTM32, Timestamp("2022-01-01"), "VV", _rel_orbit_number=15
+        )
+        built = RTCProduct(BURST_ID, SUB_SWATH, CRS_UTM32, Timestamp("2022-01-01"), "VV")
+
+        assert found == built
+        assert hash(found) == hash(built)
+
+    def test_equality_does_not_need_the_burst_map(self) -> None:
+        # Previously ``==`` resolved the orbit and raised without the burst map.
+        first = RTCProduct(BURST_ID, SUB_SWATH, CRS_UTM32, Timestamp("2022-01-01"), "VV")
+        second = RTCProduct(BURST_ID, SUB_SWATH, CRS_UTM32, Timestamp("2022-01-01"), "VV")
+
+        with patch(
+            "s1bursts.burst.create_s1_orbit_number_lut",
+            side_effect=FileNotFoundError("burst map not downloaded"),
+        ):
+            assert first == second
+            assert hash(first) == hash(second)
 
 
 class TestCoregisteredProducts:
@@ -117,6 +196,22 @@ class TestCoregisteredProducts:
         assert product.date_primary == Timestamp("2022-01-01")
         assert product.date_secondary == Timestamp("2022-01-13")
         assert product.baseline_days == 12
+
+    def test_from_burst_pair_carries_pass_direction_and_crs_string(self) -> None:
+        primary, secondary = (
+            Burst(
+                burst_id=BURST_ID,
+                sub_swath=SUB_SWATH,
+                polarization="VV",
+                date=Timestamp(date),
+                _pass_direction="Ascending",
+            )
+            for date in ("2022-01-01", "2022-01-13")
+        )
+        product = CoherenceProduct.from_burst_pair(BurstPair(primary, secondary), crs="EPSG:32632")
+
+        assert product.pass_direction == "Ascending"
+        assert product.crs == CRS_UTM32
 
     def test_product_types(self) -> None:
         pair = self.make_pair()
