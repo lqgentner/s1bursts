@@ -33,7 +33,7 @@ from s1bursts.errors import (
 )
 from s1bursts.product import (
     CoherenceProduct,
-    CRSLike,
+    CRSInput,
     GTCProduct,
     InterferogramProduct,
     RTCProduct,
@@ -342,7 +342,7 @@ class SNAPConfig:
     max_ram_gb
         Total RAM budget across all GPT processes in GB; must be positive and
         large enough to give every worker a 512 MB heap on top of 3 GB of JVM
-        and OS overhead. Defaults to ``SNAP_MAX_RAM_GB`` (or 4).
+        and OS overhead. Defaults to ``SNAP_MAX_RAM_GB`` (or 8).
     gpt_threads_per_job
         Threads per GPT process (``-q``); at least 1. Defaults to
         ``SNAP_THREADS_PER_JOB`` or ``cpu_count // max_workers``.
@@ -647,7 +647,7 @@ class SNAPClient:
     def create_backscatter(
         self,
         burst: Burst,
-        crs: CRSLike,
+        crs: CRSInput,
         *,
         config: BackscatterConfig,
         overwrite: bool = False,
@@ -663,7 +663,8 @@ class SNAPClient:
         burst
             Burst to process.
         crs
-            The coordinate reference system of the geocoded output.
+            The coordinate reference system of the geocoded output, as a CRS
+            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
         config
             Graph-shape configuration.
         overwrite
@@ -707,7 +708,7 @@ class SNAPClient:
                         process_params={
                             "swath": product.sub_swath,
                             "polarization": product.polarization,
-                            "crs": get_epsg_string(crs),
+                            "crs": get_epsg_string(product.crs),
                         },
                         target_file=staging_file,
                     )
@@ -731,7 +732,7 @@ class SNAPClient:
     def create_coherence(
         self,
         pair: BurstPair,
-        crs: CRSLike,
+        crs: CRSInput,
         *,
         config: CoherenceConfig,
         overwrite: bool = False,
@@ -745,7 +746,8 @@ class SNAPClient:
         pair
             Burst pair to process.
         crs
-            The coordinate reference system of the geocoded output.
+            The coordinate reference system of the geocoded output, as a CRS
+            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
         config
             Graph-shape configuration (window size, DEM, …).
         overwrite
@@ -789,7 +791,7 @@ class SNAPClient:
                             "polarization": product.polarization,
                             "date1": product.date_primary.strftime("%d%b%Y"),
                             "date2": product.date_secondary.strftime("%d%b%Y"),
-                            "crs": get_epsg_string(crs),
+                            "crs": get_epsg_string(product.crs),
                         },
                         target_file=staging_file,
                     )
@@ -813,7 +815,7 @@ class SNAPClient:
     def create_interferogram(
         self,
         pair: BurstPair,
-        crs: CRSLike,
+        crs: CRSInput,
         *,
         config: InterferogramConfig,
         overwrite: bool = False,
@@ -825,7 +827,8 @@ class SNAPClient:
         pair
             Burst pair to process.
         crs
-            The coordinate reference system of the geocoded output.
+            The coordinate reference system of the geocoded output, as a CRS
+            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
         config
             Graph-shape configuration.
         overwrite
@@ -869,7 +872,7 @@ class SNAPClient:
                             "polarization": product.polarization,
                             "date1": product.date_primary.strftime("%d%b%Y"),
                             "date2": product.date_secondary.strftime("%d%b%Y"),
-                            "crs": get_epsg_string(crs),
+                            "crs": get_epsg_string(product.crs),
                         },
                         target_file=staging_file,
                     )

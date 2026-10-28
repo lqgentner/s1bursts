@@ -8,11 +8,26 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ## [Unreleased]
 
+### Added
+
+- `FileManager` accepts strings for local directories.
+- The `crs` of every `BurstProcessor.create_*` method, and of the products'
+  `from_burst()` and `from_burst_pair()`, now accepts strings and EPSG codes,
+  such as `"EPSG:32632"` or `32632`. Previously only objects with a `to_wkt()`
+  method worked.
+- Per-burst products created from a search result carry its pass direction, so
+  `compose_*_by_pass` no longer needs the burst-ID map for them.
+- Every `BurstProcessor.create_*` method accepts any iterable of bursts or
+  burst pairs, such as a list, not only a `BurstCollection` or
+  `BurstPairCollection`.
+
 ### Changed
 
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.
+- The default `SNAP_MAX_RAM_GB` is 8 GB instead of 4 GB to leave more heap for
+  SNAP. Set `SNAP_MAX_RAM_GB=4` to keep the old budget.
 
 ### Fixed
 
@@ -34,6 +49,13 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   earlier versions remain valid and need not be regenerated.
 - `BurstProcessor` summaries list their results in input order whatever
   `max_workers` is, instead of in the order the threads finished.
+- Products found with `FileManager.find_*_products()` keep the relative orbit
+  recorded in their file name, so the LRW composites no longer need the
+  burst-ID map for them. The pass composites still need the map, because file
+  names do not record the pass direction.
+- Comparing or hashing per-burst products no longer looks up the relative orbit,
+  so it works without the burst-ID map. The burst ID already identifies a burst,
+  so the orbit adds nothing.
 
 ## [0.7.0] - 2026-10-26
 

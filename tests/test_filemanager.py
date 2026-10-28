@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
 import pandas as pd
 from pyproj import CRS
 import pytest
 
 if TYPE_CHECKING:
-    from pathlib import Path
     from typing import ClassVar
 
 from s1bursts.filemanager import _PARSERS, FileManager
@@ -645,3 +646,63 @@ def test_gtc_pass_composite_path_round_trip(tmp_path: Path) -> None:
     qa_path.touch()
     assert fm.find_gtc_pass_qa(pass_direction="Ascending") == [qa]
     assert fm.find_gtc_pass_composites() == [product]
+
+
+class TestStringPaths:
+    """``FileManager`` accepts strings as well as path objects."""
+
+    def test_local_string(self, tmp_path: Path) -> None:
+        fm = FileManager(str(tmp_path / "data"), slc_dir=str(tmp_path / "slc"))
+
+        assert fm.base_dir == tmp_path / "data"
+        assert fm.slc_dir == tmp_path / "slc"
+        assert fm.prod_dir.is_dir()
+
+    def test_home_is_expanded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        assert FileManager("~/data").base_dir == tmp_path / "data"
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"base_dir": "s3://bucket/prefix"},
+            {"base_dir": "data", "prod_dir": "memory://bucket/prod"},
+            {"base_dir": ""},
+        ],
+    )
+    def test_url_or_empty_string_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ValueError, match=r"URL|empty"):
+            FileManager(**kwargs)
+        assert not any(tmp_path.iterdir())
+
+    def test_windows_drive_is_not_a_url(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+
+        assert FileManager("C://data").base_dir == Path("C://data")
+
+
+class TestFindKeepsFootprint:
+    """Products rebuilt from file names keep the orbit they record."""
+
+    def test_found_product_keeps_rel_orbit_number(self, tmp_path: Path) -> None:
+        # Previously dropped, so compositing found products needed the burst map.
+        fm = FileManager(tmp_path)
+        product = RTCProduct(
+            30343, "IW1", _CRS_32N, pd.Timestamp("20150709"), "VH", _rel_orbit_number=66
+        )
+        fm.get_product_path(product).touch()
+
+        with patch(
+            "s1bursts.burst.create_s1_orbit_number_lut",
+            side_effect=AssertionError("must not resolve the burst map"),
+        ):
+            [found] = fm.find_rtc_products()
+            assert found.rel_orbit_number == 66
+        assert found == product

@@ -98,7 +98,7 @@ s1bursts call, or export the variables (e.g. `uv run --env-file .env`):
 | `CDSE_S3_PROFILE` | Alternative to the key pair: a named AWS profile in `~/.aws/credentials` holding the same keys. Takes precedence when set, and keeps the secrets out of the environment |
 | `SNAP_BIN` | Path to a SNAP installation's `bin` directory; its `gpt` executable is used for processing. Falls back to `gpt` on `PATH` if unset |
 | `SNAP_MAX_WORKERS` | Parallel GPT processes (default: 1) |
-| `SNAP_MAX_RAM_GB` | Total RAM budget across GPT processes in GB (default: 4) |
+| `SNAP_MAX_RAM_GB` | Total RAM budget across GPT processes in GB (default: 8) |
 | `SNAP_THREADS_PER_JOB` | Threads per GPT process (default: CPU count divided by `SNAP_MAX_WORKERS`) |
 | `SNAP_CACHE_RATIO` | Fraction of each GPT process's heap used as tile cache (default: 0.7) |
 | `SNAP_AUXDATA_PATH` | Shared DEM/orbit cache (default: `~/.snap/auxdata`) |

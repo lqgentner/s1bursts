@@ -11,7 +11,7 @@ from freezebase.mgrs import mgrs_to_crs
 from pandas import Timestamp
 from pyproj import CRS
 
-from s1bursts.burst import BurstFootprintMixin
+from s1bursts.burst import _FOOTPRINT_ALIASES, BurstFootprintMixin
 
 if TYPE_CHECKING:
     from s1bursts.burst import Burst, BurstPair
@@ -24,6 +24,11 @@ class CRSLike(Protocol):
     def to_wkt(self) -> str:
         """Convert the projection to a WKT string."""
         ...
+
+
+# Anything ``pyproj.CRS.from_user_input`` accepts that callers commonly pass:
+# a CRS object, an authority string such as "EPSG:32632", or an EPSG code.
+type CRSInput = CRSLike | str | int
 
 
 class QaMetric(StrEnum):
@@ -78,13 +83,15 @@ class BaseProduct(ABC):
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
-        """Instantiate from a mapping, silently dropping unknown and non-init fields.
+        """Instantiate from a mapping, silently dropping unknown fields.
 
         Parameters
         ----------
         data
-            Mapping of field names to values. Extra keys and ``init=False``
-            fields are filtered before construction.
+            Mapping of field names to values. A public footprint key such as
+            ``rel_orbit_number`` sets its private override unless the mapping
+            sets that override itself; other keys that are not init fields are
+            dropped.
 
         Returns
         -------
@@ -92,7 +99,11 @@ class BaseProduct(ABC):
             A new instance of the calling class.
         """
         init_keys = {f.name for f in fields(cls) if f.init}
-        return cls(**{k: v for k, v in data.items() if k in init_keys})
+        kwargs = {k: v for k, v in data.items() if k in init_keys}
+        for public, private in _FOOTPRINT_ALIASES.items():
+            if public in data and private in init_keys:
+                kwargs.setdefault(private, data[public])
+        return cls(**kwargs)
 
 
 @dataclass(repr=False, frozen=True)
@@ -112,17 +123,23 @@ class GeocodedBurst(BurstFootprintMixin, BaseProduct, ABC):
     burst_id: int
     sub_swath: SubSwath
     crs: CRSLike
-    # None delegates to the mixin's burst-map lookup.
+    # None delegates to the mixin's burst-map lookup. The orbit fields are not part
+    # of equality: the burst ID already fixes the orbit, and comparing it would make
+    # ``==`` depend on whether a value was propagated or the burst map is installed.
     # Read-only here because the dataclass is frozen; the mixin declares them read-write.
     # pyrefly: ignore [bad-override]
-    _rel_orbit_number: int | None = field(default=None, repr=False, kw_only=True)
+    _rel_orbit_number: int | None = field(default=None, repr=False, compare=False, kw_only=True)
+    # pyrefly: ignore [bad-override]
+    _pass_direction: PassDirection | None = field(
+        default=None, repr=False, compare=False, kw_only=True
+    )
     # Include the resolved value in asdict()-based filenames.
-    rel_orbit_number: int = field(init=False, repr=False)
+    rel_orbit_number: int = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Convert crs to pyproj.CRS object."""
         if not isinstance(self.crs, CRS):
-            object.__setattr__(self, "crs", CRS(self.crs.to_wkt()))
+            object.__setattr__(self, "crs", CRS.from_user_input(self.crs))
 
 
 @dataclass(repr=False, frozen=True)
@@ -152,7 +169,7 @@ class BackscatterProduct(GeocodedBurst):
         """Whether the product has been radiometrically terrain corrected."""
 
     @classmethod
-    def from_burst(cls, burst: Burst, crs: CRSLike) -> Self:
+    def from_burst(cls, burst: Burst, crs: CRSInput) -> Self:
         """Create BackscatterProduct from Burst.
 
         Parameters
@@ -160,7 +177,8 @@ class BackscatterProduct(GeocodedBurst):
         burst
             Burst to create product from.
         crs
-            The coordinate reference system.
+            The coordinate reference system, as a CRS object, an authority string
+            such as ``"EPSG:32632"`` or an EPSG code.
 
         Returns
         -------
@@ -172,8 +190,11 @@ class BackscatterProduct(GeocodedBurst):
             sub_swath=burst.sub_swath,
             polarization=burst.polarization,
             date=burst.date,
-            crs=crs,
+            crs=CRS.from_user_input(crs),
             _rel_orbit_number=burst.rel_orbit_number,
+            # The propagated value only: the public property would fall back to the
+            # burst map, which bursts found on disk need not have.
+            _pass_direction=burst._pass_direction,  # noqa: SLF001
         )
 
 
@@ -279,7 +300,7 @@ class CoregisteredProduct(GeocodedBurst, ABC):
         return abs((self.date_secondary - self.date_primary).round("D").days)
 
     @classmethod
-    def from_burst_pair(cls, pair: BurstPair, crs: CRSLike) -> Self:
+    def from_burst_pair(cls, pair: BurstPair, crs: CRSInput) -> Self:
         """Create CoregisteredProduct from BurstPair.
 
         Parameters
@@ -287,7 +308,8 @@ class CoregisteredProduct(GeocodedBurst, ABC):
         pair
             Burst pair to create product from.
         crs
-            The coordinate reference system.
+            The coordinate reference system, as a CRS object, an authority string
+            such as ``"EPSG:32632"`` or an EPSG code.
 
         Returns
         -------
@@ -300,8 +322,10 @@ class CoregisteredProduct(GeocodedBurst, ABC):
             date_primary=pair.primary.date,
             date_secondary=pair.secondary.date,
             polarization=pair.primary.polarization,
-            crs=crs,
+            crs=CRS.from_user_input(crs),
             _rel_orbit_number=pair.rel_orbit_number,
+            # See ``BackscatterProduct.from_burst``.
+            _pass_direction=pair.primary._pass_direction,  # noqa: SLF001
         )
 
 

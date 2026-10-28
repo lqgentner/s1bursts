@@ -56,7 +56,7 @@ class TestGetSettings:
 
         assert snap.bin is None
         assert snap.max_workers == 1
-        assert snap.max_ram_gb == 4.0
+        assert snap.max_ram_gb == 8.0
         assert snap.auxdata_path == Path.home() / ".snap/auxdata"
 
 
@@ -109,7 +109,7 @@ class TestSnapSettingsValidation:
         ("variable", "attribute", "default"),
         [
             ("SNAP_MAX_WORKERS", "max_workers", 1),
-            ("SNAP_MAX_RAM_GB", "max_ram_gb", 4.0),
+            ("SNAP_MAX_RAM_GB", "max_ram_gb", 8.0),
             ("SNAP_CACHE_RATIO", "cache_ratio", 0.70),
         ],
     )
