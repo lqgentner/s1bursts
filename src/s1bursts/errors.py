@@ -41,6 +41,16 @@ class EmptyCompositeError(S1BurstsError, ValueError):
     """
 
 
+class TooManyResultsError(S1BurstsError):
+    """More bursts match a search than one catalog request returns.
+
+    The catalog serves at most 1000 bursts per request. A query that matches
+    more is refused rather than paged through, so that an oversized AOI or time
+    window fails after one request. Narrow it, or split it into several
+    searches and combine their results with ``+``.
+    """
+
+
 class BurstError(S1BurstsError):
     """Base class for recoverable, per-item burst failures.
 

@@ -11,8 +11,14 @@ from requests import HTTPError
 from shapely.geometry import box
 
 from s1bursts.burst import Burst, BurstPair
+from s1bursts.cdse import MAX_PAGE_SIZE, CDSEResponse
 from s1bursts.database import BurstDatabase
-from s1bursts.errors import BurstDownloadError, BurstNotFoundError, ConfigurationError
+from s1bursts.errors import (
+    BurstDownloadError,
+    BurstNotFoundError,
+    ConfigurationError,
+    TooManyResultsError,
+)
 from s1bursts.query import SearchQuery
 from s1bursts.summary import ErrorResult, OkResult
 from s1bursts.time_range import TimeRange
@@ -334,21 +340,57 @@ class TestEndpointWrappers:
         db.client.download_burst_from_s3.assert_called_once()
 
 
-class TestValidateCompleteness:
-    def test_complete_response_passes(self) -> None:
-        response = MagicMock()
-        response.is_complete.return_value = True
+class TestSearch:
+    @staticmethod
+    def _database(n_values: int, count: int) -> tuple[BurstDatabase, MagicMock]:
+        """Return a database whose catalog returns ``n_values`` of ``count`` matches."""
+        db = _make_database()
+        client = MagicMock()
+        client.search_bursts.return_value = CDSEResponse(
+            context="$metadata#Bursts",
+            value=[{} for _ in range(n_values)],
+            count=count,
+        )
+        db.client = client
+        return db, client
 
-        BurstDatabase._validate_completeness(response)
+    def test_returns_every_match_from_one_counted_request(self) -> None:
+        db, client = self._database(n_values=2, count=2)
 
-    def test_truncated_response_raises(self) -> None:
-        response = MagicMock()
-        response.is_complete.return_value = False
-        response.count = 500
-        response.__len__.return_value = 100
+        with patch("s1bursts.database.BurstCollection.from_cdse_response") as from_response:
+            bursts = db.search(SearchQuery(burst_id=30346))
 
-        with pytest.raises(RuntimeError, match="Increase `max_items`"):
-            BurstDatabase._validate_completeness(response)
+        assert bursts is from_response.return_value
+        client.search_bursts.assert_called_once_with(["BurstId eq 30346"], count=True)
+        assert from_response.call_args.args[0] is client.search_bursts.return_value
+
+    def test_more_matches_than_one_page_raises(self) -> None:
+        db, _ = self._database(n_values=MAX_PAGE_SIZE, count=1226)
+
+        with pytest.raises(TooManyResultsError, match=r"1226 bursts match.*at most 1000"):
+            db.search(SearchQuery())
+
+    @pytest.mark.parametrize("count", [0, MAX_PAGE_SIZE])
+    def test_a_full_or_empty_page_is_complete(self, count: int) -> None:
+        db, _ = self._database(n_values=count, count=count)
+
+        with patch("s1bursts.database.BurstCollection.from_cdse_response") as from_response:
+            bursts = db.search(SearchQuery())
+
+        assert bursts is from_response.return_value
+
+    def test_a_short_page_is_not_reported_as_too_many(self) -> None:
+        db, _ = self._database(n_values=3, count=5)
+
+        with pytest.raises(RuntimeError, match=r"reported 5 matching bursts but returned 3"):
+            db.search(SearchQuery())
+
+    def test_a_response_without_count_raises(self) -> None:
+        db, client = self._database(n_values=2, count=2)
+        client.search_bursts.return_value.count = None
+
+        with pytest.raises(RuntimeError, match=r"did not report how many bursts match"):
+            db.search(SearchQuery())
 
 
 def test_burst_not_found_is_cached_and_short_circuits() -> None:

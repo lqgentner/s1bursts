@@ -23,6 +23,17 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Changed
 
+- **Breaking:** `BurstDatabase.search()` no longer takes `max_items` and
+  returns every match. A query matching more than 1000 bursts, one catalog
+  page, raises the new `s1bursts.errors.TooManyResultsError` (previously a
+  `RuntimeError` above `max_items`) after a single request. Narrow the
+  `TimeRange` or the AOI, or split the query and combine the results with `+`.
+  Replace `db.search(query, max_items=500)` with `db.search(query)`.
+- **Breaking:** `CDSEBurstClient.search_bursts()` no longer takes `top` and
+  no longer follows next-link pages. It returns one page of up to 1000
+  bursts; request `count=True` to tell whether more match. Replace
+  `client.search_bursts(filters, top=100)` with
+  `client.search_bursts(filters)` and take the first 100 of its `value`.
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.
