@@ -575,9 +575,8 @@ def utm_zone_of(burst: Burst | BurstPair) -> CRS:
     Norway and Svalbard exceptions included. A centre on a border between two
     zones takes the eastern one, and one on the equator the northern
     hemisphere. Use it as the ``crs`` of ``BurstProcessor.create_*`` for
-    bursts processed on their own. For a time series, call it once and reuse
-    the zone: each acquisition has its own footprint, so the dates of a burst
-    near a zone border can fall on different sides of it. Do not use it for
+    bursts processed on their own. The zone depends only on the burst ID and
+    sub-swath, so a time series of one burst stays in one zone. Do not use it for
     products meant for a composite: those take the target cell's zone,
     ``crs=cell.crs``, which need not be the zone of every burst.
 
