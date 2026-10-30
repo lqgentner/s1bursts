@@ -1,6 +1,6 @@
 """Exception hierarchy for the Sentinel-1 pipeline.
 
-The types here separate three kinds of failure, so that batch loops catch only
+The types here separate four kinds of failure, so that batch loops catch only
 the ones worth recording per item and let the rest abort the run, and callers
 can still fail on a batch that finished with failures:
 
@@ -18,6 +18,11 @@ can still fail on a batch that finished with failures:
 - ``OperationFailedError`` reports a *finished batch* with failed items. It is
   raised on request by ``OperationSummary.raise_on_failure()``, after every
   item has run, and lists the items that failed.
+- ``CompositeError`` (and subclasses) are *per-cell* compositing failures: the
+  inputs of one grid cell are empty there, inconsistent or unreadable, and the
+  next cell may still succeed. A loop over cells catches this base class; an
+  invalid argument to ``compose_*`` stays a plain ``ValueError`` and is not
+  caught by it.
 
 Every other ``S1BurstsError`` fails the whole call that raised it, as does
 anything that is not one (a plain ``ValueError`` for an invalid argument, a
@@ -208,13 +213,34 @@ def _describe_failures(
     return f"{head}:\n" + "\n".join(lines)
 
 
-class EmptyCompositeError(S1BurstsError, ValueError):
+class CompositeError(S1BurstsError):
+    """Compositing one grid cell failed; another cell may still succeed.
+
+    Raised by ``ResolutionWeighter.compose_*`` for problems with the data of
+    the cell, never for an invalid argument, which raises ``ValueError``.
+    """
+
+
+class EmptyCompositeError(CompositeError, ValueError):
     """No input observation has a valid pixel in the target cell.
 
     A burst whose footprint touches a cell need not reach any of its pixels
     once geocoded. A composite of such inputs would hold no value, so none is
     written, and the cell is left without one, as if no burst had matched.
     """
+
+
+class InconsistentInputsError(CompositeError, ValueError):
+    """The input products of a cell cannot be composited together.
+
+    They are on another CRS, pixel size or pixel grid than the target cell,
+    were made with different DEMs, or an observation has no RTC product to
+    supply its local scattering area.
+    """
+
+
+class CompositeInputError(CompositeError, OSError):
+    """An input product of a cell is missing or cannot be read."""
 
 
 class TooManyResultsError(S1BurstsError):

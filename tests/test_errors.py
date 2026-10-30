@@ -15,7 +15,11 @@ from s1bursts.errors import (
     BurstNotFoundError,
     BurstNotInMapError,
     CatalogError,
+    CompositeError,
+    CompositeInputError,
     ConfigurationError,
+    EmptyCompositeError,
+    InconsistentInputsError,
     OperationFailedError,
     S1BurstsError,
     SnapProcessingError,
@@ -205,3 +209,22 @@ def test_a_full_disk_in_the_gpt_output_is_environment_wide() -> None:
 
     assert _is_environment_wide(error)
     assert not _is_environment_wide(SnapProcessingError("boom", output_tail="40%"))
+
+
+@pytest.mark.parametrize(
+    ("exc_type", "builtin"),
+    [
+        (EmptyCompositeError, ValueError),
+        (InconsistentInputsError, ValueError),
+        (CompositeInputError, OSError),
+    ],
+)
+def test_composite_errors_share_a_per_cell_base(
+    exc_type: type[Exception],
+    builtin: type[Exception],
+) -> None:
+    """One handler catches every per-cell failure, and the builtin handlers still work."""
+    assert issubclass(exc_type, CompositeError)
+    assert issubclass(exc_type, builtin)
+    assert issubclass(CompositeError, S1BurstsError)
+    assert not issubclass(CompositeError, ValueError | OSError | BurstError)

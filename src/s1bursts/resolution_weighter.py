@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import logging
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -28,7 +29,11 @@ from pandas import Timestamp
 from rasterio.windows import from_bounds
 
 from s1bursts import product_tags
-from s1bursts.errors import EmptyCompositeError
+from s1bursts.errors import (
+    CompositeInputError,
+    EmptyCompositeError,
+    InconsistentInputsError,
+)
 from s1bursts.product import (
     CoherenceProduct,
     CohLRWComposite,
@@ -45,8 +50,10 @@ from s1bursts.time_range import TimeRange, calendar_day
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Sequence
+    from pathlib import Path
 
     from freezebase.mgrs import MGRSGeoBox
+    from upath import UPath
 
     from s1bursts.filemanager import FileManager
     from s1bursts.product_tags import RasterMetadata
@@ -72,6 +79,17 @@ def _calendar_day(value: Timestamp) -> Timestamp:
 
 
 _LoadedEntry = tuple[ComposableProduct, NDArray[np.float32]]
+
+
+@dataclass(frozen=True)
+class _PassObservations:
+    """What the metadata of one direction's pass composite is built from."""
+
+    composite: NDArray[np.floating[Any]]
+    n_observations: int
+    source_tags: dict[str, str]
+    acquisitions: product_tags.Acquisitions
+
 
 _DEFAULT_PROFILE_KEY = "default"
 
@@ -198,6 +216,9 @@ class ResolutionWeighter:
             computation and return the existing product. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
+            If no input reaches the cell, an earlier composite of the same
+            identity is deleted, all its layers, before the error is raised;
+            with ``overwrite=False`` it is left alone.
         time_range
             The compositing window, as calendar days; pass the same
             :class:`~s1bursts.time_range.TimeRange` the search was made with.
@@ -220,6 +241,11 @@ class ResolutionWeighter:
             If ``rtc_products`` is empty.
         EmptyCompositeError
             If no input has a valid pixel in ``geobox``; nothing is written.
+        InconsistentInputsError
+            If an input is on another CRS, pixel size or grid than
+            ``geobox``, or the inputs were made with different DEMs.
+        CompositeInputError
+            If an input product is missing or cannot be read.
         """
         rtc_products = list(rtc_products)
         if not rtc_products:
@@ -241,10 +267,15 @@ class ResolutionWeighter:
         if not overwrite and self._all_exist(product):
             return product
 
-        rtc_groups = self._contributing(
-            self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=1)),
-            geobox,
-        )
+        try:
+            rtc_groups = self._contributing(
+                self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=1)),
+                geobox,
+            )
+        except EmptyCompositeError:
+            if overwrite:
+                self._remove(product)
+            raise
         area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
         # The tags name the acquisitions that reach the cell, not every input.
         observed = self._contributing_span(rtc_products, rtc_groups)
@@ -340,6 +371,9 @@ class ResolutionWeighter:
             computation and return the existing product. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
+            If no input reaches the cell, an earlier composite of the same
+            identity is deleted, all its layers, before the error is raised;
+            with ``overwrite=False`` it is left alone.
         time_range
             The compositing window, as calendar days; pass the same
             :class:`~s1bursts.time_range.TimeRange` the search was made with.
@@ -359,13 +393,24 @@ class ResolutionWeighter:
         Raises
         ------
         ValueError
-            If ``coh_products`` is empty.
+            If ``coh_products`` or ``rtc_products`` is empty.
         EmptyCompositeError
             If no input has a valid pixel in ``geobox``; nothing is written.
+        InconsistentInputsError
+            If an input is on another CRS, pixel size or grid than
+            ``geobox``, the inputs were made with different DEMs, or no RTC
+            product supplies the scattering area of an observation.
+        CompositeInputError
+            If an input product is missing or cannot be read.
         """
         coh_products = list(coh_products)
         if not coh_products:
             msg = "coh_products must not be empty."
+            raise ValueError(msg)
+        rtc_products = list(rtc_products)
+        # Without any, every observation would lack its area: a wrong call, not bad data.
+        if not rtc_products:
+            msg = "rtc_products must not be empty."
             raise ValueError(msg)
         self._check_aggregation(aggregation)
 
@@ -385,10 +430,15 @@ class ResolutionWeighter:
         if not overwrite and self._all_exist(product):
             return product
 
-        coh_groups = self._contributing(
-            self._stitch_by_orbit_date(self._load_band(coh_products, geobox, band=1)),
-            geobox,
-        )
+        try:
+            coh_groups = self._contributing(
+                self._stitch_by_orbit_date(self._load_band(coh_products, geobox, band=1)),
+                geobox,
+            )
+        except EmptyCompositeError:
+            if overwrite:
+                self._remove(product)
+            raise
         area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
         # The tags name the acquisitions that reach the cell, not every input.
         observed = self._contributing_span(coh_products, coh_groups)
@@ -472,6 +522,9 @@ class ResolutionWeighter:
             computation and return the existing product. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
+            A direction that no input reaches has the files of an earlier
+            composite of the same identity deleted; with ``overwrite=False``
+            they are left alone.
         time_range
             The compositing window, as calendar days; pass the same
             :class:`~s1bursts.time_range.TimeRange` the search was made with.
@@ -486,11 +539,26 @@ class ResolutionWeighter:
         dict[PassDirection, RTCPassComposite]
             One composite per pass direction among the inputs, whose
             ``layers`` are the measurement and, with ``write_qa=True``, the
-            QA layer.
+            QA layer. A direction whose inputs have no valid pixel in
+            ``geobox`` is left out and gets no file, as if it had no inputs.
+
+        Raises
+        ------
+        ValueError
+            If ``rtc_products`` is empty.
+        EmptyCompositeError
+            If no input of any direction has a valid pixel in ``geobox``;
+            nothing is written.
+        InconsistentInputsError
+            If an input is on another CRS, pixel size or grid than
+            ``geobox``, or the inputs were made with different DEMs.
+        CompositeInputError
+            If an input product is missing or cannot be read.
         """
         return self._compose_backscatter_by_pass(
             rtc_products,
             geobox,
+            name="rtc_products",
             composite_cls=RTCPassComposite,
             metadata_fn=product_tags.rtc_pass_metadata,
             aggregation=aggregation,
@@ -542,6 +610,9 @@ class ResolutionWeighter:
             computation and return the existing product. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
+            A direction that no input reaches has the files of an earlier
+            composite of the same identity deleted; with ``overwrite=False``
+            they are left alone.
         time_range
             The compositing window, as calendar days; pass the same
             :class:`~s1bursts.time_range.TimeRange` the search was made with.
@@ -555,11 +626,26 @@ class ResolutionWeighter:
         dict[PassDirection, GTCPassComposite]
             One composite per pass direction among the inputs, whose
             ``layers`` are the measurement and, with ``write_qa=True``, the
-            QA layer.
+            QA layer. A direction whose inputs have no valid pixel in
+            ``geobox`` is left out and gets no file, as if it had no inputs.
+
+        Raises
+        ------
+        ValueError
+            If ``gtc_products`` is empty.
+        EmptyCompositeError
+            If no input of any direction has a valid pixel in ``geobox``;
+            nothing is written.
+        InconsistentInputsError
+            If an input is on another CRS, pixel size or grid than
+            ``geobox``, or the inputs were made with different DEMs.
+        CompositeInputError
+            If an input product is missing or cannot be read.
         """
         return self._compose_backscatter_by_pass(
             gtc_products,
             geobox,
+            name="gtc_products",
             composite_cls=GTCPassComposite,
             metadata_fn=product_tags.gtc_pass_metadata,
             aggregation=aggregation,
@@ -574,6 +660,7 @@ class ResolutionWeighter:
         products: Collection[RTCProduct | GTCProduct],
         geobox: MGRSGeoBox,
         *,
+        name: str,
         composite_cls: type[C],
         metadata_fn: Callable[..., RasterMetadata],
         aggregation: Literal["mean", "median"] | float,
@@ -582,25 +669,18 @@ class ResolutionWeighter:
         overwrite: bool,
         time_range: TimeRange | None,
     ) -> dict[PassDirection, C]:
-        """Per-pass unweighted composite shared by the RTC and GTC entry points."""
+        """Per-pass unweighted backscatter composite shared by the RTC and GTC entry points."""
         inputs = list(products)
         if not inputs:
-            return {}
+            msg = f"{name} must not be empty."
+            raise ValueError(msg)
         self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(inputs)
-        acquisitions = self._acquisition_span(inputs)
-        start_date, end_date = self._composite_dates(acquisitions, time_range)
+        start_date, end_date = self._composite_dates(self._acquisition_span(inputs), time_range)
 
-        loaded = self._load_band(inputs, geobox, band=1)
-
-        subsets: defaultdict[PassDirection, list[_LoadedEntry]] = defaultdict(list)
-        for prod, data in loaded:
-            subsets[prod.pass_direction].append((prod, data))
-
-        result: dict[PassDirection, C] = {}
-        for direction, subset in subsets.items():
-            product = composite_cls(
+        def make(direction: PassDirection) -> C:
+            return composite_cls(
                 mgrs_code=geobox.mgrs_code,
                 start_date=start_date,
                 end_date=end_date,
@@ -608,42 +688,97 @@ class ResolutionWeighter:
                 pass_direction=direction,
                 layers=composite_cls.supported_layers if write_qa else _MEASUREMENT_ONLY,
             )
-            result[direction] = product
+
+        def metadata(product: C, entry: _PassObservations) -> RasterMetadata:
+            return metadata_fn(
+                product,
+                aggregation=aggregation,
+                n_observations=entry.n_observations,
+                decibel=decibel,
+                source_tags=entry.source_tags,
+                acquisitions=entry.acquisitions,
+            )
+
+        return self._compose_by_pass(
+            inputs,
+            geobox,
+            make=make,
+            metadata=metadata,
+            aggregation=aggregation,
+            decibel=decibel,
+            overwrite=overwrite,
+        )
+
+    def _compose_by_pass[C: (RTCPassComposite, GTCPassComposite, CohPassComposite)](
+        self,
+        products: Sequence[ComposableProduct],
+        geobox: MGRSGeoBox,
+        *,
+        make: Callable[[PassDirection], C],
+        metadata: Callable[[C, _PassObservations], RasterMetadata],
+        aggregation: Literal["mean", "median"] | float,
+        decibel: bool,
+        overwrite: bool,
+    ) -> dict[PassDirection, C]:
+        """Composite each pass direction on its own, skipping finished ones before any read.
+
+        Raises
+        ------
+        EmptyCompositeError
+            If no direction has an input with a valid pixel in the cell.
+        """
+        by_pass: defaultdict[PassDirection, list[ComposableProduct]] = defaultdict(list)
+        for prod in products:
+            by_pass[prod.pass_direction].append(prod)
+
+        result: dict[PassDirection, C] = {}
+        for direction, subset in sorted(by_pass.items()):
+            product = make(direction)
             if not overwrite and self._all_exist(product):
+                result[direction] = product
                 continue
 
-            groups = self._stitch_by_orbit_date(subset)
+            groups = self._reaching(
+                self._stitch_by_orbit_date(self._load_band(subset, geobox, band=1))
+            )
+            if not groups:
+                # Like a direction without inputs: no composite, rather than an all-NaN file.
+                logger.debug("no %s input reaches cell %s", direction.lower(), geobox.mgrs_code)
+                if overwrite:
+                    self._remove(product)
+                continue
             observations = np.stack(list(groups.values()))  # (N, H, W)
             composite = self._aggregate_unweighted(observations, aggregation)
             if decibel:
                 composite = self._to_decibel(composite)
-            source_tags = self._input_tags([prod for prod, _ in subset])
-            # This file holds one direction, so its span is that direction's.
-            acquisitions = self._acquisition_span([prod for prod, _ in subset])
+            entry = _PassObservations(
+                composite=composite,
+                n_observations=len(observations),
+                source_tags=self._input_tags(subset),
+                # This file holds one direction, so its span is that direction's.
+                acquisitions=self._contributing_span(subset, groups),
+            )
             self._save(
                 composite,
                 product,
                 Layer.MEASUREMENT,
                 geobox,
-                metadata_fn(
-                    product,
-                    aggregation=aggregation,
-                    n_observations=len(observations),
-                    decibel=decibel,
-                    source_tags=source_tags,
-                    acquisitions=acquisitions,
-                ),
+                metadata(product, entry),
             )
-            if write_qa:
+            if Layer.QA_NUM in product.layers:
                 self._write_pass_qa(
                     observations,
                     product,
                     geobox,
                     aggregation=aggregation,
-                    source_tags=source_tags,
-                    acquisitions=acquisitions,
+                    source_tags=entry.source_tags,
+                    acquisitions=entry.acquisitions,
                 )
+            result[direction] = product
 
+        if not result:
+            msg = f"no input observation has a valid pixel in cell {geobox.mgrs_code}"
+            raise EmptyCompositeError(msg)
         return result
 
     def compose_coherence_by_pass(
@@ -682,6 +817,9 @@ class ResolutionWeighter:
             computation and return the existing product. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
+            A direction that no input reaches has the files of an earlier
+            composite of the same identity deleted; with ``overwrite=False``
+            they are left alone.
         time_range
             The compositing window, as calendar days; pass the same
             :class:`~s1bursts.time_range.TimeRange` the search was made with.
@@ -696,11 +834,26 @@ class ResolutionWeighter:
         dict[PassDirection, CohPassComposite]
             One composite per pass direction among the inputs, whose
             ``layers`` are the measurement and, with ``write_qa=True``, the
-            QA layer.
+            QA layer. A direction whose inputs have no valid pixel in
+            ``geobox`` is left out and gets no file, as if it had no inputs.
+
+        Raises
+        ------
+        ValueError
+            If ``coh_products`` is empty.
+        EmptyCompositeError
+            If no input of any direction has a valid pixel in ``geobox``;
+            nothing is written.
+        InconsistentInputsError
+            If an input is on another CRS, pixel size or grid than
+            ``geobox``, or the inputs were made with different DEMs.
+        CompositeInputError
+            If an input product is missing or cannot be read.
         """
         coh_products = list(coh_products)
         if not coh_products:
-            return {}
+            msg = "coh_products must not be empty."
+            raise ValueError(msg)
         self._check_aggregation(aggregation)
 
         polarization = self._check_polarization(coh_products)
@@ -708,15 +861,8 @@ class ResolutionWeighter:
         acquisitions = self._acquisition_span(coh_products)
         start_date, end_date = self._composite_dates(acquisitions, time_range)
 
-        loaded = self._load_band(coh_products, geobox, band=1)
-
-        subsets: defaultdict[PassDirection, list[_LoadedEntry]] = defaultdict(list)
-        for prod, data in loaded:
-            subsets[prod.pass_direction].append((prod, data))
-
-        result: dict[PassDirection, CohPassComposite] = {}
-        for direction, subset in subsets.items():
-            product = CohPassComposite(
+        def make(direction: PassDirection) -> CohPassComposite:
+            return CohPassComposite(
                 mgrs_code=geobox.mgrs_code,
                 start_date=start_date,
                 end_date=end_date,
@@ -725,40 +871,26 @@ class ResolutionWeighter:
                 baseline_days=baseline_days,
                 layers=CohPassComposite.supported_layers if write_qa else _MEASUREMENT_ONLY,
             )
-            result[direction] = product
-            if not overwrite and self._all_exist(product):
-                continue
 
-            groups = self._stitch_by_orbit_date(subset)
-            coh_obs = np.stack(list(groups.values()))  # (N, H, W)
-            composite = self._aggregate_unweighted(coh_obs, aggregation)
-            source_tags = self._input_tags([prod for prod, _ in subset])
-            acquisitions = self._acquisition_span([prod for prod, _ in subset])
-            self._save(
-                composite,
+        def metadata(product: CohPassComposite, entry: _PassObservations) -> RasterMetadata:
+            return product_tags.coh_pass_metadata(
                 product,
-                Layer.MEASUREMENT,
-                geobox,
-                product_tags.coh_pass_metadata(
-                    product,
-                    aggregation=aggregation,
-                    n_observations=len(coh_obs),
-                    statistics=product_tags.coherence_statistics(composite),
-                    source_tags=source_tags,
-                    acquisitions=acquisitions,
-                ),
+                aggregation=aggregation,
+                n_observations=entry.n_observations,
+                statistics=product_tags.coherence_statistics(entry.composite),
+                source_tags=entry.source_tags,
+                acquisitions=entry.acquisitions,
             )
-            if write_qa:
-                self._write_pass_qa(
-                    coh_obs,
-                    product,
-                    geobox,
-                    aggregation=aggregation,
-                    source_tags=source_tags,
-                    acquisitions=acquisitions,
-                )
 
-        return result
+        return self._compose_by_pass(
+            coh_products,
+            geobox,
+            make=make,
+            metadata=metadata,
+            aggregation=aggregation,
+            decibel=False,
+            overwrite=overwrite,
+        )
 
     # ------------------------------------------------------------------
     # Private helpers — I/O
@@ -813,43 +945,64 @@ class ResolutionWeighter:
         windowed read aligned to ``geobox``.  Out-of-bounds pixels are filled
         with NaN.
         """
-        left, bottom, right, top = geobox.boundingbox
 
         def _load_one(prod: ComposableProduct) -> _LoadedEntry:
             path = self._fm.get_product_path(prod)
             if not path.exists():
                 msg = f"product file not found: {path}"
-                raise FileNotFoundError(msg)
-            with rasterio_open(path) as src:
-                if src.crs != geobox.crs:
-                    msg = (
-                        f"'{path.name}' is in {src.crs}, but the target grid is "
-                        f"{geobox.crs}; reproject it or compose onto its own grid."
-                    )
-                    raise ValueError(msg)
-                if src.res != (geobox.resolution.x, abs(geobox.resolution.y)):
-                    msg = (
-                        f"'{path.name}' has {src.res[0]} m pixels, but the target grid has "
-                        f"{geobox.resolution.x} m; all inputs must share the output grid."
-                    )
-                    raise ValueError(msg)
-                win = from_bounds(left, bottom, right, top, transform=src.transform)
-                # Rounding the window would silently shift an input whose pixel
-                # corners do not coincide with the target grid's.
-                offsets = (win.col_off, win.row_off)
-                if any(abs(o - round(o)) > _ALIGNMENT_TOLERANCE for o in offsets):
-                    msg = (
-                        f"'{path.name}' is offset from the target grid by a fraction of a "
-                        f"pixel ({offsets[0]:.3f}, {offsets[1]:.3f}); all inputs must share "
-                        "the output grid."
-                    )
-                    raise ValueError(msg)
-                win = win.round_lengths().round_offsets()
-                data = src.read(band, window=win, boundless=True, fill_value=np.nan)
-            return prod, data.astype(np.float32)
+                raise CompositeInputError(msg)
+            try:
+                return prod, self._read_window(path, geobox, band)
+            except OSError as err:
+                msg = f"cannot read '{path.name}': {err}"
+                raise CompositeInputError(msg) from err
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             return list(executor.map(_load_one, products))
+
+    @staticmethod
+    def _read_window(
+        path: Path | UPath,
+        geobox: MGRSGeoBox,
+        band: int,
+    ) -> NDArray[np.float32]:
+        """Read one band of ``path`` on the grid of ``geobox``, NaN outside the file."""
+        left, bottom, right, top = geobox.boundingbox
+        with rasterio_open(path) as src:
+            if src.crs != geobox.crs:
+                msg = (
+                    f"'{path.name}' is in {src.crs}, but the target grid is "
+                    f"{geobox.crs}; reproject it or compose onto its own grid."
+                )
+                raise InconsistentInputsError(msg)
+            if src.res != (geobox.resolution.x, abs(geobox.resolution.y)):
+                msg = (
+                    f"'{path.name}' has {src.res[0]} m pixels, but the target grid has "
+                    f"{geobox.resolution.x} m; all inputs must share the output grid."
+                )
+                raise InconsistentInputsError(msg)
+            win = from_bounds(left, bottom, right, top, transform=src.transform)
+            # Rounding the window would silently shift an input whose pixel
+            # corners do not coincide with the target grid's.
+            offsets = (win.col_off, win.row_off)
+            if any(abs(o - round(o)) > _ALIGNMENT_TOLERANCE for o in offsets):
+                msg = (
+                    f"'{path.name}' is offset from the target grid by a fraction of a "
+                    f"pixel ({offsets[0]:.3f}, {offsets[1]:.3f}); all inputs must share "
+                    "the output grid."
+                )
+                raise InconsistentInputsError(msg)
+            win = win.round_lengths().round_offsets()
+            data = src.read(band, window=win, boundless=True, fill_value=np.nan)
+        return data.astype(np.float32)
+
+    def _remove(self, product: CompositeProduct) -> None:
+        """Delete every layer file of ``product``'s identity, so no earlier composite remains."""
+        for layer in product.supported_layers:
+            path = self._fm.get_product_path(product, layer)
+            if path.exists():
+                path.unlink()
+                logger.debug("removed %s, which no input reaches", path.name)
 
     def _all_exist(self, product: CompositeProduct) -> bool:
         """Whether every layer of ``product`` has its file already, logging the skip."""
@@ -937,8 +1090,13 @@ class ResolutionWeighter:
         """
 
         def read(product: ComposableProduct) -> dict[str, str]:
-            with rasterio_open(self._fm.get_product_path(product)) as src:
-                return dict(src.tags())
+            path = self._fm.get_product_path(product)
+            try:
+                with rasterio_open(path) as src:
+                    return dict(src.tags())
+            except OSError as err:
+                msg = f"cannot read '{path.name}': {err}"
+                raise CompositeInputError(msg) from err
 
         primary_count = len(products)
         all_products = [*products, *additional_dem_products]
@@ -952,7 +1110,7 @@ class ResolutionWeighter:
         if len(dem_values) > 1:
             listed = ", ".join(sorted(dem_values))
             msg = f"All inputs must use the same DEM; got {listed}."
-            raise ValueError(msg)
+            raise InconsistentInputsError(msg)
 
         first, *rest = per_input
         agreed = {k: v for k, v in first.items() if all(other.get(k) == v for other in rest)}
@@ -1149,11 +1307,18 @@ class ResolutionWeighter:
         EmptyCompositeError
             If no group has a valid pixel in the cell.
         """
-        kept = {key: data for key, data in groups.items() if np.isfinite(data).any()}
+        kept = ResolutionWeighter._reaching(groups)
         if not kept:
             msg = f"no input observation has a valid pixel in cell {geobox.mgrs_code}"
             raise EmptyCompositeError(msg)
         return kept
+
+    @staticmethod
+    def _reaching(
+        groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
+    ) -> dict[_OrbitDateKey, NDArray[np.floating[Any]]]:
+        """Keep the orbit/date groups with at least one valid pixel in the cell."""
+        return {key: data for key, data in groups.items() if np.isfinite(data).any()}
 
     @classmethod
     def _group_key(cls, product: ComposableProduct) -> _OrbitDateKey:
@@ -1198,7 +1363,7 @@ class ResolutionWeighter:
         if missing:
             formatted = ", ".join(f"(orbit {orbit}, {date.date()})" for orbit, date in missing)
             msg = f"No matching RTC scattering area for orbit/date group(s): {formatted}"
-            raise ValueError(msg)
+            raise InconsistentInputsError(msg)
 
     @staticmethod
     def _calc_weights(
