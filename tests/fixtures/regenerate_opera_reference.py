@@ -121,7 +121,7 @@ def fetch_opera(
         # The static granule is dated by the mission, not by an acquisition, so
         # only the per-acquisition search takes a time window.
         window_arguments: dict[str, Any] = (
-            {} if window is None else {"start": window[0], "end": window[1]}
+            {} if window is None else {"start": str(window.start), "end": str(window.end)}
         )
         granules = asf_search.search(
             dataset=asf_search.DATASET.OPERA_S1,

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from s1bursts.cdse import CDSEAuth, CDSEBurstClient, CDSEResponse
+from s1bursts.cdse import MAX_PAGE_SIZE, CDSEAuth, CDSEBurstClient, CDSEResponse
 
 POLYGON_WKT = "POLYGON ((7 46, 8 46, 8 47, 7 47, 7 46))"
 
@@ -239,13 +239,11 @@ class TestCDSEBurstClient:
 
         params = client._build_query_params(
             filters=["BurstId eq 1", "PolarisationChannels eq 'VV'"],
-            top=50,
             ascending=False,
             count=True,
         )
 
         assert params["$filter"] == "BurstId eq 1 and PolarisationChannels eq 'VV'"
-        assert params["$top"] == 50
         assert params["$orderby"] == "ContentDate/Start desc"
         assert params["$count"] is True
 
@@ -255,7 +253,8 @@ class TestCDSEBurstClient:
         params = client._build_query_params()
 
         assert "$filter" not in params
-        assert "$top" not in params
+        # A search is one request, so it asks for the largest page CDSE serves.
+        assert params["$top"] == MAX_PAGE_SIZE
         assert "$count" not in params
         assert params["$orderby"] == "ContentDate/Start"
 
@@ -272,56 +271,33 @@ class TestCDSEBurstClient:
             "s1bursts.cdse.requests.get",
             return_value=http_response,
         ) as mock_get:
-            response = client.search_bursts(["BurstId eq 30346"], top=10)
+            response = client.search_bursts(["BurstId eq 30346"], count=True)
 
         assert isinstance(response, CDSEResponse)
         assert len(response) == 1
-        assert mock_get.call_args.kwargs["params"]["$top"] == 10
+        assert mock_get.call_count == 1
+        assert mock_get.call_args.kwargs["params"]["$top"] == MAX_PAGE_SIZE
+        assert mock_get.call_args.kwargs["params"]["$count"] is True
 
-    @staticmethod
-    def _page(n_values: int, next_link: str | None = None) -> MagicMock:
+    def test_search_bursts_ignores_next_link(self) -> None:
+        """One page is the whole result; a longer one is refused by the caller."""
+        client = CDSEBurstClient()
         http_response = MagicMock()
         http_response.headers = {"Content-Type": "application/json"}
-        payload: dict[str, Any] = {
+        http_response.json.return_value = {
             "@odata.context": "$metadata#Bursts",
             "@odata.count": 3,
-            "value": [make_response_value() for _ in range(n_values)],
+            "@odata.nextLink": "https://catalogue.example/next",
+            "value": [make_response_value(), make_response_value()],
         }
-        if next_link is not None:
-            payload["@odata.nextLink"] = next_link
-        http_response.json.return_value = payload
-        return http_response
 
-    def test_search_bursts_follows_next_link_up_to_top(self) -> None:
-        """CDSE caps a page at 1000 items; a larger `top` needs the next-link pages."""
-        client = CDSEBurstClient()
-        pages = [self._page(2, "https://catalogue.example/next"), self._page(1)]
+        with patch("s1bursts.cdse.requests.get", return_value=http_response) as mock_get:
+            response = client.search_bursts(count=True)
 
-        with patch("s1bursts.cdse.requests.get", side_effect=pages) as mock_get:
-            response = client.search_bursts(["BurstId eq 30346"], top=3, count=True)
-
-        assert len(response) == 3
-        assert response.count == 3
-        assert mock_get.call_count == 2
-        assert mock_get.call_args_list[1].kwargs["url"] == "https://catalogue.example/next"
-
-    def test_search_bursts_stops_at_top(self) -> None:
-        client = CDSEBurstClient()
-        pages = [self._page(2, "https://catalogue.example/next"), self._page(1)]
-
-        with patch("s1bursts.cdse.requests.get", side_effect=pages) as mock_get:
-            response = client.search_bursts(["BurstId eq 30346"], top=2)
-
-        assert len(response) == 2
         assert mock_get.call_count == 1
-
-    def test_search_bursts_requests_no_more_than_a_page(self) -> None:
-        client = CDSEBurstClient()
-
-        with patch("s1bursts.cdse.requests.get", return_value=self._page(1)) as mock_get:
-            client.search_bursts(top=5000)
-
-        assert mock_get.call_args.kwargs["params"]["$top"] == 1000
+        assert len(response) == 2
+        assert response.count == 3
+        assert not response.is_complete()
 
     def test_search_bursts_rejects_non_json(self) -> None:
         client = CDSEBurstClient()

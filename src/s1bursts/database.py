@@ -18,12 +18,13 @@ from s1bursts.burst import (
     BurstPair,
     BurstPairCollection,
 )
-from s1bursts.cdse import CDSEAuth, CDSEBurstClient
+from s1bursts.cdse import MAX_PAGE_SIZE, CDSEAuth, CDSEBurstClient
 from s1bursts.errors import (
     BurstDownloadError,
     BurstError,
     BurstNotFoundError,
     ConfigurationError,
+    TooManyResultsError,
 )
 from s1bursts.summary import ErrorResult, OkResult, OperationResult, OperationSummary
 
@@ -107,28 +108,30 @@ class BurstDatabase:
                     )
                     raise BurstDownloadError(msg) from e
 
-    def search(self, query: SearchQuery, max_items: int = 100) -> BurstCollection:
+    def search(self, query: SearchQuery) -> BurstCollection:
         """Search for Sentinel-1 bursts matching the query.
 
         Parameters
         ----------
         query
             Search parameters.
-        max_items
-            Maximum number of results to return.
 
         Returns
         -------
         BurstCollection
-            Collection of matching bursts.
+            Every burst that matches the query.
 
         Raises
         ------
+        TooManyResultsError
+            If more than 1000 bursts match, the most one catalog request
+            returns. Narrow the query, or combine several searches with ``+``.
         RuntimeError
-            If the response is truncated and max_items is too small.
+            If the catalog's response does not hold the number of bursts it
+            reports as matching.
         """
         filters = self._convert_query_to_filters(query)
-        response = self.client.search_bursts(filters, top=max_items, count=True)
+        response = self.client.search_bursts(filters, count=True)
         self._validate_completeness(response)
         return BurstCollection.from_cdse_response(response)
 
@@ -382,12 +385,12 @@ class BurstDatabase:
 
         filters = [expr for value, expr in simple_filters if value is not None]
 
-        if query.time_range:
-            start, end = query.time_range
+        if query.time_range is not None:
+            start, end = query.time_range.half_open()
             fmt = "%Y-%m-%dT%H:%M:%SZ"
             # ContentDate/Start maps to BeginningDateTime (sensingTime),
-            # which matches Burst.date. The stop is exclusive, so a TimeRange's
-            # stop, the midnight after its last day, keeps that whole day.
+            # which matches Burst.date. The stop is exclusive, so the midnight
+            # after the window's last day keeps that whole day.
             filters.append(
                 f"ContentDate/Start ge {start.strftime(fmt)} and "
                 f"ContentDate/Start lt {end.strftime(fmt)}",
@@ -401,12 +404,20 @@ class BurstDatabase:
 
     @staticmethod
     def _validate_completeness(response: CDSEResponse) -> None:
-        """Raise if the CDSE response is truncated."""
-        if response.is_complete():
-            return
-        msg = (
-            f"{response.count} bursts match the query, but response only contains "
-            f"{len(response)} elements. Increase `max_items` parameter or narrow down "
-            "the query."
-        )
-        raise RuntimeError(msg)
+        """Raise unless the response holds every burst that matches."""
+        if response.count is None:
+            msg = "The catalog did not report how many bursts match the query."
+            raise RuntimeError(msg)
+        if response.count > MAX_PAGE_SIZE:
+            msg = (
+                f"{response.count} bursts match the query, but one search returns at "
+                f"most {MAX_PAGE_SIZE}. Narrow the TimeRange or the AOI, or split the "
+                "query into several searches and combine their results with `+`."
+            )
+            raise TooManyResultsError(msg)
+        if not response.is_complete():
+            msg = (
+                f"The catalog reported {response.count} matching bursts but returned "
+                f"{len(response)}. Repeat the search."
+            )
+            raise RuntimeError(msg)

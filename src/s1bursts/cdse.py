@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 TIMEOUT_DEFAULT = 30
 
 MAX_PAGE_SIZE = 1000
-"""Largest ``$top`` the CDSE catalog honours per request; longer results are paged."""
+"""Largest ``$top`` the CDSE catalog honours per request, and so the most one search returns."""
 
 _RESPONSE_COLS_KEEP = [
     "Id",
@@ -347,7 +347,6 @@ class CDSEBurstClient:
         self,
         filters: Iterable[str] | None = None,
         *,
-        top: int | None = None,
         ascending: bool = True,
         count: bool | None = None,
     ) -> dict[str, Any]:
@@ -355,8 +354,7 @@ class CDSEBurstClient:
         params: dict[str, Any] = {}
         if filters is not None:
             params["$filter"] = " and ".join(filters)
-        if top is not None:
-            params["$top"] = top
+        params["$top"] = MAX_PAGE_SIZE
         params["$orderby"] = "ContentDate/Start" if ascending else "ContentDate/Start desc"
         if count is not None:
             params["$count"] = count
@@ -368,23 +366,19 @@ class CDSEBurstClient:
         self,
         filters: list[str] | None = None,
         *,
-        top: int | None = None,
         ascending: bool = True,
         count: bool | None = None,
     ) -> CDSEResponse:
         """Search for Sentinel-1 bursts matching specified criteria.
 
-        The catalog serves at most ``MAX_PAGE_SIZE`` items per request, so a
-        larger ``top`` is collected by following the response's next-link
-        pages until ``top`` items are gathered or the results end.
+        Returns a single page of at most ``MAX_PAGE_SIZE`` items, the most the
+        catalog serves per request. Request ``count`` to tell whether more
+        bursts match than the page holds.
 
         Parameters
         ----------
         filters
             List of OData filter expressions to apply.
-        top
-            Maximum number of results to return. ``None`` returns the
-            catalog's default single page.
         ascending
             Whether to sort results by start time in ascending
             or descending order.
@@ -403,26 +397,13 @@ class CDSEBurstClient:
         requests.HTTPError
             If the search request fails.
         """
-        query = self._build_query_params(
-            filters=filters,
-            top=min(top, MAX_PAGE_SIZE) if top is not None else None,
-            ascending=ascending,
-            count=count,
-        )
-        first = self._get_page(self.catalog_endpoint, query)
-        values = list(first["value"])
-        next_link = first.get("@odata.nextLink")
-        while top is not None and len(values) < top and next_link:
-            page = self._get_page(next_link, None)
-            values.extend(page["value"])
-            next_link = page.get("@odata.nextLink")
-        first["value"] = values[:top] if top is not None else values
-        return CDSEResponse.from_dict(first)
-
-    def _get_page(self, url: str, params: dict[str, Any] | None) -> dict[str, Any]:
-        """Fetch one page of the burst catalog and validate its shape."""
+        query = self._build_query_params(filters=filters, ascending=ascending, count=count)
         # The catalog endpoint requires no authentication
-        response = requests.get(url=url, params=params, timeout=self.request_timeout)
+        response = requests.get(
+            url=self.catalog_endpoint,
+            params=query,
+            timeout=self.request_timeout,
+        )
         response.raise_for_status()
         content_type = response.headers.get("Content-Type", "")
         if not content_type.startswith("application/json"):
@@ -432,7 +413,7 @@ class CDSEBurstClient:
         if not isinstance(json_, dict) or json_.get("@odata.context") != "$metadata#Bursts":
             msg = f"Failed to query bursts: \n{json_}"
             raise RuntimeError(msg)
-        return json_
+        return CDSEResponse.from_dict(json_)
 
     def download_burst(
         self,

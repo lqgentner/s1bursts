@@ -11,6 +11,7 @@ from s1bursts.errors import (
     ConfigurationError,
     S1BurstsError,
     SnapProcessingError,
+    TooManyResultsError,
 )
 
 
@@ -27,6 +28,12 @@ def test_configuration_error_is_not_a_burst_error() -> None:
     """Environment-wide failures must not be swallowed by per-item handlers."""
     assert not issubclass(ConfigurationError, BurstError)
     assert issubclass(ConfigurationError, S1BurstsError)
+
+
+def test_too_many_results_error_is_not_a_burst_error() -> None:
+    """An oversized search is the whole query's failure, not one burst's."""
+    assert not issubclass(TooManyResultsError, BurstError)
+    assert issubclass(TooManyResultsError, S1BurstsError)
 
 
 def test_burst_error_handler_does_not_catch_configuration_error() -> None:

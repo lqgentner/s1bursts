@@ -23,6 +23,24 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Changed
 
+- **Breaking:** `BurstDatabase.search()` no longer takes `max_items` and
+  returns every match. A query matching more than 1000 bursts, one catalog
+  page, raises the new `s1bursts.errors.TooManyResultsError` (previously a
+  `RuntimeError` above `max_items`) after a single request. Narrow the
+  `TimeRange` or the AOI, or split the query and combine the results with `+`.
+  Replace `db.search(query, max_items=500)` with `db.search(query)`.
+- **Breaking:** `CDSEBurstClient.search_bursts()` no longer takes `top` and
+  no longer follows next-link pages. It returns one page of up to 1000
+  bursts; request `count=True` to tell whether more match. Replace
+  `client.search_bursts(filters, top=100)` with
+  `client.search_bursts(filters)` and take the first 100 of its `value`.
+- **Breaking:** `SearchQuery(time_range=...)` accepts only a `TimeRange`, and
+  `query.time_range` is that `TimeRange` rather than a `(start, stop)` tuple of
+  Timestamps, so it can be passed on to `compose_*(time_range=...)`. A tuple
+  raises `TypeError`. The tuple was a half-open pair of instants and dropped
+  every acquisition on its end date, whereas a `TimeRange` keeps all its days.
+  Replace `SearchQuery(time_range=("2022-01-01", "2023-01-01"))` with
+  `SearchQuery(time_range=TimeRange("2022-01-01", "2022-12-31"))`.
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.

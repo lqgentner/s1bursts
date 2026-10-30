@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Literal, Protocol, runtime_checkable
-
-import pandas as pd
-from pandas import Timestamp
 
 from s1bursts.time_range import TimeRange
 
@@ -47,10 +43,9 @@ class SearchQuery:
     Parameters
     ----------
     time_range
-        Acquisition time window. A :class:`~s1bursts.time_range.TimeRange` keeps
-        every acquisition on any of its days; the same window then names the
-        composite built from the search. A pair of ISO strings or Timestamps is
-        a half-open ``[start, stop)`` pair of instants.
+        Acquisition time window. The search keeps every acquisition on any of
+        its days, end included, and the same window can then name the composite
+        built from the search.
     intersects
         Spatial filter; bursts must intersect this geometry.
     burst_id
@@ -73,13 +68,15 @@ class SearchQuery:
 
     Raises
     ------
+    TypeError
+        If ``time_range`` is not a ``TimeRange``.
     ValueError
         If any value falls outside its accepted range or set of identifiers.
     """
 
     def __init__(
         self,
-        time_range: TimeRange | tuple[str | Timestamp, str | Timestamp] | None = None,
+        time_range: TimeRange | None = None,
         intersects: HasWkt | None = None,
         burst_id: int | None = None,
         abs_burst_id: int | None = None,
@@ -90,7 +87,7 @@ class SearchQuery:
         platform_serial_id: PlatformSerialID | None = None,
         rel_orbit_number: int | None = None,
     ) -> None:
-        self.time_range = self._convert_to_timestamp_range(time_range)
+        self.time_range = self._validate_time_range(time_range)
         self.intersects = self._validate_geometry(intersects)
         self.burst_id = self._validate_int_range(burst_id, "burst_id", minimum=1)
         self.abs_burst_id = self._validate_int_range(abs_burst_id, "abs_burst_id", minimum=1)
@@ -135,32 +132,16 @@ class SearchQuery:
         return geometry
 
     @staticmethod
-    def _convert_to_timestamp_range(
-        time_range: TimeRange | tuple[str | Timestamp, str | Timestamp] | None,
-    ) -> tuple[Timestamp, Timestamp] | None:
-        """Return the ``[start, stop)`` instants to filter on, validating ordering."""
-        if time_range is None:
-            return None
-        if isinstance(time_range, TimeRange):
-            return time_range.half_open()
-
-        if not isinstance(time_range, Sequence):
-            msg = f"time_range must be of type tuple, received `{type(time_range).__name__}`."
+    def _validate_time_range(time_range: TimeRange | None) -> TimeRange | None:
+        """Validate that the time window is a ``TimeRange``."""
+        if time_range is not None and not isinstance(time_range, TimeRange):
+            msg = (
+                f"time_range must be a TimeRange, received `{type(time_range).__name__}`. "
+                "Its days are inclusive: TimeRange('2022-01-01', '2022-12-31') keeps "
+                "every acquisition on 31 December."
+            )
             raise TypeError(msg)
-        try:
-            start_raw, end_raw = time_range
-        except ValueError:
-            msg = "time_range tuple must have exactly 2 elements"
-            raise ValueError(msg) from None
-
-        start = pd.Timestamp(start_raw)
-        end = pd.Timestamp(end_raw)
-
-        if start >= end:
-            msg = f"Start time {start} must be before end time {end}"
-            raise ValueError(msg)
-
-        return (start, end)
+        return time_range
 
     @staticmethod
     def _validate_int_range(

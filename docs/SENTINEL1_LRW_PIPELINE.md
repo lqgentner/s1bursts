@@ -151,7 +151,7 @@ The coherence estimation window exists only in `CoherenceConfig` at graph-build 
 - `Burst`: one acquisition of one footprint, identified by `burst_id`, `sub_swath`, `polarization` and the calendar day of `date`. Relative orbit number, pass direction and footprint geometry are propagated from the CDSE response or an SLC filename; a burst that carries none falls back to the SAR-MPC burst-ID map, an opt-in download (`download_burst_map()`).
 - `BurstPair`: primary and secondary `Burst` of one footprint; `baseline_days` is the temporal baseline rounded to whole days.
 - `BurstCollection` / `BurstPairCollection`: GeoDataFrame-backed containers with deduplication, slicing, an HTML preview, and `find_pairs(baseline, max_delta=6)` (days and hours when given as integers; `baseline` must be whole days and `max_delta` under 12 hours, so every pair is named by the requested baseline).
-- `SearchQuery`: validated search parameters; `BurstDatabase.search(query, max_items=100)` turns it into OData filters and pages through the catalog.
+- `SearchQuery`: validated search parameters; `BurstDatabase.search(query)` turns it into OData filters and returns every match from one catalog request. A query matching more than one page (1000 bursts) raises `TooManyResultsError`; split it and combine the results with `+`.
 - `BurstDatabase.download(bursts, *, overwrite=False, max_workers=5, endpoint=None)`: parallel download via the CDSE OData burst endpoint or by extracting the burst from the parent product in CDSE S3 (`burst_extractor.py`); a failure on one endpoint is retried on the other, and a burst the source does not hold is remembered so it is not requested twice.
 
 ### Products (`product.py`)
