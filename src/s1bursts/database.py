@@ -23,6 +23,7 @@ from s1bursts.errors import (
     BurstDownloadError,
     BurstError,
     BurstNotFoundError,
+    CatalogError,
     ConfigurationError,
     TooManyResultsError,
 )
@@ -100,7 +101,7 @@ class BurstDatabase:
             if self.client.auth is None:
                 try:
                     self.client.auth = CDSEAuth()
-                except ValueError as e:
+                except ConfigurationError as e:
                     msg = (
                         "OData download requires CDSE credentials, but none are "
                         "configured. Set CDSE_USERNAME and CDSE_PASSWORD, or download "
@@ -126,9 +127,9 @@ class BurstDatabase:
         TooManyResultsError
             If more than 1000 bursts match, the most one catalog request
             returns. Narrow the query, or combine several searches with ``+``.
-        RuntimeError
-            If the catalog's response does not hold the number of bursts it
-            reports as matching.
+        CatalogError
+            If the catalog's response is malformed or does not hold the
+            number of bursts it reports as matching.
         """
         filters = self._convert_query_to_filters(query)
         response = self.client.search_bursts(filters, count=True)
@@ -341,9 +342,11 @@ class BurstDatabase:
         if burst.parent_product_name is None:
             msg = "S3 download requires `parent_product_name`, received None."
             return ErrorResult(source=burst, error=BurstDownloadError(msg))
+        # Outside the try: a missing burst map is not a credentials problem.
+        save_path = self.file_manager.get_slc_path(burst)
         try:
             self.client.download_burst_from_s3(
-                save_path=self.file_manager.get_slc_path(burst),
+                save_path=save_path,
                 parent_product_name=burst.parent_product_name,
                 polarization=burst.polarization,
                 sub_swath=burst.sub_swath,
@@ -407,7 +410,7 @@ class BurstDatabase:
         """Raise unless the response holds every burst that matches."""
         if response.count is None:
             msg = "The catalog did not report how many bursts match the query."
-            raise RuntimeError(msg)
+            raise CatalogError(msg)
         if response.count > MAX_PAGE_SIZE:
             msg = (
                 f"{response.count} bursts match the query, but one search returns at "
@@ -420,4 +423,4 @@ class BurstDatabase:
                 f"The catalog reported {response.count} matching bursts but returned "
                 f"{len(response)}. Repeat the search."
             )
-            raise RuntimeError(msg)
+            raise CatalogError(msg)

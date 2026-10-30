@@ -20,7 +20,8 @@ from upath import UPath
 
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.config import SNAPSettings
-from s1bursts.errors import ConfigurationError, SnapProcessingError
+from s1bursts.errors import BurstMapUnavailableError, ConfigurationError, SnapProcessingError
+from s1bursts.filemanager import FileManager
 from s1bursts.product_tags import RasterMetadata
 from s1bursts.snap_client import (
     SNAPClient,
@@ -906,6 +907,43 @@ class TestCreateInterferogram:
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, RasterWriteError)
         assert result.source is pair
+
+
+@pytest.mark.parametrize(
+    ("method", "config"),
+    [("create_coherence", CoherenceConfig()), ("create_interferogram", InterferogramConfig())],
+)
+def test_missing_burst_map_for_the_secondary_propagates(
+    client: SNAPClient,
+    tmp_path: Path,
+    method: str,
+    config: CoherenceConfig | InterferogramConfig,
+) -> None:
+    """A missing burst map affects every pair, so it stops the run."""
+    # Previously the FileNotFoundError raised while staging the secondary SLC
+    # was recorded as a failure of this pair, and the run went on.
+    secondary = Burst(
+        burst_id=BURST_ID,
+        sub_swath="IW1",
+        polarization="VV",
+        date=Timestamp("2022-01-13"),
+    )
+    pair = BurstPair(_make_burst("2022-01-01"), secondary)
+    cast("MagicMock", client.manager).get_slc_path.side_effect = FileManager(
+        tmp_path,
+    ).get_slc_path
+
+    with (
+        patch(
+            "s1bursts.burst.create_s1_orbit_number_lut",
+            side_effect=BurstMapUnavailableError("not downloaded"),
+        ),
+        patch.object(client, "_run_gpt") as mock_gpt,
+        pytest.raises(BurstMapUnavailableError, match="not downloaded"),
+    ):
+        getattr(client, method)(pair, crs=CRS("EPSG:32632"), config=config)
+
+    mock_gpt.assert_not_called()
 
 
 class TestResourceBudget:

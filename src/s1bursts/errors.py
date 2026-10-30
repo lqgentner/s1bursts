@@ -7,13 +7,16 @@ the ones worth recording per item and let the rest abort the run:
   single burst could not be downloaded or processed. Batch loops catch this base
   class, record an ``ErrorResult``, and continue.
 - ``ConfigurationError`` is an *environment-wide* failure (missing
-  credentials, a broken PROJ database, a missing GPT executable). It affects
-  every item, so it must propagate and fail fast — it is deliberately never
-  caught by the per-item handlers.
+  credentials, a missing PROJ grid or burst-ID map, a missing GPT executable).
+  It affects every item, so it propagates and fails fast; per-item handlers
+  do not catch it. The one exception is the credentials of a download
+  endpoint: ``BurstDatabase`` turns their absence into a per-burst
+  ``BurstDownloadError``, so that the other endpoint is still tried.
 
-Anything that is neither (a plain ``ValueError`` from a programming bug, a
-third-party ``CRSError``) is also left to propagate, which keeps an
-environment-wide problem from being silently logged once per item.
+Every other ``S1BurstsError`` fails the whole call that raised it, as does
+anything that is not one (a plain ``ValueError`` for an invalid argument, a
+third-party ``CRSError``). Leaving those to propagate keeps an environment-wide
+problem from being silently logged once per item.
 """
 
 from __future__ import annotations
@@ -30,6 +33,27 @@ class ConfigurationError(S1BurstsError):
     unusable PROJ/GDAL install, a missing SNAP GPT executable. These propagate
     and fail the run fast; batch handlers must not catch them.
     """
+
+
+class TransformationGridError(ConfigurationError, RuntimeError):
+    """A PROJ grid needed for a DEM's vertical conversion is missing or could not be downloaded."""
+
+
+class BurstMapUnavailableError(ConfigurationError):
+    """The Sentinel-1 burst-ID map is needed but not downloaded or unreadable."""
+
+
+class BurstNotInMapError(S1BurstsError, LookupError):
+    """A burst's ``(burst_id, sub_swath)`` is not in the Sentinel-1 burst-ID map.
+
+    Every burst the mission acquires is in the map, so this points to a
+    malformed burst rather than one missing at the source, which is
+    ``BurstNotFoundError``.
+    """
+
+
+class CatalogError(S1BurstsError, RuntimeError):
+    """The CDSE catalog returned a response that cannot be used."""
 
 
 class EmptyCompositeError(S1BurstsError, ValueError):

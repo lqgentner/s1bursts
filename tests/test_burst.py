@@ -18,6 +18,7 @@ from s1bursts.burst import (
     BurstPairCollection,
 )
 from s1bursts.cdse import CDSEResponse
+from s1bursts.errors import BurstNotInMapError
 from s1bursts.product import CoherenceProduct
 
 if TYPE_CHECKING:
@@ -115,10 +116,10 @@ class TestBurst:
         orbit_num_lut.assert_called_with(mode="EW")
         orbit_dir_lut.assert_called_once_with(mode="EW")
 
-    def test_unknown_burst_raises_key_error(self) -> None:
+    def test_unknown_burst_raises_burst_not_in_map_error(self) -> None:
         burst = make_burst(burst_id=99999)
 
-        with pytest.raises(KeyError, match="not found in the Sentinel-1 burst map"):
+        with pytest.raises(BurstNotInMapError, match="not found in the Sentinel-1 burst map"):
             _ = burst.rel_orbit_number
 
     def test_propagated_values_bypass_the_lut(self) -> None:

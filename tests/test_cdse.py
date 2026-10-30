@@ -10,6 +10,7 @@ import pytest
 import requests
 
 from s1bursts.cdse import MAX_PAGE_SIZE, CDSEAuth, CDSEBurstClient, CDSEResponse
+from s1bursts.errors import CatalogError, ConfigurationError
 
 POLYGON_WKT = "POLYGON ((7 46, 8 46, 8 47, 7 47, 7 46))"
 
@@ -36,7 +37,7 @@ class TestCDSEAuth:
         # Ensure no .env file in the working directory provides credentials
         monkeypatch.chdir(tmp_path)
 
-        with pytest.raises(ValueError, match="CDSE credentials not configured"):
+        with pytest.raises(ConfigurationError, match="CDSE credentials not configured"):
             CDSEAuth()
 
     def test_initial_token_fetch_and_header(self) -> None:
@@ -179,7 +180,7 @@ class TestCDSEResponse:
     def test_is_complete_without_count_raises(self) -> None:
         response = CDSEResponse(context="$metadata#Bursts", value=[])
 
-        with pytest.raises(AttributeError, match="count is None"):
+        with pytest.raises(CatalogError, match="count is None"):
             response.is_complete()
 
     def test_to_geodataframe(self) -> None:
@@ -229,7 +230,7 @@ class TestCDSEResponse:
             value=[make_response_value(footprint=f"SRID=3857;{POLYGON_WKT}")],
         )
 
-        with pytest.raises(RuntimeError, match="unknown EPSG"):
+        with pytest.raises(CatalogError, match="unknown EPSG"):
             response.to_geodataframe()
 
 
@@ -307,7 +308,7 @@ class TestCDSEBurstClient:
 
         with (
             patch("s1bursts.cdse.requests.get", return_value=http_response),
-            pytest.raises(RuntimeError, match="Failed to query bursts"),
+            pytest.raises(CatalogError, match="Failed to query bursts"),
         ):
             client.search_bursts()
 
@@ -320,7 +321,7 @@ class TestCDSEBurstClient:
 
         with (
             patch("s1bursts.cdse.requests.get", return_value=http_response),
-            pytest.raises(RuntimeError, match="Failed to query bursts"),
+            pytest.raises(CatalogError, match="Failed to query bursts"),
         ):
             client.search_bursts()
 

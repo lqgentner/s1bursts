@@ -45,6 +45,9 @@ dependencies = [
     "numpy>=2.0",
     "odc-geo>=0.5.0",
     "pandas>=2.3",
+    # Imported for ArrowInvalid, the error a corrupt cached burst-ID map raises;
+    # freezebase already requires 17.
+    "pyarrow>=17",
     "pydantic>=2",
     "pydantic-settings>=2.13.1",
     "pyproj>=3.5",

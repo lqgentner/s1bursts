@@ -41,6 +41,37 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   every acquisition on its end date, whereas a `TimeRange` keeps all its days.
   Replace `SearchQuery(time_range=("2022-01-01", "2023-01-01"))` with
   `SearchQuery(time_range=TimeRange("2022-01-01", "2022-12-31"))`.
+- **Breaking:** every error s1bursts raises about its own domain is now an
+  `S1BurstsError` from `s1bursts.errors`, so `except S1BurstsError` catches
+  all of them. Invalid arguments still raise `ValueError` and `TypeError`,
+  and a path you pass that does not exist still raises `FileNotFoundError`.
+  - An unusable catalog response raises `CatalogError`, a `RuntimeError`. This
+    covers `BurstDatabase.search()`, `CDSEBurstClient.search_bursts()` and
+    `CDSEResponse.to_geodataframe()`. `CDSEResponse.is_complete()` without a
+    count raised `AttributeError` before: replace `except AttributeError:`
+    with `except CatalogError:`.
+  - A missing or undownloadable PROJ grid in `prepare_dem_for_snap()` raises
+    `TransformationGridError`, a `ConfigurationError` and a `RuntimeError`.
+    `except RuntimeError:` still catches it. An `except ConfigurationError:`
+    around `prepare_dem_for_snap()` now catches it too, where before it caught
+    only the error for a `snap_bin` without `gpt`.
+  - Missing CDSE credentials in `CDSEAuth()` raise `ConfigurationError`
+    instead of `ValueError`: replace `except ValueError:` with
+    `except ConfigurationError:`.
+  - A burst-ID map that has not been downloaded, or cannot be read, raises
+    `BurstMapUnavailableError`, a `ConfigurationError`, instead of
+    `FileNotFoundError`: replace `except FileNotFoundError:` with
+    `except BurstMapUnavailableError:`. It always stops a `BurstProcessor`
+    run. Before, a pair whose secondary burst needed the map to stage its SLC
+    was recorded as a failed item instead. A corrupt cached map, which raised
+    `ValueError` or pyarrow's `ArrowInvalid`, raises it too and names the
+    file to delete. A map archive without the mode's database is no longer
+    reported as a map that was never downloaded.
+  - A burst missing from the burst-ID map raises `BurstNotInMapError`, a
+    `LookupError`, instead of `KeyError`: replace `except KeyError:` with
+    `except BurstNotInMapError:`.
+- `pyarrow>=17` is a direct dependency, to recognise a corrupt burst-ID map.
+  freezebase already required it, so nothing new is installed.
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.

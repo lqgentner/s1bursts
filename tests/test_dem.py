@@ -24,6 +24,7 @@ from s1bursts.dem import (
     VERTICAL_CONVERSION_TAG,
     prepare_dem_for_snap,
 )
+from s1bursts.errors import TransformationGridError
 from s1bursts.snap_client import external_dem_needs_half_pixel_shift
 
 if TYPE_CHECKING:
@@ -628,7 +629,9 @@ class TestTransformationGrids:
         group = self._group(best_available=False)
         monkeypatch.setattr(dem_module, "_new_transformer_group", lambda _source_crs: group)
 
-        with pytest.raises(RuntimeError, match=r"test-grid\.tif.*download_missing_grids"):
+        with pytest.raises(
+            TransformationGridError, match=r"test-grid\.tif.*download_missing_grids"
+        ):
             dem_module._get_transformer(
                 dem_module.CRS("EPSG:4326+3855"),
                 download_missing_grids=False,
@@ -669,7 +672,7 @@ class TestTransformationGrids:
         monkeypatch.setattr(dem_module, "_new_transformer_group", lambda _source_crs: group)
         monkeypatch.setattr(dem_module, "_download_grids", lambda _group: None)
 
-        with pytest.raises(RuntimeError, match="Downloading was enabled") as error:
+        with pytest.raises(TransformationGridError, match="Downloading was enabled") as error:
             dem_module._get_transformer(
                 dem_module.CRS("EPSG:4326+3855"),
                 download_missing_grids=True,
@@ -739,7 +742,9 @@ class TestTransformationGrids:
         monkeypatch.setattr(dem_module, "_new_transformer_group", lambda _source_crs: group)
         monkeypatch.setattr(dem_module, "_download_grids", downloaded.append)
 
-        with pytest.raises(RuntimeError, match=r"cannot download: test-grid\.tif") as error:
+        with pytest.raises(
+            TransformationGridError, match=r"cannot download: test-grid\.tif"
+        ) as error:
             dem_module._get_transformer(
                 dem_module.CRS("EPSG:4326+3855"),
                 download_missing_grids=True,
@@ -770,7 +775,7 @@ class TestTransformationGrids:
         )
         monkeypatch.setattr(dem_module, "_new_transformer_group", lambda _source_crs: group)
 
-        with pytest.raises(RuntimeError) as error:
+        with pytest.raises(TransformationGridError) as error:
             dem_module._get_transformer(
                 dem_module.CRS("EPSG:4326+3855"),
                 download_missing_grids=False,
@@ -838,11 +843,52 @@ class TestTransformationGrids:
         )
         user_dir.mkdir()
 
-        with pytest.raises(RuntimeError, match=r"No directly downloadable open-license.*manually"):
+        with pytest.raises(
+            TransformationGridError, match=r"No directly downloadable open-license.*manually"
+        ):
             # pyrefly: ignore [bad-argument-type]
             dem_module._download_grids(DownloadGroup())
 
         assert attempts == []
+
+    @pytest.mark.parametrize(
+        ("failure", "message"),
+        [
+            (OSError("connection reset"), "Could not download PROJ transformation grid"),
+            (None, "reported test-grid.tif as downloadable but produced no file"),
+        ],
+    )
+    def test_failed_download_raises_transformation_grid_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        failure: OSError | None,
+        message: str,
+    ) -> None:
+        user_dir = tmp_path / "proj"
+        grid = _fake_grid("test-grid.tif")
+
+        class DownloadGroup:
+            def __init__(self) -> None:
+                self.unavailable_operations = [SimpleNamespace(grids=[grid])]
+
+            @staticmethod
+            def download_grids(*, directory: Path, open_license: bool) -> None:  # noqa: ARG004
+                if failure is not None:
+                    raise failure
+
+        monkeypatch.setattr(
+            dem_module.datadir,
+            "get_user_data_dir",
+            lambda *, create: str(user_dir),  # noqa: ARG005
+        )
+        user_dir.mkdir()
+
+        with pytest.raises(TransformationGridError, match=message) as error:
+            # pyrefly: ignore [bad-argument-type]
+            dem_module._download_grids(DownloadGroup())
+
+        assert error.value.__cause__ is failure
 
 
 class TestCacheIdentity:

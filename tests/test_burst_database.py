@@ -15,7 +15,9 @@ from s1bursts.cdse import MAX_PAGE_SIZE, CDSEResponse
 from s1bursts.database import BurstDatabase
 from s1bursts.errors import (
     BurstDownloadError,
+    BurstMapUnavailableError,
     BurstNotFoundError,
+    CatalogError,
     ConfigurationError,
     TooManyResultsError,
 )
@@ -270,7 +272,7 @@ class TestEndpointWrappers:
 
         with patch(
             "s1bursts.database.CDSEAuth",
-            side_effect=ValueError("CDSE credentials not configured"),
+            side_effect=ConfigurationError("CDSE credentials not configured"),
         ):
             result = db._download_burst_odata(burst)
 
@@ -301,6 +303,25 @@ class TestEndpointWrappers:
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, BurstDownloadError)
         assert "endpoint='odata'" in str(result.error)
+
+    def test_s3_missing_burst_map_is_not_blamed_on_credentials(self) -> None:
+        """A missing burst map propagates instead of becoming a credentials error."""
+        file_manager = MagicMock()
+        file_manager.get_slc_path.side_effect = BurstMapUnavailableError("not downloaded")
+        db = BurstDatabase(file_manager=file_manager, auth=MagicMock())
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            parent_product_name="S1A_IW_SLC__1SDV",
+        )
+        db.client = MagicMock()
+
+        with pytest.raises(BurstMapUnavailableError, match="not downloaded"):
+            db._download_burst_s3(burst)
+
+        db.client.download_burst_from_s3.assert_not_called()
 
     def test_s3_requires_parent_product_name(self) -> None:
         db = _make_database()
@@ -370,14 +391,14 @@ class TestSearch:
     def test_a_short_page_is_not_reported_as_too_many(self) -> None:
         db, _ = self._database(n_values=3, count=5)
 
-        with pytest.raises(RuntimeError, match=r"reported 5 matching bursts but returned 3"):
+        with pytest.raises(CatalogError, match=r"reported 5 matching bursts but returned 3"):
             db.search(SearchQuery())
 
     def test_a_response_without_count_raises(self) -> None:
         db, client = self._database(n_values=2, count=2)
         client.search_bursts.return_value.count = None
 
-        with pytest.raises(RuntimeError, match=r"did not report how many bursts match"):
+        with pytest.raises(CatalogError, match=r"did not report how many bursts match"):
             db.search(SearchQuery())
 
 
