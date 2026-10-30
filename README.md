@@ -137,12 +137,15 @@ leave `external_dem_apply_egm=False`.
 ### Burst-ID map (optional)
 
 Relative orbit number, pass direction, and footprint geometry are propagated
-directly from the CDSE search response and from SLC filenames, so the normal
-search → download → process → composite workflow needs no extra data.
+directly from the CDSE search response, and products record their relative
+orbit and pass direction in their file names, so the normal search → download
+→ process → composite workflow needs no extra data.
 
 These attributes are only looked up in the [SAR-MPC Sentinel-1 burst-ID
 map](https://sar-mpc.eu/sar-mpc-products/) for a burst that was **not** obtained
-from a search or a filename (e.g. a hand-constructed `Burst`). Download it
+from a search, such as a hand-constructed `Burst` or one found with
+`FileManager.find_slc_bursts()`, whose SLC file name records the relative orbit
+but not the pass direction. Download it
 (~500 MB per acquisition mode) once when you need it:
 
 ```python

@@ -49,6 +49,9 @@ class BurstFootprintMixin:
     an opt-in ~500 MB download (see ``s1bursts.burstmap.download_burst_map``);
     it is consulted only when a footprint value was not propagated.
 
+    The pass direction is not one of them: ``Burst`` resolves it the same way,
+    while a per-burst product holds it as a field, since its file name records it.
+
     Requires subclasses to declare ``burst_id: int`` and ``sub_swath: SubSwath``.
     """
 
@@ -68,7 +71,6 @@ class BurstFootprintMixin:
     # Authoritative overrides; None here so subclasses without their own field
     # (e.g. product.GeocodedBurst) inherit the LUT-fallback behaviour.
     _rel_orbit_number: int | None = None
-    _pass_direction: PassDirection | None = None
     _geometry: Polygon | MultiPolygon | None = None
 
     @property
@@ -114,27 +116,6 @@ class BurstFootprintMixin:
         if self._rel_orbit_number is not None:
             return self._rel_orbit_number
         return self._lut_lookup(create_s1_orbit_number_lut(mode=self.mode))
-
-    @property
-    def pass_direction(self) -> PassDirection:
-        """Pass direction, propagated from CDSE or looked up from the burst map.
-
-        Returns
-        -------
-        PassDirection
-            ``"Ascending"`` or ``"Descending"``.
-
-        Raises
-        ------
-        BurstMapUnavailableError
-            If the value was not propagated and the burst map has not been
-            downloaded (see ``s1bursts.burstmap.download_burst_map``).
-        BurstNotInMapError
-            If the burst is not found in the map.
-        """
-        if self._pass_direction is not None:
-            return self._pass_direction
-        return self._lut_lookup(create_s1_pass_direction_lut(mode=self.mode))
 
     @property
     def geometry(self) -> Polygon | MultiPolygon:
@@ -338,7 +319,6 @@ class Burst(BurstFootprintMixin):
     # Read-only here because the dataclass is frozen; the mixin declares them read-write.
     # pyrefly: ignore [bad-override]
     _rel_orbit_number: int | None = field(default=None, compare=False, hash=False, repr=False)
-    # pyrefly: ignore [bad-override]
     _pass_direction: PassDirection | None = field(
         default=None,
         compare=False,
@@ -376,6 +356,27 @@ class Burst(BurstFootprintMixin):
         return hash(
             (self.burst_id, self.sub_swath, self.polarization, self.date.normalize()),
         )
+
+    @property
+    def pass_direction(self) -> PassDirection:
+        """Pass direction, propagated from CDSE or looked up from the burst map.
+
+        Returns
+        -------
+        PassDirection
+            ``"Ascending"`` or ``"Descending"``.
+
+        Raises
+        ------
+        BurstMapUnavailableError
+            If the value was not propagated and the burst map has not been
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
+        BurstNotInMapError
+            If the burst is not found in the burst map.
+        """
+        if self._pass_direction is not None:
+            return self._pass_direction
+        return self._lut_lookup(create_s1_pass_direction_lut(mode=self.mode))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:

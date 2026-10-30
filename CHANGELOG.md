@@ -16,8 +16,6 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `from_burst()` and `from_burst_pair()`, now accepts strings and EPSG codes,
   such as `"EPSG:32632"` or `32632`. Previously only objects with a `to_wkt()`
   method worked.
-- Per-burst products created from a search result carry its pass direction, so
-  `compose_*_by_pass` no longer needs the burst-ID map for them.
 - Every `BurstProcessor.create_*` method accepts any iterable of bursts or
   burst pairs, such as a list, not only a `BurstCollection` or
   `BurstPairCollection`.
@@ -254,6 +252,54 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   # after
   processor.create_coherences(pairs, crs="EPSG:32632")  # or crs=utm_zone_of(pairs[0])
   ```
+- **Breaking:** the file names of RTC, GTC, coherence and interferogram
+  products record the pass direction, as `A` or `D` after the relative orbit,
+  and every product path moves. SLC and composite file names are unchanged.
+
+  ```text
+  before: S1_RTC_066_030346_IW1_VV_20220105_32N.tif
+  after:  S1_RTC_066A_030346_IW1_VV_20220105_32N.tif
+          S1_COH12_066A_030346_IW1_VV_20220105_20220117_32N.tif
+  ```
+
+  The products have a public `pass_direction` field, a required keyword
+  argument, which `from_burst()` and `from_burst_pair()` take from the burst
+  and `FileManager` reads back from the file name. So `compose_*_by_pass`
+  never needs the burst-ID map, also for products found on disk, and
+  `find_rtc_products()`, `find_gtc_products()`, `find_coherence_products()`
+  and `find_interferogram_products()` take a `pass_direction` filter. The
+  pass direction is part of a product's equality, and anything but
+  `"Ascending"` or `"Descending"` raises `ValueError`, in a product and in a
+  filter. A burst found with
+  `find_slc_bursts()` carries no pass direction, since SLC file names do not
+  record it, so creating its products now needs the burst-ID map.
+
+  ```python
+  # before
+  RTCProduct(30346, "IW1", crs, date, "VV")
+  # after
+  RTCProduct(30346, "IW1", crs, date, "VV", pass_direction="Ascending")
+  ```
+
+  Files written by earlier versions are not found under the new names; those
+  four `find_*` methods warn once per `FileManager` when `prod_dir` still
+  holds some. To rename an archive of IW products, look up each burst's pass
+  direction in the burst-ID map:
+
+  ```python
+  import re
+
+  from s1bursts import FileManager, download_burst_map
+  from s1bursts.burstmap import create_s1_pass_direction_lut
+
+  download_burst_map(mode="IW")
+  directions = create_s1_pass_direction_lut(mode="IW")
+  old_name = re.compile(r"(S1_(?:RTC|GTC|COH\d{2}|IFG\d{2}_CMPLX)_\d{3})(_(\d{6})_(IW\d)_.*)")
+  for path in FileManager("data").prod_dir.glob("S1_*.tif"):
+      if match := old_name.fullmatch(path.name):
+          letter = directions[(int(match[3]), match[4])][0]
+          path.rename(path.with_name(f"{match[1]}{letter}{match[2]}"))
+  ```
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.
@@ -361,8 +407,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `max_workers` is, instead of in the order the threads finished.
 - Products found with `FileManager.find_*_products()` keep the relative orbit
   recorded in their file name, so the LRW composites no longer need the
-  burst-ID map for them. The pass composites still need the map, because file
-  names do not record the pass direction.
+  burst-ID map for them.
 - Comparing or hashing per-burst products no longer looks up the relative orbit,
   so it works without the burst-ID map. The burst ID already identifies a burst,
   so the orbit adds nothing.
