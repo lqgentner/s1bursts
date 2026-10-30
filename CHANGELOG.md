@@ -270,6 +270,14 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   Therefore, two runs over the same products could differ in the composite
   and `QA-CQM`. The burst choice is now deterministic. Composites made with
   earlier versions remain valid and need not be regenerated.
+- A batch stops promptly. When Ctrl-C or an error ends
+  `BurstCatalog.download()` or a `BurstProcessor.create_*` method, the queued
+  items are cancelled and only the running ones finish, instead of the whole
+  queue running before the error surfaced. This includes the first failure
+  under `continue_on_error=False`, which `download()` previously raised only
+  after every queued burst had been attempted. The error carries a note such
+  as `Stopped with 12 of 3000 bursts finished; SLCs already downloaded are
+  kept, and a rerun without overwrite skips them.`
 - `BurstProcessor` summaries list their results in input order whatever
   `max_workers` is, instead of in the order the threads finished.
 - Products found with `FileManager.find_*_products()` keep the relative orbit
