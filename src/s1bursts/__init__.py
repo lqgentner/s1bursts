@@ -12,7 +12,7 @@ from importlib.metadata import version as _version
 
 from s1bursts.burst import utm_zone_of
 from s1bursts.burstmap import download_burst_map
-from s1bursts.database import BurstDatabase
+from s1bursts.catalog import BurstCatalog
 from s1bursts.dem import prepare_dem_for_snap
 from s1bursts.filemanager import FileManager
 from s1bursts.processor import BurstProcessor
@@ -33,7 +33,7 @@ __version__ = _version("s1bursts")
 
 __all__ = [
     "BackscatterConfig",
-    "BurstDatabase",
+    "BurstCatalog",
     "BurstProcessor",
     "CoherenceConfig",
     "FileManager",

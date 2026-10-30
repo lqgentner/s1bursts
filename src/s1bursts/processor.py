@@ -274,7 +274,7 @@ class BurstProcessor:
         start_time = time.time()
         results: list[OperationResult[T]] = []
         items = list(collection)
-        n_workers = self.config.resolved_max_workers
+        max_workers = self.config.resolved_max_workers
 
         progress = create_progress(show_progress=self.show_progress)
         task_id = progress.add_task(
@@ -282,7 +282,7 @@ class BurstProcessor:
             total=len(items),
         )
         with progress:
-            if n_workers <= 1:
+            if max_workers <= 1:
                 for item in items:
                     result = process_fn(item)
                     if isinstance(result, ErrorResult) and not self.continue_on_error:
@@ -290,7 +290,7 @@ class BurstProcessor:
                     results.append(result)
                     progress.advance(task_id)
             else:
-                with ThreadPoolExecutor(max_workers=n_workers) as executor:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = [executor.submit(process_fn, item) for item in items]
                     for future in as_completed(futures):
                         result = future.result()

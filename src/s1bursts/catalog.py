@@ -1,4 +1,4 @@
-"""Burst database interface for searching and downloading Sentinel-1 bursts."""
+"""Client for the CDSE burst catalog: search and download Sentinel-1 bursts."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from requests import HTTPError
 
 from s1bursts.burst import Burst, BurstCollection, BurstPair
 from s1bursts.cdse import MAX_PAGE_SIZE, CDSEAuth, CDSEBurstClient
+from s1bursts.config import get_settings
 from s1bursts.errors import (
     BurstDownloadError,
     BurstError,
@@ -40,7 +41,7 @@ def _cdse_id_present(cdse_id: str | None) -> TypeGuard[str]:
     return cdse_id is not None
 
 
-class BurstDatabase:
+class BurstCatalog:
     """Search and download Sentinel-1 bursts from the CDSE catalog.
 
     Provides search via the CDSE API and parallel download with progress
@@ -62,9 +63,9 @@ class BurstDatabase:
         the default, attempts every burst and records each failure in the
         summary, so one missing burst does not end a long download; ``False``
         raises at the first burst that fails on both endpoints. A burst this
-        database already found missing at the source is not requested again:
+        catalog already found missing at the source is not requested again:
         it is recorded as failed without raising, whichever the setting, and a
-        rerun on the same database reports it again rather than retrying it.
+        rerun on the same catalog reports it again rather than retrying it.
         Follow a run with ``OperationSummary.raise_on_failure()`` to fail once
         all bursts have been attempted.
     default_endpoint
@@ -103,6 +104,8 @@ class BurstDatabase:
         """
         with self._auth_lock:
             if self.client.auth is None:
+                # Outside the try: an invalid setting is not a missing credential.
+                get_settings()
                 try:
                     self.client.auth = CDSEAuth()
                 except ConfigurationError as e:
@@ -176,6 +179,9 @@ class BurstDatabase:
         ------
         TypeError
             If an item is neither a ``Burst`` nor a ``BurstPair``.
+        ConfigurationError
+            If an environment variable holds an invalid value. Missing
+            credentials of an endpoint are recorded per burst instead.
         """
         start_time = time.time()
         burst_list = self._unique_bursts(bursts)
@@ -363,8 +369,10 @@ class BurstDatabase:
         if burst.parent_product_name is None:
             msg = "S3 download requires `parent_product_name`, received None."
             return ErrorResult(source=burst, error=BurstDownloadError(msg))
-        # Outside the try: a missing burst map is not a credentials problem.
+        # Outside the try: a missing burst map or an invalid setting is not a
+        # credentials problem.
         save_path = self.file_manager.get_slc_path(burst)
+        get_settings()
         try:
             self.client.download_burst_from_s3(
                 save_path=save_path,

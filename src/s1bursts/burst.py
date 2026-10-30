@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field, fields
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload, override
 import warnings
 
@@ -190,6 +191,19 @@ def _scalar_or_none[T](value: T) -> T | None:
 # Pair baselines are rounded half-to-even to whole days, so below half a day
 # every pair found rounds back to the baseline it was searched for.
 _MAX_PAIR_DELTA = Timedelta(hours=12)
+
+
+def _as_duration(name: str, value: object, *, example: str) -> Timedelta:
+    """Return a duration argument as a Timedelta, rejecting numbers and strings."""
+    if not isinstance(value, timedelta | np.timedelta64):
+        msg = f"`{name}` must be a duration, received {value!r}. Pass e.g. `{name}={example}`."
+        raise TypeError(msg)
+    duration = Timedelta(value)
+    if pd.isna(duration):
+        msg = f"`{name}` must be a duration, received {value!r}."
+        raise ValueError(msg)
+    return duration
+
 
 # Public footprint keys mapped to the private fields they populate, so
 # ``Burst.from_dict`` accepts parsed-filename/response dicts.
@@ -982,8 +996,9 @@ class BurstCollection(_BaseBurstCollection[Burst]):
 
     def find_pairs(
         self,
-        baseline: Timedelta | int,
-        max_delta: Timedelta | int = 6,
+        *,
+        baseline: int | timedelta | np.timedelta64,
+        max_delta: timedelta | np.timedelta64 = Timedelta(hours=6),
     ) -> BurstPairCollection:
         """Find interferometric burst pairs with a specified temporal baseline.
 
@@ -991,12 +1006,13 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         ----------
         baseline
             Temporal baseline between primary and secondary bursts, a positive
-            whole number of days. If integer is provided, the assumed unit is days.
+            whole number of days: an integer number of days, or a
+            ``pandas.Timedelta``, ``datetime.timedelta`` or ``numpy.timedelta64``.
         max_delta
-            Maximum allowed deviation from baseline, less than 12 hours. If
-            integer is provided, the assumed unit is hours. Pairs are named by
-            their spacing rounded to whole days, so a smaller tolerance keeps
-            every pair at the requested baseline.
+            Maximum allowed deviation from baseline, less than 12 hours, as a
+            ``pandas.Timedelta``, ``datetime.timedelta`` or ``numpy.timedelta64``.
+            Pairs are named by their spacing rounded to whole days, so a smaller
+            tolerance keeps every pair at the requested baseline.
 
         Returns
         -------
@@ -1006,14 +1022,19 @@ class BurstCollection(_BaseBurstCollection[Burst]):
 
         Raises
         ------
+        TypeError
+            If ``baseline`` is neither an integer nor a duration, or
+            ``max_delta`` is not a duration.
         ValueError
             If ``baseline`` is not a positive whole number of days, or
             ``max_delta`` is negative or 12 hours or more.
         """
-        if not isinstance(baseline, Timedelta):
+        # numpy counts timedelta64 as an integer, but it carries its own unit.
+        if isinstance(baseline, int | np.integer) and not isinstance(baseline, np.timedelta64):
             baseline = Timedelta(baseline, unit="days")
-        if not isinstance(max_delta, Timedelta):
-            max_delta = Timedelta(max_delta, unit="hours")
+        else:
+            baseline = _as_duration("baseline", baseline, example="pd.Timedelta(days=12)")
+        max_delta = _as_duration("max_delta", max_delta, example="pd.Timedelta(hours=6)")
 
         self._validate_pair_search(baseline, max_delta)
         df_bursts = self.df.sort_values("date")

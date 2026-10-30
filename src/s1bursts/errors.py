@@ -11,7 +11,7 @@ can still fail on a batch that finished with failures:
   credentials, a missing PROJ grid or burst-ID map, a missing GPT executable).
   It affects every item, so it propagates and fails fast; per-item handlers
   do not catch it. The one exception is the credentials of a download
-  endpoint: ``BurstDatabase`` turns their absence into a per-burst
+  endpoint: ``BurstCatalog`` turns their absence into a per-burst
   ``BurstDownloadError``, so that the other endpoint is still tried.
 - ``OperationFailedError`` reports a *finished batch* with failed items. It is
   raised on request by ``OperationSummary.raise_on_failure()``, after every

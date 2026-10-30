@@ -420,7 +420,7 @@ def _write_provenance(sidecar: Path, record: dict[str, Any]) -> None:
 
 
 def prepare_dem_for_snap(
-    dem: Path,
+    dem: str | Path,
     *,
     source_crs: str | None = None,
     download_missing_grids: bool = False,
@@ -490,6 +490,7 @@ def prepare_dem_for_snap(
        ESA STEP forum.
        https://forum.step.esa.int/t/copernicus-dem-built-in-path-applies-egm96-while-the-data-is-egm2008/46041
     """
+    dem = Path(dem)
     if not dem.exists():
         msg = f"DEM not found: '{dem}'"
         raise FileNotFoundError(msg)

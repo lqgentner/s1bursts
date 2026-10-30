@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -391,6 +392,21 @@ class TestBurstCollection:
         assert len(pairs) == 1
         assert pairs[0].baseline_days == 24
 
+    @pytest.mark.parametrize(
+        "baseline",
+        [dt.timedelta(days=12), np.timedelta64(12, "D")],
+    )
+    def test_find_pairs_accepts_any_duration_as_baseline(
+        self,
+        baseline: dt.timedelta | np.timedelta64,
+    ) -> None:
+        """Previously a dt.timedelta baseline raised pandas' unit UserWarning."""
+        collection = make_collection(["2022-01-01", "2022-01-13", "2022-01-25"])
+
+        pairs = collection.find_pairs(baseline=baseline)
+
+        assert len(pairs) == 2
+
     def test_find_pairs_does_not_mix_polarizations(self) -> None:
         vv = make_collection(["2022-01-01"], polarization="VV")
         vh = make_collection(["2022-01-13"], polarization="VH")
@@ -476,7 +492,7 @@ class TestPublicColumns:
             [make_located_burst("2022-01-01"), make_located_burst("2022-01-13")],
         )
 
-        pairs = bursts.find_pairs(12)
+        pairs = bursts.find_pairs(baseline=12)
 
         assert pairs.df.pass_direction.tolist() == ["Ascending"]
         assert not [c for c in pairs.df.columns if c.startswith("_")]
@@ -571,7 +587,7 @@ class TestIntersecting:
             ],
         )
 
-        selected = bursts.find_pairs(12).intersecting(EAST)
+        selected = bursts.find_pairs(baseline=12).intersecting(EAST)
 
         assert isinstance(selected, BurstPairCollection)
         assert [p.burst_id for p in selected] == [BURST_ID + 1]
@@ -916,7 +932,7 @@ class TestFilter:
             ],
         )
 
-        selected = bursts.find_pairs(12).filter(rel_orbit_number=139)
+        selected = bursts.find_pairs(baseline=12).filter(rel_orbit_number=139)
 
         assert isinstance(selected, BurstPairCollection)
         assert [p.sub_swath for p in selected] == ["IW2"]
@@ -928,7 +944,9 @@ class TestStartingWithin:
             [make_located_burst(d) for d in ("2022-01-19", "2022-01-31", "2022-02-12")],
         )
 
-        selected = bursts.find_pairs(12).starting_within(TimeRange("2022-01-01", "2022-01-31"))
+        selected = bursts.find_pairs(baseline=12).starting_within(
+            TimeRange("2022-01-01", "2022-01-31")
+        )
 
         assert isinstance(selected, BurstPairCollection)
         # The pair starting on the last day is kept though it ends after the window.
@@ -953,32 +971,38 @@ class TestFindPairsValidation:
     @pytest.mark.parametrize("baseline", [0, -6])
     def test_rejects_non_positive_baseline(self, baseline: int) -> None:
         with pytest.raises(ValueError, match="`baseline` must be a positive duration"):
-            self._collection().find_pairs(baseline)
+            self._collection().find_pairs(baseline=baseline)
 
     def test_rejects_negative_max_delta(self) -> None:
         with pytest.raises(ValueError, match="`max_delta` must not be negative"):
-            self._collection().find_pairs(6, max_delta=-1)
+            self._collection().find_pairs(baseline=6, max_delta=Timedelta(hours=-1))
 
     def test_returns_an_empty_collection_when_nothing_matches(self) -> None:
         """Documented contract: no match yields an empty collection, not an exception."""
-        pairs = self._collection().find_pairs(baseline=99, max_delta=1)
+        pairs = self._collection().find_pairs(baseline=99, max_delta=Timedelta(hours=1))
 
         assert len(pairs) == 0
 
     def test_accepts_a_zero_max_delta(self) -> None:
         """An exact baseline is a legitimate request, so zero tolerance must pass."""
-        pairs = self._collection().find_pairs(baseline=6, max_delta=0)
+        pairs = self._collection().find_pairs(baseline=6, max_delta=Timedelta(hours=0))
 
         assert len(pairs) == 2
 
     @pytest.mark.parametrize(
         "max_delta",
-        [12, Timedelta(hours=12), Timedelta(hours=12, microseconds=1), 13, 24, 48],
+        [
+            Timedelta(hours=12),
+            Timedelta(hours=12, microseconds=1),
+            Timedelta(hours=13),
+            Timedelta(days=1),
+            Timedelta(days=2),
+        ],
     )
-    def test_rejects_max_delta_of_half_a_day_or_more(self, max_delta: Timedelta | int) -> None:
+    def test_rejects_max_delta_of_half_a_day_or_more(self, max_delta: Timedelta) -> None:
         """From half a day on, an accepted pair can round to a neighbouring whole day."""
         with pytest.raises(ValueError, match="`max_delta` must be less than 12 hours"):
-            self._collection().find_pairs(6, max_delta=max_delta)
+            self._collection().find_pairs(baseline=6, max_delta=max_delta)
 
     def test_rejects_half_a_day_for_an_odd_baseline(self) -> None:
         """The bound is ``>=`` because half-to-even rounding breaks odd baselines at 12 h.
@@ -991,10 +1015,10 @@ class TestFindPairsValidation:
         assert Timedelta(days=13, hours=12).round("D") == Timedelta(days=14)
 
         with pytest.raises(ValueError, match="`max_delta` must be less than 12 hours"):
-            self._collection().find_pairs(13, max_delta=12)
+            self._collection().find_pairs(baseline=13, max_delta=Timedelta(hours=12))
 
     def test_accepts_max_delta_just_below_half_a_day(self) -> None:
-        pairs = self._collection().find_pairs(6, max_delta=Timedelta(hours=11.9))
+        pairs = self._collection().find_pairs(baseline=6, max_delta=Timedelta(hours=11.9))
 
         assert len(pairs) == 2
 
@@ -1005,25 +1029,75 @@ class TestFindPairsValidation:
     def test_rejects_a_baseline_that_is_not_whole_days(self, baseline: Timedelta) -> None:
         """Products are named by whole days, so a fractional baseline has no name."""
         with pytest.raises(ValueError, match="`baseline` must be a whole number of days"):
-            self._collection().find_pairs(baseline)
+            self._collection().find_pairs(baseline=baseline)
+
+    def test_rejects_positional_arguments(self) -> None:
+        """Both arguments are keyword-only, so a bare ``find_pairs(12, 6)`` cannot be misread."""
+        with pytest.raises(TypeError):
+            # The positional call is the misuse under test.
+            self._collection().find_pairs(6)  # pyrefly: ignore[unexpected-positional-argument]
+
+    @pytest.mark.parametrize("baseline", [12.0, "12 days"])
+    def test_rejects_a_baseline_that_is_neither_an_integer_nor_a_duration(
+        self,
+        baseline: object,
+    ) -> None:
+        with pytest.raises(TypeError, match=r"baseline=pd\.Timedelta\(days=12\)"):
+            # The wrong type is the misuse under test.
+            self._collection().find_pairs(baseline=baseline)  # pyrefly: ignore[bad-argument-type]
+
+    @pytest.mark.parametrize("argument", ["baseline", "max_delta"])
+    def test_rejects_not_a_time(self, argument: str) -> None:
+        durations: dict[str, Timedelta | np.timedelta64] = {
+            "baseline": Timedelta(days=6),
+            "max_delta": Timedelta(hours=6),
+        }
+        durations[argument] = np.timedelta64("NaT", "ns")
+
+        with pytest.raises(ValueError, match=f"`{argument}` must be a duration"):
+            self._collection().find_pairs(**durations)
+
+    @pytest.mark.parametrize(
+        "max_delta",
+        [Timedelta(hours=1), dt.timedelta(hours=1), np.timedelta64(1, "h")],
+    )
+    def test_accepts_any_duration_as_max_delta(
+        self,
+        max_delta: dt.timedelta | np.timedelta64,
+    ) -> None:
+        """A pair two hours off the baseline is outside a one-hour tolerance of any type."""
+        collection = make_collection(["2022-01-01 00:00", "2022-01-13 02:00"])
+
+        assert len(collection.find_pairs(baseline=12, max_delta=max_delta)) == 0
+        assert len(collection.find_pairs(baseline=12)) == 1
+
+    @pytest.mark.parametrize("max_delta", [6, 6.0, "6h"])
+    def test_rejects_a_max_delta_that_is_not_a_timedelta(self, max_delta: object) -> None:
+        """Previously an integer was read as hours; now the unit must be explicit."""
+        with pytest.raises(TypeError, match=r"max_delta=pd\.Timedelta\(hours=6\)"):
+            self._collection().find_pairs(
+                baseline=6,
+                # The wrong type is the misuse under test.
+                max_delta=max_delta,  # pyrefly: ignore[bad-argument-type]
+            )
 
     def test_default_max_delta_is_six_hours(self) -> None:
         """A pair 7 h off the baseline is outside the default tolerance but not a wider one."""
         collection = make_collection(["2022-01-01 00:00", "2022-01-13 07:00"])
 
-        assert len(collection.find_pairs(12)) == 0
-        assert len(collection.find_pairs(12, max_delta=8)) == 1
+        assert len(collection.find_pairs(baseline=12)) == 0
+        assert len(collection.find_pairs(baseline=12, max_delta=Timedelta(hours=8))) == 1
 
     def test_default_max_delta_includes_a_pair_five_hours_off(self) -> None:
         collection = make_collection(["2022-01-01 00:00", "2022-01-13 05:00"])
 
-        assert len(collection.find_pairs(12)) == 1
+        assert len(collection.find_pairs(baseline=12)) == 1
 
     def test_default_max_delta_includes_a_pair_exactly_six_hours_off(self) -> None:
         """The default tolerance is inclusive at its upper bound."""
         collection = make_collection(["2022-01-01 00:00", "2022-01-13 06:00"])
 
-        assert len(collection.find_pairs(12)) == 1
+        assert len(collection.find_pairs(baseline=12)) == 1
 
 
 # S1A on a 12-day repeat with jitter of seconds, one burst two hours off its
@@ -1055,11 +1129,11 @@ class TestFindPairsBaselineNaming:
         [
             None,
             Timedelta(seconds=10),
-            1,
-            3,
-            6,
-            8,
-            11,
+            Timedelta(hours=1),
+            Timedelta(hours=3),
+            Timedelta(hours=6),
+            Timedelta(hours=8),
+            Timedelta(hours=11),
             Timedelta(hours=11, minutes=59, seconds=59),
         ],
     )
@@ -1067,14 +1141,14 @@ class TestFindPairsBaselineNaming:
     def test_every_pair_is_named_by_the_requested_baseline(
         self,
         baseline: int,
-        max_delta: Timedelta | int | None,
+        max_delta: Timedelta | None,
     ) -> None:
         collection = make_collection(JITTERED_DATES)
 
         pairs = (
-            collection.find_pairs(baseline)
+            collection.find_pairs(baseline=baseline)
             if max_delta is None
-            else collection.find_pairs(baseline, max_delta=max_delta)
+            else collection.find_pairs(baseline=baseline, max_delta=max_delta)
         )
 
         assert len(pairs) > 0
@@ -1087,7 +1161,9 @@ class TestFindPairsBaselineNaming:
         """A pair 11 h 30 m off the baseline is still accepted and named by it."""
         collection = make_collection(JITTERED_DATES)
 
-        pairs = collection.find_pairs(12, max_delta=Timedelta(hours=11, minutes=59, seconds=59))
+        pairs = collection.find_pairs(
+            baseline=12, max_delta=Timedelta(hours=11, minutes=59, seconds=59)
+        )
 
         found = [(pair.primary.date, pair.secondary.date) for pair in pairs]
         assert EDGE_PAIR in found
@@ -1110,7 +1186,7 @@ class TestFindPairsBaselineNaming:
         ]
         collection = make_collection(dates)
 
-        pairs = collection.find_pairs(12, max_delta=6)
+        pairs = collection.find_pairs(baseline=12, max_delta=Timedelta(hours=6))
 
         found = [(pair.primary.date, pair.secondary.date) for pair in pairs]
         # Lag 3, reached only after lag 2, whose spacings are 12 d 1 h and 12 d 3 h.

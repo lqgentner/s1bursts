@@ -147,8 +147,8 @@ class OperationSummary[T]:
         Runs after the batch, when every product that could be made has been
         written, and raises one error listing all failures. Running the batch
         again skips the existing products and retries only the failed items,
-        except bursts a ``BurstDatabase`` already found missing at the source,
-        which the same database reports as failed again without a retry.
+        except bursts a ``BurstCatalog`` already found missing at the source,
+        which the same catalog reports as failed again without a retry.
         Returning the summary lets the check sit inside a call chain, as in
         ``processor.create_coherences(pairs, crs=crs).raise_on_failure().products``.
 

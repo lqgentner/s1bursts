@@ -34,7 +34,7 @@ import pyproj
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from s1bursts import (
-    BurstDatabase,
+    BurstCatalog,
     BurstProcessor,
     FileManager,
     SearchQuery,
@@ -184,8 +184,8 @@ def process(scene: Scene, acquisition: str, polarization: Polarization, work: Pa
         return product
 
     manager = FileManager(base_dir=work / "s1bursts")
-    database = BurstDatabase(file_manager=manager)
-    bursts = database.search(
+    catalog = BurstCatalog(file_manager=manager)
+    bursts = catalog.search(
         SearchQuery(
             time_range=scene.search_window(acquisition),
             burst_id=scene.burst_id,
@@ -204,7 +204,7 @@ def process(scene: Scene, acquisition: str, polarization: Polarization, work: Pa
         )
         raise RuntimeError(msg)
 
-    database.download(bursts, endpoint="odata").raise_on_failure()
+    catalog.download(bursts, endpoint="odata").raise_on_failure()
 
     processor = BurstProcessor(
         manager,

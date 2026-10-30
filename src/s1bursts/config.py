@@ -12,8 +12,10 @@ import os
 from pathlib import Path
 import tempfile
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from s1bursts.errors import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -128,5 +130,29 @@ def get_settings() -> Settings:
     -------
     Settings
         Freshly resolved settings.
+
+    Raises
+    ------
+    ConfigurationError
+        If an environment variable holds an invalid value, such as
+        ``SNAP_MAX_WORKERS=0``.
     """
-    return Settings()
+    try:
+        return Settings()
+    except ValidationError as e:
+        raise ConfigurationError(_describe_invalid_settings(e)) from e
+
+
+def _describe_invalid_settings(error: ValidationError) -> str:
+    """Name each environment variable a settings validation error rejects."""
+    prefixes = {
+        model.__name__: model.model_config.get("env_prefix", "")
+        for model in (CDSES3Settings, CDSESettings, SNAPSettings)
+    }
+    prefix = prefixes.get(error.title, "")
+    # The values are left out, so a credential never reaches a log.
+    problems = [
+        f"{prefix}{'_'.join(str(part) for part in detail['loc']).upper()}: {detail['msg']}"
+        for detail in error.errors()
+    ]
+    return "Invalid environment variable(s): " + "; ".join(problems) + "."
