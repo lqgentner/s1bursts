@@ -122,6 +122,18 @@ class TestPrepareForSnap:
             assert dst.transform.c == pytest.approx(7.0)
             assert dst.transform.f == pytest.approx(47.0)
 
+    def test_accepts_a_string_path(
+        self,
+        make_dem: Callable[..., Path],
+        tmp_path: Path,
+    ) -> None:
+        dem = make_dem()
+
+        out = prepare_dem_for_snap(str(dem), cache_dir=tmp_path / "cache")
+
+        assert out == prepare_dem_for_snap(dem, cache_dir=tmp_path / "cache")
+        assert out.exists()
+
     def test_preserves_grid_and_elevations(
         self,
         make_dem: Callable[..., Path],

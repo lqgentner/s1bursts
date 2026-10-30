@@ -237,8 +237,10 @@ def external_dem_needs_half_pixel_shift(bin_dir: Path | None = None) -> bool:
     ConfigurationError
         If ``bin_dir`` is given but contains no ``gpt`` executable.
     """
+    # Outside the try: an invalid setting is not a missing installation.
+    snap_settings = get_settings().snap
     try:
-        gpt_path = _resolve_gpt_path(bin_dir, get_settings().snap)
+        gpt_path = _resolve_gpt_path(bin_dir, snap_settings)
     except ConfigurationError:
         if bin_dir is not None:
             raise
@@ -339,10 +341,10 @@ class SNAPConfig:
         Total RAM budget across all GPT processes in GB; must be positive and
         large enough to give every worker a 512 MB heap on top of 3 GB of JVM
         and OS overhead. Defaults to ``SNAP_MAX_RAM_GB`` (or 8).
-    gpt_threads_per_job
+    threads_per_job
         Threads per GPT process (``-q``); at least 1. Defaults to
         ``SNAP_THREADS_PER_JOB`` or ``cpu_count // max_workers``.
-    gpt_cache_ratio
+    cache_ratio
         Fraction of the per-process Java heap used for the GPT tile cache
         (``-c``); greater than 0 and at most 1. Defaults to
         ``SNAP_CACHE_RATIO`` (or 0.7).
@@ -352,17 +354,21 @@ class SNAPConfig:
 
     Raises
     ------
+    ValueError
+        If a resource argument is out of range, or if the RAM budget cannot
+        cover the workers and ``max_ram_gb`` or ``max_workers`` was passed.
     ConfigurationError
-        If a resource value is out of range, if the RAM budget cannot cover the
-        requested workers, or if GPT or the auxdata path cannot be resolved.
+        If a ``SNAP_*`` environment variable is invalid, if the RAM budget
+        cannot cover the workers and both values come from the environment,
+        or if GPT or the auxdata path cannot be resolved.
     """
 
     bin: Path | None = None
     rasterio_profile: dict[str, Any] | None = None
     max_workers: int | None = None
     max_ram_gb: float | None = None
-    gpt_threads_per_job: int | None = None
-    gpt_cache_ratio: float | None = None
+    threads_per_job: int | None = None
+    cache_ratio: float | None = None
     auxdata_path: Path | None = None
 
     # Resolved resource values — set by __post_init__, not by users directly
@@ -378,6 +384,8 @@ class SNAPConfig:
         self.rasterio_profile = build_rasterio_profile(base_profile, self.rasterio_profile)
         # Each GPT run stages an uncompressed GeoTIFF through tempfile.
         warn_if_tmpdir_unusable()
+        # Arguments first, so an invalid one is reported as such on a host without SNAP.
+        self._validate_resources()
         snap_settings = get_settings().snap
         self._resolve_paths(snap_settings)
         self._resolve_resources(snap_settings)
@@ -428,26 +436,24 @@ class SNAPConfig:
         """
         for name, value, minimum in (
             ("max_workers", self.max_workers, 1),
-            ("gpt_threads_per_job", self.gpt_threads_per_job, 1),
+            ("threads_per_job", self.threads_per_job, 1),
         ):
             if value is not None and value < minimum:
                 msg = f"`{name}` must be at least {minimum}, received {value}."
-                raise ConfigurationError(msg)
+                raise ValueError(msg)
 
         if self.max_ram_gb is not None and self.max_ram_gb <= 0:
             msg = f"`max_ram_gb` must be positive, received {self.max_ram_gb}."
-            raise ConfigurationError(msg)
+            raise ValueError(msg)
 
-        if self.gpt_cache_ratio is not None and not 0 < self.gpt_cache_ratio <= 1:
+        if self.cache_ratio is not None and not 0 < self.cache_ratio <= 1:
             msg = (
-                "`gpt_cache_ratio` must be greater than 0 and at most 1, "
-                f"received {self.gpt_cache_ratio}."
+                f"`cache_ratio` must be greater than 0 and at most 1, received {self.cache_ratio}."
             )
-            raise ConfigurationError(msg)
+            raise ValueError(msg)
 
     def _resolve_resources(self, snap_settings: SNAPSettings) -> None:
         """Resolve GPT resource parameters from explicit values, settings, and defaults."""
-        self._validate_resources()
         n_cpus = os.cpu_count() or 4
 
         # max_workers: explicit > settings > 1
@@ -472,14 +478,21 @@ class SNAPConfig:
                 f"A RAM budget of {ram_gb:g} GB across {self.resolved_max_workers} worker(s) "
                 f"leaves {self.resolved_xmx_mb} MB of heap per worker, below the "
                 f"{_MIN_HEAP_MB} MB SNAP needs (after {_JVM_OVERHEAD_MB} MB of JVM and OS "
-                f"overhead). Raise `max_ram_gb` to at least {required_gb:g} "
-                f"or lower `max_workers`."
+                f"overhead). "
+            )
+            # Blame the call if it supplied either value, the environment otherwise.
+            if self.max_ram_gb is not None or self.max_workers is not None:
+                msg += f"Raise `max_ram_gb` to at least {required_gb:g} or lower `max_workers`."
+                raise ValueError(msg)
+            msg += (
+                f"Raise `SNAP_MAX_RAM_GB` to at least {required_gb:g} or lower "
+                "`SNAP_MAX_WORKERS`, or pass `max_ram_gb` or `max_workers`."
             )
             raise ConfigurationError(msg)
 
         # threads per job (-q)
         self.resolved_threads_per_job = (
-            self.gpt_threads_per_job
+            self.threads_per_job
             or snap_settings.threads_per_job
             or max(1, n_cpus // self.resolved_max_workers)
         )
@@ -487,7 +500,7 @@ class SNAPConfig:
         # cache per job (-c): ratio of the per-job Java heap (default: 70%).
         # Must be computed from the heap, not the raw RAM share — otherwise
         # small budgets produce a tile cache larger than -Xmx.
-        cache_ratio = self.gpt_cache_ratio or snap_settings.cache_ratio
+        cache_ratio = self.cache_ratio or snap_settings.cache_ratio
         self.resolved_cache_mb = int(self.resolved_xmx_mb * cache_ratio)
 
 

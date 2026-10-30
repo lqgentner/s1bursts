@@ -79,7 +79,7 @@ def _make_weighter() -> ResolutionWeighter:
     # `_fm` is unused by the methods under test.
     # pyrefly: ignore [bad-assignment]
     w._fm = None
-    w._n_workers = 1
+    w._max_workers = 1
     return w
 
 
@@ -879,7 +879,7 @@ class TestComposeReturns:
     @staticmethod
     def _setup(tmp_path: Path) -> tuple[FileManager, ResolutionWeighter, SimpleNamespace]:
         fm = FileManager(tmp_path)
-        weighter = ResolutionWeighter(fm, n_workers=1)
+        weighter = ResolutionWeighter(fm, max_workers=1)
         geobox = SimpleNamespace(
             mgrs_code="32TMS03",
             crs=CRS.from_epsg(32632),
@@ -1055,7 +1055,7 @@ class TestSaveStatisticsAndChecksum:
 
     def test_checksum_true_records_a_multihash_matching_the_file(self, tmp_path: Path) -> None:
         fm = FileManager(tmp_path)
-        weighter = ResolutionWeighter(fm, n_workers=1, checksum=True)
+        weighter = ResolutionWeighter(fm, max_workers=1, checksum=True)
         geobox = SimpleNamespace(
             mgrs_code="32TMS03",
             crs=CRS.from_epsg(32632),
@@ -1180,7 +1180,7 @@ def scene(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Scene:
         lambda mode="IW": _DIRECTION_LUT,  # noqa: ARG005
     )
     manager = FileManager(base_dir=tmp_path)
-    return _Scene(ResolutionWeighter(manager, n_workers=2), manager, _geobox())
+    return _Scene(ResolutionWeighter(manager, max_workers=2), manager, _geobox())
 
 
 def _full(value: float) -> NDArray[np.float32]:
@@ -1427,7 +1427,7 @@ class TestEmptyObservations:
         _write_raster(scene.manager.get_product_path(empty), [_full(np.nan), _full(np.nan)])
         _write_raster(scene.manager.get_product_path(valid), [_full(2.0), _full(4.0)])
         alone = _Scene(
-            ResolutionWeighter(FileManager(base_dir=tmp_path / "alone"), n_workers=2),
+            ResolutionWeighter(FileManager(base_dir=tmp_path / "alone"), max_workers=2),
             FileManager(base_dir=tmp_path / "alone"),
             scene.geobox,
         )

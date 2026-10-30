@@ -170,6 +170,11 @@ ignore = [
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
 
+[tool.ruff.lint.flake8-bugbear]
+# Timedelta is immutable, so a default such as `max_delta=Timedelta(hours=6)`
+# is shared safely and renders readably in the API reference.
+extend-immutable-calls = ["pandas.Timedelta"]
+
 [tool.ruff.lint.flake8-annotations]
 suppress-dummy-args = false
 

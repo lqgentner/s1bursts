@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 from pyproj.exceptions import CRSError
 import pytest
 
-from s1bursts.errors import ConfigurationError, SnapProcessingError
+from s1bursts.errors import SnapProcessingError
 from s1bursts.processor import BurstProcessor
 from s1bursts.snap_client import SNAPConfig
 from s1bursts.snap_graph import CoherenceConfig, GTCConfig, RTCConfig
@@ -95,7 +95,7 @@ class TestSNAPConfig:
         gpt.touch()
         gpt.chmod(0o755)
 
-        with pytest.raises(ConfigurationError, match="Raise `max_ram_gb`"):
+        with pytest.raises(ValueError, match="Raise `max_ram_gb`"):
             SNAPConfig(bin=tmp_path, max_ram_gb=1)
 
     def test_profile_defaults_merged(self, config: SNAPConfig) -> None:

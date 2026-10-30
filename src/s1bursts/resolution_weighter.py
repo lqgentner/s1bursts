@@ -110,7 +110,7 @@ class ResolutionWeighter:
     ----------
     file_manager
         Used to resolve input file paths and output product paths.
-    n_workers
+    max_workers
         Number of threads for parallel file I/O during product loading.
     rasterio_profile
         GeoTIFF profile applied to every product, or profiles keyed by product
@@ -144,11 +144,11 @@ class ResolutionWeighter:
         file_manager: FileManager,
         *,
         rasterio_profile: dict[str, Any] | None = None,
-        n_workers: int = 8,
+        max_workers: int = 8,
         checksum: bool = False,
     ) -> None:
         self._fm = file_manager
-        self._n_workers = n_workers
+        self._max_workers = max_workers
         self._profiles = _split_profiles(rasterio_profile)
         self._checksum = checksum
         self.checksums: dict[str, str] = {}
@@ -1112,7 +1112,7 @@ class ResolutionWeighter:
                 data = src.read(band, window=win, boundless=True, fill_value=np.nan)
             return prod, data.astype(np.float32)
 
-        with ThreadPoolExecutor(max_workers=self._n_workers) as executor:
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             return list(executor.map(_load_one, products))
 
     def _profile_for(self, product: CompositeProduct | QAProduct) -> dict[str, Any]:
@@ -1202,7 +1202,7 @@ class ResolutionWeighter:
 
         primary_count = len(products)
         all_products = [*products, *additional_dem_products]
-        with ThreadPoolExecutor(max_workers=self._n_workers) as executor:
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             all_input_tags = list(executor.map(read, all_products))
         per_input = all_input_tags[:primary_count]
         if not per_input:

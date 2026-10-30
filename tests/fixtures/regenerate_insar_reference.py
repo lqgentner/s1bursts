@@ -47,7 +47,7 @@ import rasterio.crs
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from s1bursts import (
-    BurstDatabase,
+    BurstCatalog,
     BurstProcessor,
     CoherenceConfig,
     FileManager,
@@ -337,10 +337,10 @@ def process(scene: Scene, work: Path) -> Path:
         return product
 
     manager = FileManager(base_dir=work / "s1bursts")
-    database = BurstDatabase(file_manager=manager)
+    catalog = BurstCatalog(file_manager=manager)
 
     def search(acquisition: str) -> Any:
-        found = database.search(
+        found = catalog.search(
             SearchQuery(
                 time_range=scene.search_window(acquisition),
                 burst_id=scene.burst_id,
@@ -359,7 +359,7 @@ def process(scene: Scene, work: Path) -> Path:
         return found
 
     reference, secondary = search(scene.reference_date), search(scene.secondary_date)
-    database.download(reference + secondary, endpoint="odata").raise_on_failure()
+    catalog.download(reference + secondary, endpoint="odata").raise_on_failure()
 
     processor = BurstProcessor(
         manager,

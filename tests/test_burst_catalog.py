@@ -1,9 +1,9 @@
-"""Tests for BurstDatabase (search filters, download dispatch, negative cache)."""
+"""Tests for BurstCatalog (search filters, download dispatch, negative cache)."""
 
 from __future__ import annotations
 
 from collections import Counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from unittest.mock import MagicMock, patch
 
 from freezebase.errors import DownloadError
@@ -13,8 +13,8 @@ from requests import HTTPError
 from shapely.geometry import box
 
 from s1bursts.burst import Burst, BurstCollection, BurstPair
+from s1bursts.catalog import BurstCatalog
 from s1bursts.cdse import MAX_PAGE_SIZE, CDSEResponse
-from s1bursts.database import BurstDatabase
 from s1bursts.errors import (
     BurstDownloadError,
     BurstMapUnavailableError,
@@ -31,10 +31,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
 
-def _make_database() -> BurstDatabase:
+def _make_catalog() -> BurstCatalog:
     file_manager = MagicMock()
     file_manager.get_slc_path.return_value.exists.return_value = False
-    return BurstDatabase(file_manager=file_manager, auth=MagicMock())
+    return BurstCatalog(file_manager=file_manager, auth=MagicMock())
 
 
 def _make_burst(date: str = "2016-07-24") -> Burst:
@@ -58,7 +58,7 @@ class TestQueryToFilters:
             rel_orbit_number=15,
         )
 
-        filters = BurstDatabase._convert_query_to_filters(query)
+        filters = BurstCatalog._convert_query_to_filters(query)
 
         assert "BurstId eq 30346" in filters
         assert "PolarisationChannels eq 'VV'" in filters
@@ -70,12 +70,12 @@ class TestQueryToFilters:
         assert "RelativeOrbitNumber eq 15" in filters
 
     def test_empty_query_produces_no_filters(self) -> None:
-        assert BurstDatabase._convert_query_to_filters(SearchQuery()) == []
+        assert BurstCatalog._convert_query_to_filters(SearchQuery()) == []
 
     def test_time_range_window_filter_keeps_its_last_day(self) -> None:
         query = SearchQuery(time_range=TimeRange("2022-01-01", "2022-01-31"))
 
-        filters = BurstDatabase._convert_query_to_filters(query)
+        filters = BurstCatalog._convert_query_to_filters(query)
 
         assert filters == [
             (
@@ -87,49 +87,49 @@ class TestQueryToFilters:
     def test_intersects_filter(self) -> None:
         query = SearchQuery(intersects=box(7, 46, 8, 47))
 
-        (filter_,) = BurstDatabase._convert_query_to_filters(query)
+        (filter_,) = BurstCatalog._convert_query_to_filters(query)
 
         assert filter_.startswith("OData.CSC.Intersects(area=geography'SRID=4326;POLYGON")
 
 
 class TestDownloadDispatch:
     def test_rejects_an_item_that_is_not_a_burst(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
 
         with pytest.raises(TypeError, match="received an item of type 'str'"):
             # The wrong type is what is under test.
             # pyrefly: ignore [bad-argument-type]
-            db.download(["not-a-burst"])
+            catalog.download(["not-a-burst"])
 
     def test_rejects_a_non_iterable(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
 
         with pytest.raises(TypeError, match="iterable of them, received 'int'"):
             # The wrong type is what is under test.
             # pyrefly: ignore [bad-argument-type]
-            db.download(30346)
+            catalog.download(30346)
 
     @pytest.mark.parametrize("container", [list, tuple, iter, BurstCollection.from_bursts])
     def test_accepts_any_iterable_of_bursts(
         self,
         container: Callable[[list[Burst]], Iterable[Burst]],
     ) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         bursts = [_make_burst(), _make_burst(date="2016-08-05")]
 
         with patch.object(
-            db,
+            catalog,
             "_download_single_burst",
             side_effect=lambda b, _e: OkResult(source=b, result=b),
         ) as mock_download:
-            summary = db.download(container(bursts))
+            summary = catalog.download(container(bursts))
 
         # Downloads run in a thread pool, so the call order is not fixed.
         assert Counter(c.args[0] for c in mock_download.call_args_list) == Counter(bursts)
         assert summary.n_processed == 2
 
     def test_downloads_a_burst_shared_by_two_pairs_once(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         first, second, third = (
             _make_burst(date=d) for d in ("2016-07-24", "2016-08-05", "2016-08-17")
         )
@@ -141,54 +141,54 @@ class TestDownloadDispatch:
         pairs = [BurstPair(first, second), BurstPair(second_again, third)]
 
         with patch.object(
-            db,
+            catalog,
             "_download_single_burst",
             side_effect=lambda b, _e: OkResult(source=b, result=b),
         ) as mock_download:
-            summary = db.download(pair for pair in pairs)
+            summary = catalog.download(pair for pair in pairs)
 
         downloaded = Counter(c.args[0] for c in mock_download.call_args_list)
         assert downloaded == Counter([first, second, third])
         assert summary.n_total == 3
 
     def test_accepts_a_mixed_list(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         pair = BurstPair(_make_burst(), _make_burst(date="2016-08-05"))
         single = _make_burst(date="2016-08-17")
 
         with patch.object(
-            db,
+            catalog,
             "_download_single_burst",
             side_effect=lambda b, _e: OkResult(source=b, result=b),
         ):
-            summary = db.download([pair, single])
+            summary = catalog.download([pair, single])
 
         assert summary.n_processed == 3
 
     def test_rejects_unknown_endpoint(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
 
         with pytest.raises(ValueError, match="must be 'odata' or 's3'"):
             # pyrefly: ignore [bad-argument-type]
-            db._download_single_burst(_make_burst(), "ftp")
+            catalog._download_single_burst(_make_burst(), "ftp")
 
     def test_skips_existing_files_without_auth(self) -> None:
         file_manager = MagicMock()
         file_manager.get_slc_path.return_value.exists.return_value = True
-        db = BurstDatabase(file_manager=file_manager)
+        catalog = BurstCatalog(file_manager=file_manager)
 
-        summary = db.download(_make_burst())
+        summary = catalog.download(_make_burst())
 
         assert summary.n_skipped == 1
         assert summary.n_processed == 0
         # No download happened, so no CDSEAuth may have been created
-        assert db.client.auth is None
+        assert catalog.client.auth is None
 
     def test_creates_auth_lazily_on_odata_download(self) -> None:
         """OData downloads build a CDSEAuth on first use, guarded to run once."""
-        db = _make_database()
-        db.client = MagicMock()
-        db.client.auth = None
+        catalog = _make_catalog()
+        catalog.client = MagicMock()
+        catalog.client.auth = None
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -197,8 +197,8 @@ class TestDownloadDispatch:
             cdse_id="cdse-id",
         )
 
-        with patch("s1bursts.database.CDSEAuth") as mock_auth_cls:
-            result = db._download_burst_odata(burst)
+        with patch("s1bursts.catalog.CDSEAuth") as mock_auth_cls:
+            result = catalog._download_burst_odata(burst)
 
         assert isinstance(result, OkResult)
         mock_auth_cls.assert_called_once()
@@ -207,9 +207,9 @@ class TestDownloadDispatch:
         """endpoint='s3' must not construct a CDSEAuth (S1-03)."""
         file_manager = MagicMock()
         file_manager.get_slc_path.return_value.exists.return_value = False
-        db = BurstDatabase(file_manager=file_manager, default_endpoint="s3")
-        db.client = MagicMock()
-        db.client.auth = None
+        catalog = BurstCatalog(file_manager=file_manager, default_endpoint="s3")
+        catalog.client = MagicMock()
+        catalog.client.auth = None
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -218,14 +218,14 @@ class TestDownloadDispatch:
             parent_product_name="S1A_IW_SLC__1SDV",
         )
 
-        with patch("s1bursts.database.CDSEAuth") as mock_auth_cls:
-            summary = db.download(burst, endpoint="s3")
+        with patch("s1bursts.catalog.CDSEAuth") as mock_auth_cls:
+            summary = catalog.download(burst, endpoint="s3")
 
         assert summary.n_processed == 1
         mock_auth_cls.assert_not_called()
 
     def test_burst_pair_downloads_both_bursts(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         primary = _make_burst()
         secondary = Burst(
             burst_id=primary.burst_id,
@@ -236,14 +236,14 @@ class TestDownloadDispatch:
         pair = BurstPair(primary, secondary)
 
         with (
-            patch.object(db, "_ensure_auth"),
+            patch.object(catalog, "_ensure_auth"),
             patch.object(
-                db,
+                catalog,
                 "_download_single_burst",
                 side_effect=lambda b, _e: OkResult(source=b, result=b),
             ) as mock_download,
         ):
-            summary = db.download(pair)
+            summary = catalog.download(pair)
 
         assert mock_download.call_count == 2
         assert summary.n_processed == 2
@@ -251,16 +251,16 @@ class TestDownloadDispatch:
 
 class TestEndpointWrappers:
     def test_odata_requires_cdse_id(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         burst = _make_burst()  # has no cdse_id
 
-        result = db._download_burst_odata(burst)
+        result = catalog._download_burst_odata(burst)
 
         assert isinstance(result, ErrorResult)
         assert "requires `cdse_id`" in str(result.error)
 
     def test_odata_success(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -268,15 +268,15 @@ class TestEndpointWrappers:
             date=Timestamp("2016-07-24"),
             cdse_id="cdse-id",
         )
-        db.client = MagicMock()
+        catalog.client = MagicMock()
 
-        result = db._download_burst_odata(burst)
+        result = catalog._download_burst_odata(burst)
 
         assert isinstance(result, OkResult)
-        db.client.download_burst.assert_called_once()
+        catalog.client.download_burst.assert_called_once()
 
     def test_odata_http_error_becomes_error_result(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -284,16 +284,16 @@ class TestEndpointWrappers:
             date=Timestamp("2016-07-24"),
             cdse_id="cdse-id",
         )
-        db.client = MagicMock()
-        db.client.download_burst.side_effect = HTTPError("503 Service Unavailable")
+        catalog.client = MagicMock()
+        catalog.client.download_burst.side_effect = HTTPError("503 Service Unavailable")
 
-        result = db._download_burst_odata(burst)
+        result = catalog._download_burst_odata(burst)
 
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, HTTPError)
 
     def test_odata_non_file_response_becomes_error_result(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -301,18 +301,18 @@ class TestEndpointWrappers:
             date=Timestamp("2016-07-24"),
             cdse_id="cdse-id",
         )
-        db.client = MagicMock()
+        catalog.client = MagicMock()
         # Previously escaped the handler and aborted the whole batch.
-        db.client.download_burst.side_effect = DownloadError("No downloadable file found")
+        catalog.client.download_burst.side_effect = DownloadError("No downloadable file found")
 
-        result = db._download_burst_odata(burst)
+        result = catalog._download_burst_odata(burst)
 
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, DownloadError)
 
     def test_odata_unrelated_runtime_error_propagates(self) -> None:
         """Only freezebase's download failures become a per-burst error."""
-        db = _make_database()
+        catalog = _make_catalog()
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -320,18 +320,18 @@ class TestEndpointWrappers:
             date=Timestamp("2016-07-24"),
             cdse_id="cdse-id",
         )
-        db.client = MagicMock()
-        db.client.download_burst.side_effect = RuntimeError("bug")
+        catalog.client = MagicMock()
+        catalog.client.download_burst.side_effect = RuntimeError("bug")
 
         with pytest.raises(RuntimeError, match="bug"):
-            db._download_burst_odata(burst)
+            catalog._download_burst_odata(burst)
 
     def test_odata_without_credentials_returns_clear_error(self) -> None:
         """A missing-credentials failure surfaces as a per-burst BurstDownloadError."""
         file_manager = MagicMock()
         file_manager.get_slc_path.return_value.exists.return_value = False
-        db = BurstDatabase(file_manager=file_manager)
-        db.client.auth = None
+        catalog = BurstCatalog(file_manager=file_manager)
+        catalog.client.auth = None
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -341,10 +341,10 @@ class TestEndpointWrappers:
         )
 
         with patch(
-            "s1bursts.database.CDSEAuth",
+            "s1bursts.catalog.CDSEAuth",
             side_effect=ConfigurationError("CDSE credentials not configured"),
         ):
-            result = db._download_burst_odata(burst)
+            result = catalog._download_burst_odata(burst)
 
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, BurstDownloadError)
@@ -355,7 +355,7 @@ class TestEndpointWrappers:
 
         Previously the ConfigurationError propagated and aborted the whole batch.
         """
-        db = _make_database()
+        catalog = _make_catalog()
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -363,12 +363,12 @@ class TestEndpointWrappers:
             date=Timestamp("2016-07-24"),
             parent_product_name="S1A_IW_SLC__1SDV",
         )
-        db.client = MagicMock()
-        db.client.download_burst_from_s3.side_effect = ConfigurationError(
+        catalog.client = MagicMock()
+        catalog.client.download_burst_from_s3.side_effect = ConfigurationError(
             "CDSE S3 credentials not configured",
         )
 
-        result = db._download_burst_s3(burst)
+        result = catalog._download_burst_s3(burst)
 
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, BurstDownloadError)
@@ -378,7 +378,7 @@ class TestEndpointWrappers:
         """A missing burst map propagates instead of becoming a credentials error."""
         file_manager = MagicMock()
         file_manager.get_slc_path.side_effect = BurstMapUnavailableError("not downloaded")
-        db = BurstDatabase(file_manager=file_manager, auth=MagicMock())
+        catalog = BurstCatalog(file_manager=file_manager, auth=MagicMock())
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -386,24 +386,50 @@ class TestEndpointWrappers:
             date=Timestamp("2016-07-24"),
             parent_product_name="S1A_IW_SLC__1SDV",
         )
-        db.client = MagicMock()
+        catalog.client = MagicMock()
 
         with pytest.raises(BurstMapUnavailableError, match="not downloaded"):
-            db._download_burst_s3(burst)
+            catalog._download_burst_s3(burst)
 
-        db.client.download_burst_from_s3.assert_not_called()
+        catalog.client.download_burst_from_s3.assert_not_called()
+
+    @pytest.mark.parametrize("endpoint", ["odata", "s3"])
+    def test_an_invalid_setting_stops_the_download(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        endpoint: Literal["odata", "s3"],
+    ) -> None:
+        """An invalid environment value fails fast instead of passing as missing credentials."""
+        monkeypatch.setenv("SNAP_MAX_WORKERS", "0")
+        catalog = _make_catalog()
+        catalog.client = MagicMock()
+        catalog.client.auth = None
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            cdse_id="cdse-id",
+            parent_product_name="S1A_IW_SLC__1SDV",
+        )
+
+        with pytest.raises(ConfigurationError, match="SNAP_MAX_WORKERS"):
+            catalog.download(burst, endpoint=endpoint)
+
+        catalog.client.download_burst.assert_not_called()
+        catalog.client.download_burst_from_s3.assert_not_called()
 
     def test_s3_requires_parent_product_name(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         burst = _make_burst()  # has no parent_product_name
 
-        result = db._download_burst_s3(burst)
+        result = catalog._download_burst_s3(burst)
 
         assert isinstance(result, ErrorResult)
         assert "requires `parent_product_name`" in str(result.error)
 
     def test_s3_success(self) -> None:
-        db = _make_database()
+        catalog = _make_catalog()
         burst = Burst(
             burst_id=297227,
             sub_swath="IW3",
@@ -411,86 +437,86 @@ class TestEndpointWrappers:
             date=Timestamp("2016-07-24"),
             parent_product_name="S1A_IW_SLC__1SDV",
         )
-        db.client = MagicMock()
+        catalog.client = MagicMock()
 
-        result = db._download_burst_s3(burst)
+        result = catalog._download_burst_s3(burst)
 
         assert isinstance(result, OkResult)
-        db.client.download_burst_from_s3.assert_called_once()
+        catalog.client.download_burst_from_s3.assert_called_once()
 
 
 class TestSearch:
     @staticmethod
-    def _database(n_values: int, count: int) -> tuple[BurstDatabase, MagicMock]:
-        """Return a database whose catalog returns ``n_values`` of ``count`` matches."""
-        db = _make_database()
+    def _catalog(n_values: int, count: int) -> tuple[BurstCatalog, MagicMock]:
+        """Return a catalog whose client returns ``n_values`` of ``count`` matches."""
+        catalog = _make_catalog()
         client = MagicMock()
         client.search_bursts.return_value = CDSEResponse(
             context="$metadata#Bursts",
             value=[{} for _ in range(n_values)],
             count=count,
         )
-        db.client = client
-        return db, client
+        catalog.client = client
+        return catalog, client
 
     def test_returns_every_match_from_one_counted_request(self) -> None:
-        db, client = self._database(n_values=2, count=2)
+        catalog, client = self._catalog(n_values=2, count=2)
 
-        with patch("s1bursts.database.BurstCollection.from_cdse_response") as from_response:
-            bursts = db.search(SearchQuery(burst_id=30346))
+        with patch("s1bursts.catalog.BurstCollection.from_cdse_response") as from_response:
+            bursts = catalog.search(SearchQuery(burst_id=30346))
 
         assert bursts is from_response.return_value
         client.search_bursts.assert_called_once_with(["BurstId eq 30346"], count=True)
         assert from_response.call_args.args[0] is client.search_bursts.return_value
 
     def test_more_matches_than_one_page_raises(self) -> None:
-        db, _ = self._database(n_values=MAX_PAGE_SIZE, count=1226)
+        catalog, _ = self._catalog(n_values=MAX_PAGE_SIZE, count=1226)
 
         with pytest.raises(TooManyResultsError, match=r"1226 bursts match.*at most 1000"):
-            db.search(SearchQuery())
+            catalog.search(SearchQuery())
 
     @pytest.mark.parametrize("count", [0, MAX_PAGE_SIZE])
     def test_a_full_or_empty_page_is_complete(self, count: int) -> None:
-        db, _ = self._database(n_values=count, count=count)
+        catalog, _ = self._catalog(n_values=count, count=count)
 
-        with patch("s1bursts.database.BurstCollection.from_cdse_response") as from_response:
-            bursts = db.search(SearchQuery())
+        with patch("s1bursts.catalog.BurstCollection.from_cdse_response") as from_response:
+            bursts = catalog.search(SearchQuery())
 
         assert bursts is from_response.return_value
 
     def test_a_short_page_is_not_reported_as_too_many(self) -> None:
-        db, _ = self._database(n_values=3, count=5)
+        catalog, _ = self._catalog(n_values=3, count=5)
 
         with pytest.raises(CatalogError, match=r"reported 5 matching bursts but returned 3"):
-            db.search(SearchQuery())
+            catalog.search(SearchQuery())
 
     def test_a_response_without_count_raises(self) -> None:
-        db, client = self._database(n_values=2, count=2)
+        catalog, client = self._catalog(n_values=2, count=2)
         client.search_bursts.return_value.count = None
 
         with pytest.raises(CatalogError, match=r"did not report how many bursts match"):
-            db.search(SearchQuery())
+            catalog.search(SearchQuery())
 
 
 def test_burst_not_found_is_cached_and_short_circuits() -> None:
     """A deterministic BurstNotFoundError should not be re-fetched on the next request."""
-    db = _make_database()
+    catalog = _make_catalog()
     burst = _make_burst()
 
     with (
         patch.object(
-            db,
+            catalog,
             "_download_burst_odata",
             return_value=ErrorResult(source=burst, error=HTTPError("500 Server Error")),
         ) as mock_primary,
         patch.object(
-            db,
+            catalog,
             "_download_burst_s3",
             return_value=ErrorResult(source=burst, error=BurstNotFoundError("not found")),
         ) as mock_fallback,
     ):
-        first = db._download_single_burst(burst, "odata")
-        second = db._download_single_burst(burst, "odata")
+        first = catalog._download_single_burst(burst, "odata")
+        second = catalog._download_single_burst(burst, "odata")
 
     assert isinstance(first, ErrorResult)
     assert isinstance(first.error, BurstNotFoundError)
@@ -504,23 +530,23 @@ def test_burst_not_found_is_cached_and_short_circuits() -> None:
 
 def test_transient_failure_is_not_cached() -> None:
     """A failure with no BurstNotFoundError anywhere should keep retrying."""
-    db = _make_database()
+    catalog = _make_catalog()
     burst = _make_burst()
 
     with (
         patch.object(
-            db,
+            catalog,
             "_download_burst_odata",
             return_value=ErrorResult(source=burst, error=HTTPError("500 Server Error")),
         ) as mock_primary,
         patch.object(
-            db,
+            catalog,
             "_download_burst_s3",
             return_value=ErrorResult(source=burst, error=HTTPError("connection reset")),
         ) as mock_fallback,
     ):
-        db._download_single_burst(burst, "odata")
-        db._download_single_burst(burst, "odata")
+        catalog._download_single_burst(burst, "odata")
+        catalog._download_single_burst(burst, "odata")
 
     # No BurstNotFoundError was ever raised, so nothing should have been cached.
     assert mock_primary.call_count == 2
@@ -529,23 +555,23 @@ def test_transient_failure_is_not_cached() -> None:
 
 def test_burst_not_found_from_primary_endpoint_is_cached() -> None:
     """BurstNotFoundError from the primary attempt (not just the fallback) must cache too."""
-    db = _make_database()
+    catalog = _make_catalog()
     burst = _make_burst()
 
     with (
         patch.object(
-            db,
+            catalog,
             "_download_burst_s3",
             return_value=ErrorResult(source=burst, error=BurstNotFoundError("not found")),
         ) as mock_primary,
         patch.object(
-            db,
+            catalog,
             "_download_burst_odata",
             return_value=ErrorResult(source=burst, error=HTTPError("500 Server Error")),
         ) as mock_fallback,
     ):
-        first = db._download_single_burst(burst, "s3")
-        second = db._download_single_burst(burst, "s3")
+        first = catalog._download_single_burst(burst, "s3")
+        second = catalog._download_single_burst(burst, "s3")
 
     # The first call still returns the terminal (fallback) result, matching
     # existing behavior — but the BurstNotFoundError surfaced by the primary

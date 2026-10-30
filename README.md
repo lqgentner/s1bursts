@@ -21,7 +21,7 @@ practical.
 ## Features
 
 - **Search** the CDSE burst catalog by burst ID, footprint, time range,
-  polarization, orbit, and more (`BurstDatabase`, `SearchQuery`)
+  polarization, orbit, and more (`BurstCatalog`, `SearchQuery`)
 - **Download** single bursts via the CDSE OData API or by extracting them
   directly from CDSE S3 object storage, with automatic endpoint fallback
 - **Select** part of a search by time, area or field (`within`,
@@ -42,16 +42,16 @@ practical.
 ```python
 import pandas as pd
 import pyproj
-from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery, TimeRange
+from s1bursts import BurstCatalog, BurstProcessor, FileManager, SearchQuery, TimeRange
 
 fm = FileManager(base_dir="data")
-database = BurstDatabase(file_manager=fm)
+catalog = BurstCatalog(file_manager=fm)
 processor = BurstProcessor(file_manager=fm)
 
 # Search all 2022 acquisitions of one burst footprint (Aletsch glacier).
 # A TimeRange is inclusive calendar days; the same object later names the
 # composites built from this search.
-bursts = database.search(
+bursts = catalog.search(
     SearchQuery(
         time_range=TimeRange("2022-01-01", "2022-12-31"),
         burst_id=30346,
@@ -63,7 +63,7 @@ pairs = bursts.find_pairs(baseline=pd.Timedelta(days=12))
 
 # Download and process. Products are geocoded to a WGS 84 / UTM zone, here
 # the one of the burst; utm_zone_of(bursts[0]) would give the same.
-database.download(bursts, max_workers=3).raise_on_failure()
+catalog.download(bursts, max_workers=3).raise_on_failure()
 crs = pyproj.CRS("EPSG:32632")
 processor.create_backscatter(bursts, crs=crs)  # RTC; GTC with config=GTCConfig()
 processor.create_coherences(pairs, crs=crs)
@@ -72,7 +72,7 @@ processor.create_coherences(pairs, crs=crs)
 ## API layout
 
 `s1bursts` exports what a pipeline is *built* from — `FileManager`, the
-`BurstDatabase` / `BurstProcessor` / `ResolutionWeighter` services, and the
+`BurstCatalog` / `BurstProcessor` / `ResolutionWeighter` services, and the
 configs they take (`SearchQuery`, `TimeRange`, `SNAPConfig`, `RTCConfig`,
 `GTCConfig`, `CoherenceConfig`, `InterferogramConfig` and their bases
 `BackscatterConfig` and `GeocodingConfig`), plus

@@ -25,7 +25,7 @@ import pytest
 import rasterio
 
 from s1bursts import (
-    BurstDatabase,
+    BurstCatalog,
     BurstProcessor,
     CoherenceConfig,
     FileManager,
@@ -120,8 +120,8 @@ def file_manager(tmp_path_factory: pytest.TempPathFactory) -> FileManager:
 
 
 @pytest.fixture(scope="module")
-def database(file_manager: FileManager) -> BurstDatabase:
-    return BurstDatabase(file_manager=file_manager)
+def catalog(file_manager: FileManager) -> BurstCatalog:
+    return BurstCatalog(file_manager=file_manager)
 
 
 @pytest.fixture(scope="module")
@@ -139,10 +139,10 @@ class TestCatalogSearch:
 
     def test_search_returns_expected_burst(
         self,
-        database: BurstDatabase,
+        catalog: BurstCatalog,
         query: SearchQuery,
     ) -> None:
-        bursts = database.search(query)
+        bursts = catalog.search(query)
 
         assert len(bursts) >= 1
         burst = bursts[0]
@@ -154,7 +154,7 @@ class TestCatalogSearch:
 
     def test_near_identical_timestamp_products_are_deduplicated(
         self,
-        database: BurstDatabase,
+        catalog: BurstCatalog,
     ) -> None:
         """CDSE returns two products for this burst whose timestamps differ by ~6 us.
 
@@ -170,7 +170,7 @@ class TestCatalogSearch:
         )
 
         with pytest.warns(UserWarning, match="most complete"):
-            bursts = database.search(query)
+            bursts = catalog.search(query)
 
         days = [burst.date.normalize() for burst in bursts]
         # No two surviving bursts share a calendar day.
@@ -182,12 +182,12 @@ class TestCatalogSearch:
 
 
 @pytest.fixture(scope="module")
-def downloaded_bursts(database: BurstDatabase, query: SearchQuery) -> BurstCollection:
+def downloaded_bursts(catalog: BurstCatalog, query: SearchQuery) -> BurstCollection:
     """Download one burst via the OData endpoint (skips without credentials)."""
     if _settings.cdse.username is None or _settings.cdse.password is None:
         pytest.skip("CDSE_USERNAME / CDSE_PASSWORD not configured")
-    bursts = database.search(query)[0:1]
-    summary = database.download(bursts, endpoint="odata")
+    bursts = catalog.search(query)[0:1]
+    summary = catalog.download(bursts, endpoint="odata")
     assert summary.n_failed == 0, [str(item.error) for item in summary.failed_items]
     return bursts
 
@@ -196,10 +196,10 @@ class TestDownload:
     @requires_cdse_credentials
     def test_odata_download_produces_slc_zip(
         self,
-        database: BurstDatabase,
+        catalog: BurstCatalog,
         downloaded_bursts: BurstCollection,
     ) -> None:
-        slc_path = database.file_manager.get_slc_path(downloaded_bursts[0])
+        slc_path = catalog.file_manager.get_slc_path(downloaded_bursts[0])
 
         assert slc_path.exists()
         assert slc_path.stat().st_size > 10_000_000  # sanity: tens of MB
@@ -212,7 +212,7 @@ class TestDownload:
 
 @pytest.fixture(scope="module")
 def s3_extracted_burst(
-    database: BurstDatabase,
+    catalog: BurstCatalog,
     query: SearchQuery,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Path:
@@ -222,11 +222,11 @@ def s3_extracted_burst(
     ):
         pytest.skip("CDSE S3 credentials not configured")
 
-    burst: Burst = database.search(query)[0]
+    burst: Burst = catalog.search(query)[0]
     assert burst.parent_product_name is not None
     save_path = tmp_path_factory.mktemp("s3-extract") / "burst-from-s3.zip"
 
-    database.client.download_burst_from_s3(
+    catalog.client.download_burst_from_s3(
         save_path=save_path,
         parent_product_name=burst.parent_product_name,
         polarization=burst.polarization,
@@ -258,7 +258,7 @@ class TestReferenceConformance:
         self,
         s3_extracted_burst: Path,
         downloaded_bursts: BurstCollection,
-        database: BurstDatabase,
+        catalog: BurstCatalog,
     ) -> None:
         """The S3 extraction must equal CDSE's own burst, file for file and pixel for pixel.
 
@@ -266,7 +266,7 @@ class TestReferenceConformance:
         carry; it is reported explicitly rather than ignored (see
         ``tests/safe_conformance._diff_gcps``).
         """
-        reference = database.file_manager.get_slc_path(downloaded_bursts[0])
+        reference = catalog.file_manager.get_slc_path(downloaded_bursts[0])
         assert Path(str(reference)).exists(), "OData reference burst was not downloaded"
 
         differences = compare_burst_safes(s3_extracted_burst, Path(str(reference)))
@@ -276,7 +276,7 @@ class TestReferenceConformance:
 
 
 @pytest.fixture(scope="module")
-def downloaded_pair(database: BurstDatabase) -> BurstPairCollection:
+def downloaded_pair(catalog: BurstCatalog) -> BurstPairCollection:
     """Download both bursts of one 12-day pair (skips without credentials).
 
     Shares the module's file manager with :func:`downloaded_bursts`, so the
@@ -284,7 +284,7 @@ def downloaded_pair(database: BurstDatabase) -> BurstPairCollection:
     """
     if _settings.cdse.username is None or _settings.cdse.password is None:
         pytest.skip("CDSE_USERNAME / CDSE_PASSWORD not configured")
-    bursts = database.search(
+    bursts = catalog.search(
         SearchQuery(
             time_range=PAIR_TIME_RANGE,
             burst_id=BURST_ID,
@@ -292,11 +292,11 @@ def downloaded_pair(database: BurstDatabase) -> BurstPairCollection:
             polarization=POLARIZATION,
         ),
     )
-    pairs = bursts.find_pairs(PAIR_BASELINE_DAYS)[0:1]
+    pairs = bursts.find_pairs(baseline=PAIR_BASELINE_DAYS)[0:1]
     assert len(pairs) == 1, (
         f"no {PAIR_BASELINE_DAYS}-day pair for burst {BURST_ID} in {PAIR_TIME_RANGE}"
     )
-    summary = database.download(pairs, endpoint="odata")
+    summary = catalog.download(pairs, endpoint="odata")
     assert summary.n_failed == 0, [str(item.error) for item in summary.failed_items]
     return pairs
 
@@ -349,7 +349,7 @@ class TestSnapProcessing:
     @requires_snap
     def test_gpt_processes_the_exact_s3_extracted_artifact(
         self,
-        database: BurstDatabase,
+        catalog: BurstCatalog,
         query: SearchQuery,
         s3_extracted_burst: Path,
         tmp_path_factory: pytest.TempPathFactory,
@@ -359,7 +359,7 @@ class TestSnapProcessing:
         The archive produced by :func:`extract_burst_from_s3` is placed where the
         file manager expects the SLC, so GPT consumes that exact byte stream.
         """
-        bursts = database.search(query)[0:1]
+        bursts = catalog.search(query)[0:1]
         file_manager = FileManager(base_dir=tmp_path_factory.mktemp("s3-snap"))
         slc_path = Path(str(file_manager.get_slc_path(bursts[0])))
         slc_path.parent.mkdir(parents=True, exist_ok=True)
@@ -442,7 +442,7 @@ class TestSnapProcessing:
         # The interferogram test's budget: this graph also subtracts topographic phase.
         processor = BurstProcessor(
             file_manager,
-            SNAPConfig(max_workers=1, max_ram_gb=8, gpt_threads_per_job=2),
+            SNAPConfig(max_workers=1, max_ram_gb=8, threads_per_job=2),
             show_progress=False,
             continue_on_error=False,
         )
@@ -502,7 +502,7 @@ class TestSnapProcessing:
         # eight threads runs out of Java heap there; 8 GB across two does not.
         processor = BurstProcessor(
             file_manager,
-            SNAPConfig(max_workers=1, max_ram_gb=8, gpt_threads_per_job=2),
+            SNAPConfig(max_workers=1, max_ram_gb=8, threads_per_job=2),
             show_progress=False,
             continue_on_error=False,
         )

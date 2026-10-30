@@ -10,7 +10,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Added
 
-- `FileManager` accepts strings for local directories.
+- `FileManager` accepts strings for local directories, and
+  `prepare_dem_for_snap()` a string for `dem`.
 - The `crs` of every `BurstProcessor.create_*` method, and of the products'
   `from_burst()` and `from_burst_pair()`, now accepts strings and EPSG codes,
   such as `"EPSG:32632"` or `32632`. Previously only objects with a `to_wkt()`
@@ -29,11 +30,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
   ```python
   # before
-  summary = database.download(bursts)
+  summary = catalog.download(bursts)
   if summary.n_failed:
       raise RuntimeError(...)
   # after
-  database.download(bursts).raise_on_failure()
+  catalog.download(bursts).raise_on_failure()
   ```
 
   A batch run with `continue_on_error=True` (the default) attempts every item
@@ -41,16 +42,16 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   call after it. The error carries the summary, so the products that were made
   stay within reach as `err.summary.products`, and the failures as
   `err.failed_items`. Running the batch again skips the existing products and
-  retries only the failures; a `BurstDatabase` reports the bursts it already
+  retries only the failures; a `BurstCatalog` reports the bursts it already
   found missing at the source again without retrying them. `ignore` tolerates
   failures of the given error types: they do not raise but stay in
   `failed_items`, and the message counts them.
 
   ```python
   # a burst CDSE no longer serves does not stop the run
-  database.download(bursts).raise_on_failure(ignore=BurstNotFoundError)
+  catalog.download(bursts).raise_on_failure(ignore=BurstNotFoundError)
   ```
-- `BurstDatabase.download()` accepts any iterable of bursts or burst pairs,
+- `BurstCatalog.download()` accepts any iterable of bursts or burst pairs,
   such as a list or a generator, besides a single `Burst` or `BurstPair` and
   the collections. A burst listed more than once, such as one shared by two
   pairs, is downloaded once.
@@ -68,17 +69,87 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   ```python
   cell_bursts = bursts.intersecting(cell)  # an MGRSGeoBox
   in_window = bursts.within(window).filter(rel_orbit_number=[66, 139])
-  pairs = bursts.find_pairs(12).starting_within(window)
+  pairs = bursts.find_pairs(baseline=12).starting_within(window)
   ```
 
 ### Changed
 
-- **Breaking:** `BurstDatabase.search()` no longer takes `max_items` and
+- **Breaking:** `BurstDatabase` is renamed `BurstCatalog`, and its module
+  `s1bursts.database` is now `s1bursts.catalog`. It is a client for the CDSE
+  burst catalog, and failures of that catalog raise `CatalogError`. The old
+  names are gone without an alias.
+
+  ```python
+  # before
+  from s1bursts import BurstDatabase
+  from s1bursts.database import BurstDatabase
+
+  db = BurstDatabase(file_manager=fm)
+  # after
+  from s1bursts import BurstCatalog
+  from s1bursts.catalog import BurstCatalog
+
+  catalog = BurstCatalog(file_manager=fm)
+  ```
+- **Breaking:** `BurstCollection.find_pairs()` takes `baseline` and
+  `max_delta` by keyword only, and `max_delta` must be a duration: a
+  `pandas.Timedelta`, `datetime.timedelta` or `numpy.timedelta64`. An integer
+  `max_delta` was read as hours, so `find_pairs(12, 6)` read one integer as
+  days and the other as hours; a number or string now raises `TypeError`. An
+  integer `baseline` is still read as days, and a `baseline` given as a
+  `datetime.timedelta` or `numpy.timedelta64` is now taken as is, where it
+  raised a pandas `UserWarning` before. A float or string `baseline` raises
+  `TypeError`. The default tolerance is unchanged, six hours.
+
+  ```python
+  # before
+  bursts.find_pairs(12, 6)
+  bursts.find_pairs(12, max_delta=3)
+  # after
+  bursts.find_pairs(baseline=12, max_delta=pd.Timedelta(hours=6))
+  bursts.find_pairs(baseline=12, max_delta=pd.Timedelta(hours=3))
+  ```
+- **Breaking:** worker counts are called `max_workers` everywhere, as in
+  `BurstCatalog.download()` and `SNAPConfig`. `ResolutionWeighter` takes
+  `max_workers` instead of `n_workers`: replace
+  `ResolutionWeighter(fm, n_workers=4)` with
+  `ResolutionWeighter(fm, max_workers=4)`.
+- **Breaking:** the `SNAPConfig` fields `gpt_threads_per_job` and
+  `gpt_cache_ratio` are renamed `threads_per_job` and `cache_ratio`, so each
+  field is spelled like the `SNAP_*` environment variable it defaults to. The
+  variables `SNAP_THREADS_PER_JOB` and `SNAP_CACHE_RATIO` are unchanged.
+
+  ```python
+  # before
+  SNAPConfig(gpt_threads_per_job=4, gpt_cache_ratio=0.5)
+  # after
+  SNAPConfig(threads_per_job=4, cache_ratio=0.5)
+  ```
+- **Breaking:** errors name the side that has to change: an invalid argument
+  raises `ValueError`, an invalid environment raises `ConfigurationError`.
+  - An out-of-range `SNAPConfig` argument, such as `max_workers=0`, a
+    negative `max_ram_gb` or a `cache_ratio` above 1, raises `ValueError`
+    instead of `ConfigurationError`, and is reported before `gpt` is looked
+    for. So does a RAM budget too small for the workers when `max_ram_gb` or
+    `max_workers` is passed; when both come from `SNAP_MAX_RAM_GB` and
+    `SNAP_MAX_WORKERS` (or their defaults), it stays a `ConfigurationError`.
+    Replace `except ConfigurationError:` around such a `SNAPConfig(...)` with
+    `except ValueError:`.
+  - An invalid `SNAP_*` environment variable, such as `SNAP_MAX_WORKERS=0`
+    or `SNAP_CACHE_RATIO=1.5`, raises `ConfigurationError` naming the
+    variable, from every call that reads the settings: `SNAPConfig()`,
+    `prepare_dem_for_snap()`, and, since all settings are read together,
+    `CDSEAuth()` and `BurstCatalog.download()`. It used to escape as pydantic's
+    `ValidationError`, a `ValueError`: replace `except ValidationError:` or
+    `except ValueError:` around those calls with `except ConfigurationError:`.
+    `BurstCatalog.download()` raises it rather than recording it per burst as
+    it does missing credentials, so the batch stops at once.
+- **Breaking:** `BurstCatalog.search()` no longer takes `max_items` and
   returns every match. A query matching more than 1000 bursts, one catalog
   page, raises the new `s1bursts.errors.TooManyResultsError` (previously a
   `RuntimeError` above `max_items`) after a single request. Narrow the
   `TimeRange` or the AOI, or split the query and combine the results with `+`.
-  Replace `db.search(query, max_items=500)` with `db.search(query)`.
+  Replace `catalog.search(query, max_items=500)` with `catalog.search(query)`.
 - **Breaking:** `CDSEBurstClient.search_bursts()` no longer takes `top` and
   no longer follows next-link pages. It returns one page of up to 1000
   bursts; request `count=True` to tell whether more match. Replace
@@ -96,7 +167,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   all of them. Invalid arguments still raise `ValueError` and `TypeError`,
   and a path you pass that does not exist still raises `FileNotFoundError`.
   - An unusable catalog response raises `CatalogError`, a `RuntimeError`. This
-    covers `BurstDatabase.search()`, `CDSEBurstClient.search_bursts()` and
+    covers `BurstCatalog.search()`, `CDSEBurstClient.search_bursts()` and
     `CDSEResponse.to_geodataframe()`. `CDSEResponse.is_complete()` without a
     count raised `AttributeError` before: replace `except AttributeError:`
     with `except CatalogError:`.

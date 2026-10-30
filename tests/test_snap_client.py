@@ -384,6 +384,15 @@ class TestExternalDemNeedsHalfPixelShift:
 
         assert external_dem_needs_half_pixel_shift() is True
 
+    def test_an_invalid_setting_is_not_taken_for_a_missing_installation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SNAP_MAX_WORKERS", "0")
+
+        with pytest.raises(ConfigurationError, match="SNAP_MAX_WORKERS"):
+            external_dem_needs_half_pixel_shift()
+
     def test_raises_for_an_explicit_directory_without_gpt(self, tmp_path: Path) -> None:
         """A typo in `bin_dir` must not silently pick the shifted behaviour."""
         empty = tmp_path / "no-gpt-here"
@@ -1007,11 +1016,11 @@ class TestResourceBudget:
         [
             ("max_workers", 0, "max_workers` must be at least 1"),
             ("max_workers", -2, "max_workers` must be at least 1"),
-            ("gpt_threads_per_job", 0, "gpt_threads_per_job` must be at least 1"),
+            ("threads_per_job", 0, "threads_per_job` must be at least 1"),
             ("max_ram_gb", 0.0, "max_ram_gb` must be positive"),
             ("max_ram_gb", -4.0, "max_ram_gb` must be positive"),
-            ("gpt_cache_ratio", -0.5, "gpt_cache_ratio` must be greater than 0"),
-            ("gpt_cache_ratio", 1.5, "gpt_cache_ratio` must be greater than 0"),
+            ("cache_ratio", -0.5, "cache_ratio` must be greater than 0"),
+            ("cache_ratio", 1.5, "cache_ratio` must be greater than 0"),
         ],
     )
     def test_rejects_out_of_range_values(
@@ -1021,21 +1030,73 @@ class TestResourceBudget:
         value: object,
         message: str,
     ) -> None:
-        with pytest.raises(ConfigurationError, match=message):
+        with pytest.raises(ValueError, match=message) as excinfo:
             self._config(snap_bin, **{field: value})
+
+        # An invalid argument is not an environment problem.
+        assert not isinstance(excinfo.value, ConfigurationError)
+
+    def test_rejects_an_invalid_argument_before_looking_for_gpt(self, tmp_path: Path) -> None:
+        """An invalid argument is reported as such even where SNAP is not installed."""
+        with pytest.raises(ValueError, match="max_workers` must be at least 1"):
+            SNAPConfig(bin=tmp_path, auxdata_path=tmp_path / "auxdata", max_workers=0)
 
     def test_rejects_a_budget_too_small_for_one_worker(self, snap_bin: Path) -> None:
         """3 GB of overhead plus a 512 MB heap does not fit in 3 GB."""
-        with pytest.raises(ConfigurationError, match="below the 512 MB SNAP needs"):
+        with pytest.raises(ValueError, match="below the 512 MB SNAP needs"):
             self._config(snap_bin, max_ram_gb=3, max_workers=1)
 
     def test_rejects_a_budget_over_subscribed_by_workers(self, snap_bin: Path) -> None:
         """8 GB is ample for one worker but leaves 16 of them 324 MB of heap each."""
-        with pytest.raises(ConfigurationError, match="16 worker"):
+        with pytest.raises(ValueError, match="16 worker"):
             self._config(snap_bin, max_ram_gb=8, max_workers=16)
 
+    @pytest.mark.parametrize(
+        ("argument", "variable", "value", "env_value"),
+        [
+            ("max_ram_gb", "SNAP_MAX_WORKERS", 4.0, "4"),
+            ("max_workers", "SNAP_MAX_RAM_GB", 4, "4"),
+        ],
+    )
+    def test_blames_the_call_when_it_passes_either_value(
+        self,
+        snap_bin: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        argument: str,
+        variable: str,
+        value: float,
+        env_value: str,
+    ) -> None:
+        monkeypatch.setenv(variable, env_value)
+
+        with pytest.raises(ValueError, match="Raise `max_ram_gb`") as excinfo:
+            self._config(snap_bin, **{argument: value})
+
+        assert not isinstance(excinfo.value, ConfigurationError)
+
+    def test_blames_the_environment_when_it_supplies_both_values(
+        self,
+        snap_bin: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SNAP_MAX_RAM_GB", "4")
+        monkeypatch.setenv("SNAP_MAX_WORKERS", "4")
+
+        with pytest.raises(ConfigurationError, match="Raise `SNAP_MAX_RAM_GB` to at least"):
+            self._config(snap_bin)
+
+    def test_rejects_an_invalid_environment_value_as_configuration(
+        self,
+        snap_bin: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SNAP_CACHE_RATIO", "1.5")
+
+        with pytest.raises(ConfigurationError, match="SNAP_CACHE_RATIO"):
+            self._config(snap_bin)
+
     def test_error_names_a_budget_that_would_work(self, snap_bin: Path) -> None:
-        with pytest.raises(ConfigurationError) as excinfo:
+        with pytest.raises(ValueError, match="Raise `max_ram_gb`") as excinfo:
             self._config(snap_bin, max_ram_gb=4, max_workers=4)
 
         suggested = float(str(excinfo.value).split("at least ")[1].split()[0])
@@ -1052,7 +1113,7 @@ class TestResourceBudget:
         assert total_heap_mb <= 16 * 1024
 
     def test_cache_never_exceeds_the_heap_it_lives_in(self, snap_bin: Path) -> None:
-        config = self._config(snap_bin, max_ram_gb=16, max_workers=2, gpt_cache_ratio=1.0)
+        config = self._config(snap_bin, max_ram_gb=16, max_workers=2, cache_ratio=1.0)
 
         assert config.resolved_cache_mb <= config.resolved_xmx_mb
 
@@ -1094,7 +1155,7 @@ class TestRunGpt:
                 bin=tmp_path,
                 auxdata_path=tmp_path / "auxdata",
                 max_ram_gb=8,
-                gpt_threads_per_job=3,
+                threads_per_job=3,
             )
             return SNAPClient(manager, config)
 

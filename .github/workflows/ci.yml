@@ -148,7 +148,7 @@ jobs:
         run: |
           uv venv /tmp/smoke
           uv pip install --python /tmp/smoke "$(ls dist/*.whl)"
-          uv run --python /tmp/smoke --no-project python -c "import s1bursts; from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery; print('import OK')"
+          uv run --python /tmp/smoke --no-project python -c "import s1bursts; from s1bursts import BurstCatalog, BurstProcessor, FileManager, SearchQuery; print('import OK')"
       - uses: actions/upload-artifact@v7
         with:
           name: dist

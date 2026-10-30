@@ -9,6 +9,7 @@ from pydantic import ValidationError
 import pytest
 
 from s1bursts.config import get_settings, warn_if_tmpdir_unusable
+from s1bursts.errors import ConfigurationError
 
 
 class TestGetSettings:
@@ -87,7 +88,31 @@ class TestSnapSettingsValidation:
     ) -> None:
         monkeypatch.setenv(variable, value)
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError, match=variable) as excinfo:
+            get_settings()
+
+        # Previously pydantic's ValidationError escaped unwrapped.
+        assert isinstance(excinfo.value.__cause__, ValidationError)
+
+    def test_names_every_invalid_variable_without_its_value(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SNAP_MAX_WORKERS", "0")
+        monkeypatch.setenv("SNAP_CACHE_RATIO", "1.5")
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            get_settings()
+
+        message = str(excinfo.value)
+        assert "SNAP_MAX_WORKERS" in message
+        assert "SNAP_CACHE_RATIO" in message
+        assert "1.5" not in message
+
+    def test_names_a_variable_that_does_not_parse(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SNAP_MAX_RAM_GB", "lots")
+
+        with pytest.raises(ConfigurationError, match="SNAP_MAX_RAM_GB: Input should be a valid"):
             get_settings()
 
     @pytest.mark.parametrize("ratio", ["0.01", "0.7", "1"])
