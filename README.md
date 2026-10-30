@@ -105,6 +105,7 @@ s1bursts call, or export the variables (e.g. `uv run --env-file .env`):
 | `SNAP_MAX_RAM_GB` | Total RAM budget across GPT processes in GB (default: 8) |
 | `SNAP_THREADS_PER_JOB` | Threads per GPT process (default: CPU count divided by `SNAP_MAX_WORKERS`) |
 | `SNAP_CACHE_RATIO` | Fraction of each GPT process's heap used as tile cache (default: 0.7) |
+| `SNAP_TIMEOUT` | Seconds one GPT process may run before it is stopped and its item recorded as failed; `none` for no limit (default: 3600) |
 | `SNAP_AUXDATA_PATH` | Shared DEM/orbit cache (default: `~/.snap/auxdata`) |
 | `SNAP_DEM_CACHE` | Where `prepare_dem_for_snap()` caches SNAP-ready external DEMs (default: `~/.s1bursts/dem`) |
 

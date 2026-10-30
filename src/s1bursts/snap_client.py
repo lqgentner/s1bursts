@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 from typing import TYPE_CHECKING, Any, Final, overload
@@ -302,6 +303,44 @@ def _extract_gpt_error(
     return detail[:max_chars]
 
 
+# A process the kernel's OOM killer ends exits with -SIGKILL.
+_SIGKILL = 9
+
+# Lines of GPT output a SnapProcessingError keeps.
+_OUTPUT_TAIL_LINES = 20
+
+
+def _describe_exit(returncode: int) -> str:
+    """Describe a GPT exit code, naming the signal of a negative one."""
+    if returncode >= 0:
+        return f"exit {returncode}"
+    try:
+        name = signal.Signals(-returncode).name
+    except ValueError:
+        return f"exit {returncode}"
+    hint = (
+        "; usually out of memory: lower SNAPConfig.max_workers or max_ram_gb"
+        if returncode == -_SIGKILL
+        else ""
+    )
+    return f"exit {returncode} ({name}{hint})"
+
+
+def _decode(output: str | bytes | None) -> str | None:
+    """Decode captured output, which ``TimeoutExpired`` holds as bytes even in text mode."""
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return output
+
+
+def _output_tail(stdout: str | None, stderr: str | None) -> str | None:
+    """Return the last non-empty lines GPT printed, stdout before stderr."""
+    lines = [
+        line for part in (stdout, stderr) if part for line in part.splitlines() if line.strip()
+    ]
+    return "\n".join(lines[-_OUTPUT_TAIL_LINES:]) or None
+
+
 # Failures of one item: its GPT run, or staging its input or writing its product.
 _ITEM_ERRORS = (BurstError, OSError, RasterioError, RasterWriteError)
 
@@ -314,6 +353,8 @@ def _item_failure(source: Burst | BurstPair, error: Exception) -> ErrorResult:
         wrapped = SnapProcessingError(f"{type(error).__name__}: {error}")
         wrapped.__cause__ = error
         error = wrapped
+    # Once, without a traceback: the summary carries the error itself.
+    logger.error("Failed to process %s: %s", source, error)
     return ErrorResult(source=source, error=error)
 
 
@@ -368,12 +409,17 @@ class SNAPConfig:
     auxdata_path
         Shared SNAP auxdata cache (DEM tiles, orbit files). Defaults to
         ``SNAP_AUXDATA_PATH`` (or ``~/.snap/auxdata``).
+    timeout
+        Seconds one GPT run may take before it is stopped and recorded as
+        failed; must be positive and finite, or ``None`` for no limit. Defaults to
+        ``SNAP_TIMEOUT`` (or 3600), where ``none`` means no limit.
 
     Raises
     ------
     ValueError
-        If a resource argument is out of range, or if the RAM budget cannot
-        cover the workers and ``max_ram_gb`` or ``max_workers`` was passed.
+        If a resource argument or ``timeout`` is out of range, or if the RAM
+        budget cannot cover the workers and ``max_ram_gb`` or ``max_workers``
+        was passed.
     ConfigurationError
         If a ``SNAP_*`` environment variable is invalid, if the RAM budget
         cannot cover the workers and both values come from the environment,
@@ -387,6 +433,8 @@ class SNAPConfig:
     threads_per_job: int | None = None
     cache_ratio: float | None = None
     auxdata_path: Path | None = None
+    # None means no timeout, so the setting is read when the field is not given.
+    timeout: float | None = field(default_factory=lambda: get_settings().snap.timeout)
 
     # Resolved resource values — set by __post_init__, not by users directly
     resolved_max_workers: int = field(init=False, repr=False, compare=False)
@@ -461,6 +509,14 @@ class SNAPConfig:
 
         if self.max_ram_gb is not None and self.max_ram_gb <= 0:
             msg = f"`max_ram_gb` must be positive, received {self.max_ram_gb}."
+            raise ValueError(msg)
+
+        # Written to reject NaN as well.
+        if self.timeout is not None and not (math.isfinite(self.timeout) and self.timeout > 0):
+            msg = (
+                f"`timeout` must be a positive, finite number of seconds, received "
+                f"{self.timeout}; pass None for no limit."
+            )
             raise ValueError(msg)
 
         if self.cache_ratio is not None and not 0 < self.cache_ratio <= 1:
@@ -546,7 +602,6 @@ class SNAPClient:
         target_file: Path,
         snap_userdir: Path,
         process_params: dict[str, str] | None = None,
-        timeout: int = 3600,
     ) -> Path:
         """Run SNAP GPT with given parameters."""
         commands = [str(self.config.resolved_gpt_path), str(graph)]
@@ -582,6 +637,7 @@ class SNAPClient:
 
         logger.debug("Running command %s", " ".join(commands))
 
+        timeout = self.config.timeout
         try:
             result = subprocess.run(  # noqa: S603
                 commands,
@@ -591,25 +647,38 @@ class SNAPClient:
                 timeout=timeout,
             )
             logger.debug("SNAP output: %s", result.stdout)
+        except subprocess.CalledProcessError as e:
+            target_file.unlink(missing_ok=True)
+            # At debug level only: the failure is logged once, by the caller.
+            logger.debug("GPT output:\nstdout: %s\nstderr: %s", e.stdout, e.stderr)
+            # Preserve SNAP's cause; CalledProcessError reports only the exit code.
+            detail = _extract_gpt_error(e.stdout, e.stderr) or "<no output captured>"
+            msg = f"GPT processing failed with {_describe_exit(e.returncode)}: {detail}"
+            raise SnapProcessingError(
+                msg,
+                returncode=e.returncode,
+                output_tail=_output_tail(e.stdout, e.stderr),
+            ) from e
+        except subprocess.TimeoutExpired as e:
+            target_file.unlink(missing_ok=True)
+            tail = _output_tail(_decode(e.stdout), _decode(e.stderr))
+            msg = (
+                f"GPT processing failed: timed out after {timeout:g} s (SNAPConfig.timeout). "
+                f"Last output:\n{tail or '<no output captured>'}"
+            )
+            raise SnapProcessingError(msg, output_tail=tail) from e
         except Exception as e:
             target_file.unlink(missing_ok=True)
-            if isinstance(e, subprocess.CalledProcessError):
-                logger.exception(
-                    "GPT failed (exit %d):\nstdout: %s\nstderr: %s",
-                    e.returncode,
-                    e.stdout,
-                    e.stderr,
-                )
-                # Preserve SNAP's cause; CalledProcessError reports only the exit code.
-                detail = _extract_gpt_error(e.stdout, e.stderr) or "<no output captured>"
-                msg = f"GPT processing failed (exit {e.returncode}): {detail}"
-            else:
-                msg = f"GPT processing failed: {e}"
+            msg = f"GPT processing failed: {e}"
             raise SnapProcessingError(msg) from e
 
         if not target_file.exists():
             msg = f"Processing completed but output not found: {target_file}"
-            raise SnapProcessingError(msg)
+            raise SnapProcessingError(
+                msg,
+                returncode=result.returncode,
+                output_tail=_output_tail(result.stdout, result.stderr),
+            )
 
         return target_file
 
@@ -795,9 +864,7 @@ class SNAPClient:
                         normalize_nodata=config.replace_zeros_with_nan,
                     )
                 except _ITEM_ERRORS as e:
-                    result = _item_failure(burst, e)
-                    logger.exception("Failed to process burst '%s'", burst)
-                    return result
+                    return _item_failure(burst, e)
 
         logger.info("Successfully created '%s'", product_path.name)
         return OkResult(source=burst, result=product)
@@ -891,9 +958,7 @@ class SNAPClient:
                         normalize_nodata=config.replace_zeros_with_nan,
                     )
                 except _ITEM_ERRORS as e:
-                    result = _item_failure(pair, e)
-                    logger.exception("Failed to process burst pair '%s'", pair)
-                    return result
+                    return _item_failure(pair, e)
 
         logger.info("Successfully created '%s'", product_path.name)
         return OkResult(source=pair, result=product)
@@ -985,9 +1050,7 @@ class SNAPClient:
                         normalize_nodata=config.replace_zeros_with_nan,
                     )
                 except _ITEM_ERRORS as e:
-                    result = _item_failure(pair, e)
-                    logger.exception("Failed to process burst pair '%s'", pair)
-                    return result
+                    return _item_failure(pair, e)
 
         logger.info("Successfully created '%s'", product_path.name)
         return OkResult(source=pair, result=product)

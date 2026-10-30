@@ -8,11 +8,12 @@ or export the variables (e.g. ``uv run --env-file .env``).
 from __future__ import annotations
 
 import logging
+import math
 import os
 from pathlib import Path
 import tempfile
 
-from pydantic import Field, SecretStr, ValidationError
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from s1bursts.errors import ConfigurationError
@@ -91,6 +92,27 @@ class SNAPSettings(BaseSettings):
     # to fit inside; a ratio of 0 or below would disable caching entirely.
     cache_ratio: float = Field(default=0.70, gt=0, le=1)
     threads_per_job: int | None = Field(default=None, ge=1)
+    # Seconds one GPT run may take; "none" disables the limit.
+    timeout: float | None = Field(default=3600.0, gt=0)
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def _parse_timeout(cls, value: object) -> object:
+        """Read ``SNAP_TIMEOUT=none`` as no timeout, and reject an infinite or NaN one."""
+        if isinstance(value, str) and value.strip().lower() == "none":
+            return None
+        if not isinstance(value, (str, int, float)):
+            return value
+        try:
+            number = float(value)
+        except ValueError:
+            # Left for the field's own validation to report.
+            return value
+        # `inf` (or `1e400`) would read as a limit but never fire.
+        if not math.isfinite(number):
+            msg = "must be a finite number of seconds; set SNAP_TIMEOUT=none for no limit"
+            raise ValueError(msg)
+        return value
 
 
 class Settings(BaseSettings):
