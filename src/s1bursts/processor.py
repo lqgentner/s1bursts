@@ -143,6 +143,10 @@ class BurstProcessor:
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
             processed.
+        OSError, SnapProcessingError or RasterWriteError
+            If the disk is full, over quota or read-only, which would fail
+            every remaining item alike: an ``OSError`` saying so, or an error
+            caused by one or whose message or GPT output says so.
         """
         # Checked once, so an invalid CRS fails before any burst is processed.
         utm_crs = _utm_zone_crs(crs)
@@ -204,6 +208,10 @@ class BurstProcessor:
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
             processed.
+        OSError, SnapProcessingError or RasterWriteError
+            If the disk is full, over quota or read-only, which would fail
+            every remaining item alike: an ``OSError`` saying so, or an error
+            caused by one or whose message or GPT output says so.
         """
         cfg = config or CoherenceConfig()
         return self._process_collection(
@@ -253,6 +261,10 @@ class BurstProcessor:
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
             processed.
+        OSError, SnapProcessingError or RasterWriteError
+            If the disk is full, over quota or read-only, which would fail
+            every remaining item alike: an ``OSError`` saying so, or an error
+            caused by one or whose message or GPT output says so.
         """
         cfg = config or InterferogramConfig()
         return self._process_collection(

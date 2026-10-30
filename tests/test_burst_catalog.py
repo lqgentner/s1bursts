@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import TYPE_CHECKING, Literal
+import errno
+import os
+from typing import TYPE_CHECKING, Literal, cast
 from unittest.mock import MagicMock, patch
 
 from freezebase.errors import DownloadError
 from pandas import Timestamp
 import pytest
-from requests import HTTPError
+from requests import HTTPError, Request
 from shapely.geometry import box
 
 from s1bursts.burst import Burst, BurstCollection, BurstPair
@@ -185,8 +187,10 @@ class TestDownloadDispatch:
         # No download happened, so no CDSEAuth may have been created
         assert catalog.client.auth is None
 
-    def test_creates_auth_lazily_on_odata_download(self) -> None:
+    def test_creates_auth_lazily_on_odata_download(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """OData downloads build a CDSEAuth on first use, guarded to run once."""
+        monkeypatch.setenv("CDSE_USERNAME", "user")
+        monkeypatch.setenv("CDSE_PASSWORD", "pass")
         catalog = _make_catalog()
         catalog.client = MagicMock()
         catalog.client.auth = None
@@ -337,7 +341,7 @@ class TestStoppingADownload:
         with (
             patch.object(catalog, "_download_burst_odata", side_effect=odata),
             patch.object(catalog, "_download_burst_s3", side_effect=s3),
-            pytest.raises(HTTPError) as excinfo,
+            pytest.raises(BurstDownloadError) as excinfo,
         ):
             catalog.download(bursts, max_workers=2)
 
@@ -424,8 +428,13 @@ class TestEndpointWrappers:
         with pytest.raises(RuntimeError, match="bug"):
             catalog._download_burst_odata(burst)
 
-    def test_odata_without_credentials_returns_clear_error(self) -> None:
+    def test_odata_without_credentials_returns_clear_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """A missing-credentials failure surfaces as a per-burst BurstDownloadError."""
+        monkeypatch.delenv("CDSE_USERNAME", raising=False)
+        monkeypatch.delenv("CDSE_PASSWORD", raising=False)
         file_manager = MagicMock()
         file_manager.get_slc_path.return_value.exists.return_value = False
         catalog = BurstCatalog(file_manager=file_manager)
@@ -438,15 +447,13 @@ class TestEndpointWrappers:
             cdse_id="cdse-id",
         )
 
-        with patch(
-            "s1bursts.catalog.CDSEAuth",
-            side_effect=ConfigurationError("CDSE credentials not configured"),
-        ):
+        with patch("s1bursts.catalog.CDSEAuth") as mock_auth_cls:
             result = catalog._download_burst_odata(burst)
 
         assert isinstance(result, ErrorResult)
         assert isinstance(result.error, BurstDownloadError)
         assert "endpoint='s3'" in str(result.error)
+        mock_auth_cls.assert_not_called()
 
     def test_s3_without_credentials_returns_clear_error(self) -> None:
         """Missing S3 credentials surface per burst, so the OData fallback still runs.
@@ -596,87 +603,392 @@ class TestSearch:
             catalog.search(SearchQuery())
 
 
-def test_burst_not_found_is_cached_and_short_circuits() -> None:
-    """A deterministic BurstNotFoundError should not be re-fetched on the next request."""
-    catalog = _make_catalog()
-    burst = _make_burst()
+def _fail_both(
+    monkeypatch: pytest.MonkeyPatch,
+    catalog: BurstCatalog,
+    odata: Exception,
+    s3: Exception,
+) -> tuple[MagicMock, MagicMock]:
+    """Patch both endpoints of ``catalog`` to fail with the given errors."""
+    mock_odata = MagicMock(side_effect=lambda b, **_: ErrorResult(source=b, error=odata))
+    mock_s3 = MagicMock(side_effect=lambda b: ErrorResult(source=b, error=s3))
+    monkeypatch.setattr(catalog, "_download_burst_odata", mock_odata)
+    monkeypatch.setattr(catalog, "_download_burst_s3", mock_s3)
+    return mock_odata, mock_s3
 
-    with (
-        patch.object(
+
+class TestBothEndpointsFailing:
+    def test_the_error_names_both_endpoints(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Previously only the fallback's error was kept, blaming S3 for an OData outage."""
+        catalog = _make_catalog()
+        odata_error = HTTPError("503 Service Unavailable")
+        _fail_both(
+            monkeypatch,
             catalog,
-            "_download_burst_odata",
-            return_value=ErrorResult(source=burst, error=HTTPError("500 Server Error")),
-        ) as mock_primary,
-        patch.object(
+            odata_error,
+            BurstDownloadError("CDSE S3 credentials not configured."),
+        )
+
+        result = catalog._download_single_burst(_make_burst(), "odata")
+
+        assert isinstance(result, ErrorResult)
+        assert type(result.error) is BurstDownloadError
+        assert str(result.error) == (
+            "OData: HTTPError: 503 Service Unavailable; S3: CDSE S3 credentials not configured."
+        )
+        assert result.error.__cause__ is odata_error
+
+    def test_the_primary_endpoint_is_named_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        catalog = _make_catalog()
+        s3_error = OSError("connection reset")
+        _fail_both(monkeypatch, catalog, HTTPError("503 Service Unavailable"), s3_error)
+
+        result = catalog._download_single_burst(_make_burst(), "s3")
+
+        assert isinstance(result, ErrorResult)
+        assert str(result.error).startswith("S3: OSError: connection reset; OData: HTTPError")
+        assert result.error.__cause__ is s3_error
+
+    def test_without_continue_on_error_the_combined_error_is_raised(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog = _make_catalog()
+        catalog.continue_on_error = False
+        _fail_both(
+            monkeypatch,
             catalog,
-            "_download_burst_s3",
-            return_value=ErrorResult(source=burst, error=BurstNotFoundError("not found")),
-        ) as mock_fallback,
-    ):
+            HTTPError("503 Service Unavailable"),
+            HTTPError("502 Bad Gateway"),
+        )
+
+        with pytest.raises(BurstDownloadError, match=r"^OData: .*503.*; S3: .*502"):
+            catalog._download_single_burst(_make_burst(), "odata")
+
+    def test_a_burst_both_endpoints_miss_is_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A confirmed absence is not requested again from the same catalog."""
+        catalog = _make_catalog()
+        burst = _make_burst()
+        mock_odata, mock_s3 = _fail_both(
+            monkeypatch,
+            catalog,
+            BurstNotFoundError("no such burst"),
+            BurstNotFoundError("no such product"),
+        )
+
         first = catalog._download_single_burst(burst, "odata")
         second = catalog._download_single_burst(burst, "odata")
 
-    assert isinstance(first, ErrorResult)
-    assert isinstance(first.error, BurstNotFoundError)
-    assert isinstance(second, ErrorResult)
-    assert isinstance(second.error, BurstNotFoundError)
+        assert isinstance(first, ErrorResult)
+        assert isinstance(first.error, BurstNotFoundError)
+        assert str(first.error) == "OData: no such burst; S3: no such product"
+        assert isinstance(second, ErrorResult)
+        assert type(second.error) is type(first.error)
+        assert str(second.error) == str(first.error)
+        mock_odata.assert_called_once()
+        mock_s3.assert_called_once()
 
-    # Second call must hit the cache, not the download methods again.
-    mock_primary.assert_called_once()
-    mock_fallback.assert_called_once()
-
-
-def test_transient_failure_is_not_cached() -> None:
-    """A failure with no BurstNotFoundError anywhere should keep retrying."""
-    catalog = _make_catalog()
-    burst = _make_burst()
-
-    with (
-        patch.object(
+    @pytest.mark.parametrize("endpoint", ["odata", "s3"])
+    def test_a_burst_missing_from_one_endpoint_only_is_not_cached(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        endpoint: Literal["odata", "s3"],
+    ) -> None:
+        """Previously cached on one BurstNotFoundError, though the other failure was transient."""
+        catalog = _make_catalog()
+        burst = _make_burst()
+        mock_odata, mock_s3 = _fail_both(
+            monkeypatch,
             catalog,
-            "_download_burst_odata",
-            return_value=ErrorResult(source=burst, error=HTTPError("500 Server Error")),
-        ) as mock_primary,
-        patch.object(
+            HTTPError("503 Service Unavailable"),
+            BurstNotFoundError("not yet replicated"),
+        )
+
+        first = catalog._download_single_burst(burst, endpoint)
+        catalog._download_single_burst(burst, endpoint)
+
+        assert isinstance(first, ErrorResult)
+        assert type(first.error) is BurstDownloadError
+        assert mock_odata.call_count == 2
+        assert mock_s3.call_count == 2
+
+    def test_a_transient_failure_is_not_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        catalog = _make_catalog()
+        burst = _make_burst()
+        mock_odata, mock_s3 = _fail_both(
+            monkeypatch,
             catalog,
-            "_download_burst_s3",
-            return_value=ErrorResult(source=burst, error=HTTPError("connection reset")),
-        ) as mock_fallback,
-    ):
+            HTTPError("500 Server Error"),
+            HTTPError("connection reset"),
+        )
+
         catalog._download_single_burst(burst, "odata")
         catalog._download_single_burst(burst, "odata")
 
-    # No BurstNotFoundError was ever raised, so nothing should have been cached.
-    assert mock_primary.call_count == 2
-    assert mock_fallback.call_count == 2
+        assert mock_odata.call_count == 2
+        assert mock_s3.call_count == 2
 
 
-def test_burst_not_found_from_primary_endpoint_is_cached() -> None:
-    """BurstNotFoundError from the primary attempt (not just the fallback) must cache too."""
-    catalog = _make_catalog()
-    burst = _make_burst()
+def _odata_burst(day: int = 24) -> Burst:
+    return Burst(
+        burst_id=297227,
+        sub_swath="IW3",
+        polarization="VV",
+        date=Timestamp(f"2016-07-{day:02d}"),
+        cdse_id=f"cdse-{day}",
+        parent_product_name="S1A_IW_SLC__1SDV",
+    )
 
-    with (
-        patch.object(
+
+def _http_error(status: int) -> HTTPError:
+    response = MagicMock()
+    response.status_code = status
+    return HTTPError(f"{status} Client Error", response=response)
+
+
+class TestErrorClassification:
+    def test_odata_404_is_burst_not_found(self) -> None:
+        """Previously a plain HTTPError, so an absence both endpoints confirmed was not cached."""
+        catalog = _make_catalog()
+        catalog.client = MagicMock()
+        http_error = _http_error(404)
+        catalog.client.download_burst.side_effect = http_error
+
+        result = catalog._download_burst_odata(_odata_burst())
+
+        assert isinstance(result, ErrorResult)
+        assert isinstance(result.error, BurstNotFoundError)
+        assert "cdse-24" in str(result.error)
+        assert result.error.__cause__ is http_error
+
+    def test_another_odata_http_error_is_kept(self) -> None:
+        catalog = _make_catalog()
+        catalog.client = MagicMock()
+        http_error = _http_error(403)
+        catalog.client.download_burst.side_effect = http_error
+
+        result = catalog._download_burst_odata(_odata_burst())
+
+        assert isinstance(result, ErrorResult)
+        assert result.error is http_error
+
+    def test_a_malformed_product_is_recorded_per_burst(self) -> None:
+        """The extractor reports a malformed SAFE file as a BurstDownloadError."""
+        catalog = _make_catalog()
+        catalog.client = MagicMock()
+        malformed = BurstDownloadError("Malformed annotation in 'S1A_IW_SLC__1SDV': ...")
+        catalog.client.download_burst_from_s3.side_effect = malformed
+
+        result = catalog._download_burst_s3(_odata_burst())
+
+        assert isinstance(result, ErrorResult)
+        assert result.error is malformed
+
+    def test_a_type_error_outside_parsing_is_not_recorded(self) -> None:
+        """Only the extractor's parsing turns a TypeError into a per-burst failure."""
+        catalog = _make_catalog()
+        catalog.client = MagicMock()
+        catalog.client.download_burst_from_s3.side_effect = TypeError("bug")
+
+        with pytest.raises(TypeError, match="bug"):
+            catalog._download_burst_s3(_odata_burst())
+
+    @pytest.mark.parametrize("code", [errno.ENOSPC, errno.EDQUOT, errno.EROFS])
+    @pytest.mark.parametrize("endpoint", ["odata", "s3"])
+    def test_a_full_or_read_only_disk_fails_the_download(
+        self,
+        code: int,
+        endpoint: Literal["odata", "s3"],
+    ) -> None:
+        """Every remaining burst would fail alike, so it is not recorded per burst."""
+        catalog = _make_catalog()
+        catalog.show_progress = False
+        catalog.client = MagicMock()
+        disk_error = OSError(code, os.strerror(code))
+        catalog.client.download_burst.side_effect = disk_error
+        catalog.client.download_burst_from_s3.side_effect = disk_error
+
+        with pytest.raises(OSError, match=os.strerror(code)) as excinfo:
+            catalog.download(_odata_burst(), endpoint=endpoint)
+
+        assert excinfo.value is disk_error
+        assert "Stopped with 1 of 1 bursts finished" in excinfo.value.__notes__[0]
+
+    @pytest.mark.parametrize("endpoint", ["odata", "s3"])
+    def test_another_os_error_is_recorded_per_burst(
+        self,
+        endpoint: Literal["odata", "s3"],
+    ) -> None:
+        catalog = _make_catalog()
+        catalog.show_progress = False
+        catalog.client = MagicMock()
+        missing = FileNotFoundError(errno.ENOENT, "no such file")
+        catalog.client.download_burst.side_effect = missing
+        catalog.client.download_burst_from_s3.side_effect = missing
+
+        summary = catalog.download(_odata_burst(), endpoint=endpoint)
+
+        assert summary.n_failed == 1
+
+
+class TestRejectedCredentials:
+    @pytest.fixture
+    def catalog(self, monkeypatch: pytest.MonkeyPatch) -> BurstCatalog:
+        monkeypatch.setenv("CDSE_USERNAME", "user")
+        monkeypatch.setenv("CDSE_PASSWORD", "pass")
+        catalog = _make_catalog()
+        catalog.show_progress = False
+        catalog.client = MagicMock()
+        catalog.client.auth = None
+        return catalog
+
+    def test_a_rejected_login_fails_the_download_once(self, catalog: BurstCatalog) -> None:
+        """Previously recorded per burst as an HTTPError, logging in again for every burst."""
+        rejected = ConfigurationError("CDSE rejected the username and password (HTTP 401).")
+
+        with (
+            patch("s1bursts.catalog.CDSEAuth", side_effect=rejected) as mock_auth_cls,
+            pytest.raises(ConfigurationError, match="rejected") as excinfo,
+        ):
+            catalog.download([_odata_burst(day) for day in range(1, 7)], max_workers=3)
+
+        assert str(excinfo.value) == str(rejected)
+        mock_auth_cls.assert_called_once()
+        mock_client = cast("MagicMock", catalog.client)
+        mock_client.download_burst.assert_not_called()
+        mock_client.download_burst_from_s3.assert_not_called()
+
+    def test_the_next_download_logs_in_again(self, catalog: BurstCatalog) -> None:
+        """Credentials corrected after a rejection are used by the next call."""
+        with patch(
+            "s1bursts.catalog.CDSEAuth",
+            side_effect=[ConfigurationError("rejected"), MagicMock()],
+        ) as mock_auth_cls:
+            with pytest.raises(ConfigurationError, match="rejected"):
+                catalog.download(_odata_burst())
+            summary = catalog.download(_odata_burst())
+
+        assert summary.n_processed == 1
+        assert mock_auth_cls.call_count == 2
+
+    def test_a_rejected_fallback_login_is_recorded_per_burst(self, catalog: BurstCatalog) -> None:
+        """With S3 chosen, OData's rejected credentials must not stop S3 from working."""
+        mock_client = cast("MagicMock", catalog.client)
+        s3_error = OSError("connection reset")
+        mock_client.download_burst_from_s3.side_effect = [None, s3_error, s3_error]
+        rejected = ConfigurationError("CDSE rejected the username and password (HTTP 401).")
+
+        with patch("s1bursts.catalog.CDSEAuth", side_effect=rejected) as mock_auth_cls:
+            summary = catalog.download(
+                [_odata_burst(day) for day in range(1, 4)],
+                endpoint="s3",
+                max_workers=1,
+            )
+
+        assert summary.n_processed == 1
+        assert summary.n_failed == 2
+        for failure in summary.failed_items:
+            assert isinstance(failure.error, BurstDownloadError)
+            assert str(failure.error) == (
+                "S3: OSError: connection reset; OData: CDSE rejected the username and "
+                "password (HTTP 401)."
+            )
+        # One login attempt, however many bursts fall back to OData.
+        mock_auth_cls.assert_called_once()
+        mock_client.download_burst.assert_not_called()
+
+    def test_the_kept_rejection_is_never_the_raised_one(self, catalog: BurstCatalog) -> None:
+        """A note added to the raised error must not reach the copy kept for later bursts."""
+        with (
+            patch("s1bursts.catalog.CDSEAuth", side_effect=ConfigurationError("rejected")),
+            pytest.raises(ConfigurationError) as excinfo,
+        ):
+            catalog.download(_odata_burst())
+
+        assert excinfo.value.__notes__
+        kept = catalog._auth_rejected
+        assert kept is not None
+        assert kept is not excinfo.value
+        assert not hasattr(kept, "__notes__")
+
+
+class TestCachedAbsence:
+    def test_a_second_download_reports_the_absence_without_the_first_note(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Previously the cached error was the one raised, so its note came back."""
+        catalog = _make_catalog()
+        catalog.show_progress = False
+        catalog.continue_on_error = False
+        _fail_both(
+            monkeypatch,
             catalog,
-            "_download_burst_s3",
-            return_value=ErrorResult(source=burst, error=BurstNotFoundError("not found")),
-        ) as mock_primary,
-        patch.object(
-            catalog,
-            "_download_burst_odata",
-            return_value=ErrorResult(source=burst, error=HTTPError("500 Server Error")),
-        ) as mock_fallback,
-    ):
-        first = catalog._download_single_burst(burst, "s3")
-        second = catalog._download_single_burst(burst, "s3")
+            BurstNotFoundError("no such burst"),
+            BurstNotFoundError("no such product"),
+        )
+        burst = _make_burst()
 
-    # The first call still returns the terminal (fallback) result, matching
-    # existing behavior — but the BurstNotFoundError surfaced by the primary
-    # attempt is what gets cached.
-    assert isinstance(first, ErrorResult)
-    assert isinstance(first.error, HTTPError)
-    assert isinstance(second, ErrorResult)
-    assert isinstance(second.error, BurstNotFoundError)
-    mock_primary.assert_called_once()
-    mock_fallback.assert_called_once()
+        with pytest.raises(BurstNotFoundError) as excinfo:
+            catalog.download(burst)
+        summary = catalog.download(burst)
+
+        assert "Stopped with 1 of 1 bursts finished" in excinfo.value.__notes__[0]
+        error = summary.failed_items[0].error
+        assert isinstance(error, BurstNotFoundError)
+        assert str(error) == str(excinfo.value)
+        assert not hasattr(error, "__notes__")
+        assert error.__cause__ is excinfo.value.__cause__
+
+
+def _error_chain(error: BaseException) -> list[BaseException]:
+    """Return ``error`` and every error it was raised from or during."""
+    chain: list[BaseException] = []
+    pending: list[BaseException | None] = [error]
+    while pending:
+        current = pending.pop()
+        if current is None or any(current is seen for seen in chain):
+            continue
+        chain.append(current)
+        pending += [current.__cause__, current.__context__]
+    return chain
+
+
+class TestTokenRequestFailure:
+    def test_the_password_reaches_no_recorded_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Previously the token request's HTTPError, holding the request body, was recorded."""
+        password = "hunter2-secret"
+        monkeypatch.setenv("CDSE_USERNAME", "someone")
+        monkeypatch.setenv("CDSE_PASSWORD", password)
+        catalog = _make_catalog()
+        catalog.show_progress = False
+        catalog.client.auth = None
+        request = Request(
+            "POST",
+            "https://identity.example/token",
+            data={"username": "someone", "password": password},
+        ).prepare()
+        response = MagicMock()
+        response.status_code = 500
+        response.request = request
+        response.raise_for_status.side_effect = HTTPError(
+            "500 Server Error: Internal Server Error for url: https://identity.example/token",
+            response=response,
+        )
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            cdse_id="cdse-id",
+        )
+
+        with patch("s1bursts.cdse.requests.post", return_value=response):
+            summary = catalog.download(burst)
+
+        error = summary.failed_items[0].error
+        assert "500 Server Error" in str(error)
+        for link in _error_chain(error):
+            assert getattr(link, "request", None) is None
+            assert getattr(link, "response", None) is None
+            texts = [str(link), repr(link.args), *getattr(link, "__notes__", [])]
+            assert not any(password in text for text in texts)

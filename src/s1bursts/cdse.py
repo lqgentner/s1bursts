@@ -68,6 +68,33 @@ logger = logging.getLogger(__name__)
 _REFRESH_REJECTED_STATUS = frozenset({400, 401})
 """Identity-server responses that mean the refresh token is no longer accepted."""
 
+_LOGIN_REJECTED_STATUS = frozenset({400, 401, 403})
+"""Identity-server responses that mean the username and password are not accepted."""
+
+# Longest error description of the identity server quoted in an error message.
+_MAX_DESCRIPTION_CHARS = 200
+
+
+def _error_description(response: requests.Response) -> str | None:
+    """Return the ``error_description`` an OpenID Connect error response carries."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    description = body.get("error_description") if isinstance(body, dict) else None
+    if not isinstance(description, str) or not description.strip():
+        return None
+    return description.strip()[:_MAX_DESCRIPTION_CHARS]
+
+
+def _without_request(error: requests.RequestException) -> requests.RequestException:
+    """Copy a token-request error without its request, whose body holds a credential."""
+    try:
+        return type(error)(str(error))
+    except TypeError:
+        # A subclass whose constructor takes more than a message.
+        return requests.RequestException(str(error))
+
 
 class CDSEAuth(AuthBase):
     """CDSE authentication handler using OpenIDConnect bearer tokens.
@@ -87,7 +114,10 @@ class CDSEAuth(AuthBase):
     ------
     ConfigurationError
         If credentials are not provided as arguments and not found in the
-        environment.
+        environment, or if CDSE rejects them (HTTP 400, 401 or 403).
+    requests.RequestException
+        If the token request fails otherwise. The error keeps neither the
+        request nor the response, so that the password does not travel with it.
     """
 
     def __init__(self, username: str | None = None, password: str | None = None) -> None:
@@ -144,9 +174,20 @@ class CDSEAuth(AuthBase):
         """Check whether the current refresh token has expired."""
         return time.time() >= self.refresh_expires_at
 
-    @retry_request(logger=logger)
     def _get_initial_tokens(self) -> None:
-        """Request the initial access and refresh tokens."""
+        """Request the initial access and refresh tokens, keeping the password out of errors."""
+        failure: requests.RequestException | None = None
+        try:
+            self._request_initial_tokens()
+        except requests.RequestException as e:
+            failure = _without_request(e)
+        # Raised outside the except block, so the original is not kept as its context.
+        if failure is not None:
+            raise failure
+
+    @retry_request(logger=logger)
+    def _request_initial_tokens(self) -> None:
+        """Request the initial access and refresh tokens with the password grant."""
         data = {
             "client_id": "cdse-public",
             "username": self._username,
@@ -158,11 +199,33 @@ class CDSEAuth(AuthBase):
             data=data,
             timeout=self.request_timeout,
         )
+        if response.status_code in _LOGIN_REJECTED_STATUS:
+            # Raised outside an except block, so no chained HTTPError carries the
+            # request, whose body holds the password.
+            description = _error_description(response)
+            reason = f": {description}" if description else ""
+            msg = (
+                f"CDSE rejected the username and password (HTTP {response.status_code}"
+                f"{reason}). Check CDSE_USERNAME and CDSE_PASSWORD, or the credentials "
+                "passed to CDSEAuth."
+            )
+            raise ConfigurationError(msg)
         response.raise_for_status()
         self._update_tokens(response.json())
 
-    @retry_request(logger=logger)
     def _refresh_access_token(self) -> None:
+        """Refresh the access token, keeping the refresh token out of errors."""
+        failure: requests.RequestException | None = None
+        try:
+            self._request_refreshed_tokens()
+        except requests.RequestException as e:
+            failure = _without_request(e)
+        # Raised outside the except block, so the original is not kept as its context.
+        if failure is not None:
+            raise failure
+
+    @retry_request(logger=logger)
+    def _request_refreshed_tokens(self) -> None:
         """Refresh the access token using the refresh token."""
         if self._refresh_token_expired():
             logger.info("Refresh token expired, re-authenticating with stored credentials.")
@@ -504,6 +567,9 @@ class CDSEBurstClient:
             If ``sub_swath`` is not a recognised sub-swath identifier.
         BurstNotFoundError
             If the parent product or the requested burst cannot be found.
+        BurstDownloadError
+            If the product's annotation, calibration, noise, RFI or manifest
+            file is malformed.
         ConfigurationError
             If the CDSE S3 credentials are not configured.
         """

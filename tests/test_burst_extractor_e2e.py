@@ -13,11 +13,15 @@ golden record.
 
 from __future__ import annotations
 
+from decimal import InvalidOperation
 from itertools import count
 import json
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock
 
+from lxml import etree
 import numpy as np
 import pytest
 import requests
@@ -31,7 +35,7 @@ from s1bursts.burst_extractor import (
     extract_burst_from_s3,
 )
 from s1bursts.config import CDSES3Settings
-from s1bursts.errors import BurstNotFoundError, ConfigurationError
+from s1bursts.errors import BurstDownloadError, BurstNotFoundError, ConfigurationError
 from tests.fixtures.safe_product import ProductSpec, SyntheticProduct, build_product
 from tests.safe_conformance import check_burst_safe, digest, read_burst_safe
 
@@ -54,12 +58,15 @@ def extract(
         *,
         burst_index: int = 0,
         save_path: Path | UPath | None = None,
+        corrupt: Callable[[SyntheticProduct], None] | None = None,
     ) -> tuple[SyntheticProduct, Path | UPath]:
         # Variants of one spec can share a product name, so each build gets its
         # own directory.
         source = tmp_path / f"source-{next(builds)}"
         source.mkdir()
         product = build_product(source, spec)
+        if corrupt is not None:
+            corrupt(product)
 
         monkeypatch.setattr(extractor, "_lookup_s3_path", lambda _name: str(product.root))
         monkeypatch.setattr(extractor, "_make_s3_upath", lambda path, _settings: UPath(path))
@@ -390,3 +397,105 @@ class TestAnnotationLookup:
 
         with pytest.raises(BurstNotFoundError, match="found 2"):
             _glob_annotation_xml(UPath(product.root), "iw1", "vv")
+
+
+def _edit(path: Path, old: str, new: str) -> None:
+    """Replace the first match of the regular expression ``old`` in a file."""
+    text = path.read_text()
+    edited = re.sub(old, new, text, count=1, flags=re.DOTALL)
+    assert edited != text, f"{old!r} not found in {path.name}"
+    path.write_text(edited)
+
+
+def _annotation(product: SyntheticProduct) -> Path:
+    return product.root / "annotation" / product.annotation_name
+
+
+def _calibration(product: SyntheticProduct) -> Path:
+    return product.root / "annotation" / "calibration" / f"calibration-{product.annotation_name}"
+
+
+class TestMalformedProduct:
+    """A malformed SAFE file fails its burst with a BurstDownloadError, not the batch."""
+
+    @pytest.mark.parametrize(
+        ("corrupt", "cause", "what"),
+        [
+            pytest.param(
+                lambda product: _edit(_annotation(product), r"</product>\s*$", ""),
+                etree.XMLSyntaxError,
+                "annotation or manifest",
+                id="truncated-xml",
+            ),
+            pytest.param(
+                lambda product: _edit(
+                    _annotation(product),
+                    r"<linesPerBurst>\d+</linesPerBurst>",
+                    "<linesPerBurst>twelve</linesPerBurst>",
+                ),
+                ValueError,
+                "annotation or manifest",
+                id="non-numeric",
+            ),
+            pytest.param(
+                lambda product: _edit(
+                    _annotation(product), r"<linesPerBurst>\d+</linesPerBurst>", ""
+                ),
+                TypeError,
+                "annotation or manifest",
+                id="missing-element",
+            ),
+            pytest.param(
+                lambda product: _edit(
+                    product.root / "manifest.safe", r"<safe:number>\w+</safe:number>", ""
+                ),
+                IndexError,
+                "annotation or manifest",
+                id="missing-xpath-match",
+            ),
+            pytest.param(
+                lambda product: _edit(_calibration(product), r"<startTime>[^<]*</startTime>", ""),
+                AttributeError,
+                "calibration annotation",
+                id="missing-edited-element",
+            ),
+        ],
+    )
+    def test_a_malformed_file_is_a_download_error(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        corrupt: Callable[[SyntheticProduct], None],
+        cause: type[Exception],
+        what: str,
+    ) -> None:
+        """Previously raised the parse error itself, which aborted the whole download."""
+        with pytest.raises(BurstDownloadError, match=f"^Malformed {what} in 'S1") as excinfo:
+            extract(corrupt=corrupt)
+
+        assert isinstance(excinfo.value.__cause__, cause)
+
+    def test_an_invalid_decimal_is_a_download_error(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The orbital fallback computes in Decimal, whose invalid operations raise."""
+        monkeypatch.setattr(extractor, "_resolve_burst", MagicMock(side_effect=InvalidOperation))
+
+        with pytest.raises(BurstDownloadError, match="InvalidOperation") as excinfo:
+            extract()
+
+        assert isinstance(excinfo.value.__cause__, InvalidOperation)
+
+    def test_a_missing_burst_is_not_a_parse_error(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        missing = BurstNotFoundError("not in this product")
+        monkeypatch.setattr(extractor, "_resolve_burst", MagicMock(side_effect=missing))
+
+        with pytest.raises(BurstNotFoundError) as excinfo:
+            extract()
+
+        assert excinfo.value is missing
