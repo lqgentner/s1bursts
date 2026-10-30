@@ -40,7 +40,7 @@ from s1bursts import (
     SearchQuery,
     SNAPConfig,
 )
-from s1bursts.snap_graph import BackscatterConfig
+from s1bursts.snap_graph import RTCConfig
 from tests.opera_validation import (
     BLOCK,
     GRID_SPACING,
@@ -65,9 +65,9 @@ PER_ACQUISITION_LEVEL = "RTC"
 STATIC_LEVEL = "RTC-STATIC"
 
 
-def processing_config() -> BackscatterConfig:
+def processing_config() -> RTCConfig:
     """Graph configuration every scene is processed with."""
-    return BackscatterConfig(grid_spacing=GRID_SPACING)
+    return RTCConfig(grid_spacing=GRID_SPACING)
 
 
 def scene_fingerprint(scene: Scene) -> str:
@@ -204,10 +204,7 @@ def process(scene: Scene, acquisition: str, polarization: Polarization, work: Pa
         )
         raise RuntimeError(msg)
 
-    summary = database.download(bursts, endpoint="odata")
-    if summary.n_failed:
-        msg = f"download failed: {[str(item.error) for item in summary.failed_items]}"
-        raise RuntimeError(msg)
+    database.download(bursts, endpoint="odata").raise_on_failure()
 
     processor = BurstProcessor(
         manager,
@@ -221,9 +218,7 @@ def process(scene: Scene, acquisition: str, polarization: Polarization, work: Pa
         config=processing_config(),
         overwrite=True,
     )
-    if result.n_failed:
-        msg = f"processing failed: {[str(item.error) for item in result.failed_items]}"
-        raise RuntimeError(msg)
+    result.raise_on_failure()
 
     # `get_product_path` may hand back a UPath for remote stores; these
     # products are always local, so a plain string round-trip is safe.

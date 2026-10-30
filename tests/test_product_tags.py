@@ -34,7 +34,7 @@ from s1bursts.product import (
     RTCProduct,
 )
 from s1bursts.product_tags import RasterMetadata
-from s1bursts.snap_graph import BackscatterConfig, CoherenceConfig, InterferogramConfig
+from s1bursts.snap_graph import CoherenceConfig, GTCConfig, InterferogramConfig, RTCConfig
 
 _UTM32 = CRS.from_epsg(32632)
 _START = Timestamp("2020-01-01")
@@ -185,10 +185,8 @@ def _every_builder() -> dict[str, dict[str, str]]:
         "qa_num": product_tags.qa_metadata(_qa(QaMetric.NUM), **composite).tags,
         "qa_cqm": product_tags.qa_metadata(_qa(QaMetric.CQM), **composite).tags,
         "coh_qa": product_tags.qa_metadata(_coh_qa(QaMetric.NUM), **composite).tags,
-        "rtc_burst": product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags,
-        "gtc_burst": product_tags.backscatter_metadata(
-            _gtc_burst(), BackscatterConfig(flatten_terrain=False)
-        ).tags,
+        "rtc_burst": product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags,
+        "gtc_burst": product_tags.backscatter_metadata(_gtc_burst(), GTCConfig()).tags,
         "coh_burst": product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()).tags,
         "ifg_burst": product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig()).tags,
     }
@@ -250,7 +248,7 @@ class TestBackscatterScaling:
         assert decibel.units == ["dB"]
 
     def test_gtc_measures_beta_nought(self) -> None:
-        config = BackscatterConfig(flatten_terrain=False)
+        config = GTCConfig()
         tags = product_tags.backscatter_metadata(_gtc_burst(), config).tags
         assert tags["BACKSCATTER_MEASUREMENT"] == "Beta-0"
         assert tags["TERRAIN_CORRECTION"] == "Geometric"
@@ -259,10 +257,10 @@ class TestBackscatterScaling:
         # The band count comes from the config and the units from the product;
         # pairing them across a mismatch would silently misdescribe the file.
         with pytest.raises(ValueError, match="disagree on terrain flattening"):
-            product_tags.backscatter_metadata(_gtc_burst(), BackscatterConfig())
+            product_tags.backscatter_metadata(_gtc_burst(), RTCConfig())
 
     def test_rtc_measures_gamma_nought(self) -> None:
-        tags = product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags
+        tags = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
         assert tags["BACKSCATTER_MEASUREMENT"] == "Gamma-0"
         assert tags["TERRAIN_CORRECTION"] == "Radiometric and geometric"
 
@@ -585,7 +583,7 @@ class TestQaLayers:
 
 class TestBurstProducts:
     def test_rtc_names_the_scattering_area_band(self) -> None:
-        metadata = product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig())
+        metadata = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig())
         assert metadata.band_names == ["gamma0", "scattering_area"]
         assert metadata.units == ["linear power", ""]
         assert metadata.band_tags[1]["LAYER_NAME"] == "scattering_area"
@@ -593,7 +591,7 @@ class TestBurstProducts:
     def test_gtc_has_a_single_band(self) -> None:
         metadata = product_tags.backscatter_metadata(
             _gtc_burst(),
-            BackscatterConfig(flatten_terrain=False),
+            GTCConfig(),
         )
         assert metadata.band_names == ["beta0"]
         assert metadata.units == ["linear power"]
@@ -602,7 +600,7 @@ class TestBurstProducts:
     def test_multilook_is_recorded_when_applied(self) -> None:
         tags = product_tags.backscatter_metadata(
             _rtc_burst(),
-            BackscatterConfig(multilook=(5, 1)),
+            RTCConfig(multilook=(5, 1)),
         ).tags
         assert tags["MULTILOOK_RANGE"] == "5"
         assert tags["MULTILOOK_AZIMUTH"] == "1"
@@ -610,12 +608,12 @@ class TestBurstProducts:
     def test_no_multilook_emits_no_looks(self) -> None:
         tags = product_tags.backscatter_metadata(
             _rtc_burst(),
-            BackscatterConfig(multilook=None),
+            RTCConfig(multilook=None),
         ).tags
         assert "MULTILOOK_RANGE" not in tags
 
     def test_burst_identity_is_recorded(self) -> None:
-        tags = product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags
+        tags = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
         assert tags["BURST_ID"] == "30346"
         assert tags["SUB_SWATH"] == "IW1"
         assert tags["RELATIVE_ORBIT_NUMBER"] == "15"
@@ -627,14 +625,14 @@ class TestBurstProducts:
         # The acquisition geometry a user needs when handed one burst file on
         # its own. A composite mixes tracks, so it carries none.
         for metadata in (
-            product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()),
+            product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()),
             product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()),
             product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig()),
         ):
             assert metadata.tags["RELATIVE_ORBIT_NUMBER"] == "15"
 
     def test_a_builtin_dem_is_identified_by_its_snap_name(self) -> None:
-        config = BackscatterConfig(
+        config = RTCConfig(
             dem="Copernicus 30m Global DEM",
             dem_name="ignored for built-in DEMs",
         )
@@ -704,10 +702,8 @@ class TestBurstProducts:
     def test_every_per_burst_band_carries_its_name_as_layer_name(self) -> None:
         """One name per band: the description and the LAYER_NAME tag agree."""
         for metadata in (
-            product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()),
-            product_tags.backscatter_metadata(
-                _gtc_burst(), BackscatterConfig(flatten_terrain=False)
-            ),
+            product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()),
+            product_tags.backscatter_metadata(_gtc_burst(), GTCConfig()),
             product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()),
         ):
             assert [tags["LAYER_NAME"] for tags in metadata.band_tags] == metadata.band_names
@@ -725,8 +721,8 @@ class TestBurstDispatch:
     @pytest.mark.parametrize(
         ("product", "config", "product_type"),
         [
-            (_rtc_burst(), BackscatterConfig(), "RTC"),
-            (_gtc_burst(), BackscatterConfig(flatten_terrain=False), "GTC"),
+            (_rtc_burst(), RTCConfig(), "RTC"),
+            (_gtc_burst(), GTCConfig(), "GTC"),
             (_coh_burst(), CoherenceConfig(), "COH"),
             (_ifg_burst(), InterferogramConfig(), "IFG"),
         ],
@@ -743,6 +739,14 @@ class TestBurstDispatch:
     def test_a_mismatched_pair_raises(self) -> None:
         with pytest.raises(TypeError, match="cannot build metadata"):
             product_tags.burst_metadata(_rtc_burst(), CoherenceConfig())
+
+    @pytest.mark.parametrize(
+        ("product", "config"),
+        [(_rtc_burst(), GTCConfig()), (_gtc_burst(), RTCConfig())],
+    )
+    def test_a_backscatter_product_needs_its_own_config(self, product: Any, config: Any) -> None:
+        with pytest.raises(TypeError, match="cannot build metadata"):
+            product_tags.burst_metadata(product, config)
 
 
 class TestRasterMetadata:
@@ -767,7 +771,7 @@ class TestRasterMetadata:
                 n_observations=2,
             ).tags,
             product_tags.qa_metadata(_qa(QaMetric.CQM), aggregation="mean", n_observations=1).tags,
-            product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags,
+            product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags,
             product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()).tags,
             product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig()).tags,
         ):
@@ -787,13 +791,13 @@ class TestProvenance:
         assert tags["PIPELINE_SOFTWARE_URL"].startswith("https://github.com/")
 
     def test_burst_stamps_the_writing_package_too(self) -> None:
-        tags = product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags
+        tags = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
         assert tags["PIPELINE_SOFTWARE_VERSION"] == s1bursts.__version__
 
     def test_burst_records_the_snap_version(self) -> None:
         tags = product_tags.backscatter_metadata(
             _rtc_burst(),
-            BackscatterConfig(),
+            RTCConfig(),
             snap_version=(14, 0, 0),
         ).tags
         assert tags["PROCESSING_SOFTWARE"] == "ESA SNAP"
@@ -802,7 +806,7 @@ class TestProvenance:
     def test_an_undetermined_snap_version_is_stated_as_unknown(self) -> None:
         # Present but empty, so a reader can tell it was considered rather than
         # written by a version of this package that predates the tag.
-        tags = product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags
+        tags = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
         assert tags["PROCESSING_SOFTWARE_VERSION"] == product_tags.UNKNOWN
 
     def test_provenance_a_composite_cannot_establish_is_stated_as_unknown(self) -> None:
@@ -817,7 +821,7 @@ class TestProvenance:
 
     def test_the_snap_version_reaches_every_burst_product(self) -> None:
         for product, config in (
-            (_rtc_burst(), BackscatterConfig()),
+            (_rtc_burst(), RTCConfig()),
             (_coh_burst(), CoherenceConfig()),
             (_ifg_burst(), InterferogramConfig()),
         ):
@@ -825,7 +829,7 @@ class TestProvenance:
             assert tags["PROCESSING_SOFTWARE_VERSION"] == "13.0.0"
 
     def test_a_burst_is_level_two_over_an_l1_slc(self) -> None:
-        tags = product_tags.backscatter_metadata(_rtc_burst(), BackscatterConfig()).tags
+        tags = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
         assert tags["PRODUCT_LEVEL"] == "L2"
         assert tags["SOURCE_DATA_PRODUCT_LEVEL"] == "L1"
 
@@ -837,7 +841,7 @@ class TestProvenance:
     def test_a_composite_inherits_the_snap_version_from_its_inputs(self) -> None:
         source = product_tags.backscatter_metadata(
             _rtc_burst(),
-            BackscatterConfig(),
+            RTCConfig(),
             snap_version=(14, 0, 0),
         ).tags
         assert _lrw(source_tags=source)["PROCESSING_SOFTWARE_VERSION"] == "14.0.0"

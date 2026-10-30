@@ -232,8 +232,10 @@ show_missing = true
 # sources. Only the optional `validation` group needs ignoring: CI does not install it.
 [tool.pyrefly]
 project-includes = ["src/s1bursts", "tests"]
-# Repo root, so `tests.*` helper modules resolve the way pytest imports them.
-search-path = [".", "src"]
+# `src` first, so a package module has the one name it is imported by
+# (`s1bursts.x`, not `src.s1bursts.x`); the repo root then resolves the
+# `tests.*` helper modules the way pytest imports them.
+search-path = ["src", "."]
 preset = "strict"
 python-version = "3.12"
 ignore-missing-imports = ["asf_search", "hyp3_sdk"]

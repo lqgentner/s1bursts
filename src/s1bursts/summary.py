@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 from rich.console import Console
+from rich.markup import escape
 from rich.padding import Padding
 from rich.table import Table
+
+from s1bursts.errors import OperationFailedError
 
 if TYPE_CHECKING:
     from collections.abc import Collection
 
 MIN_S = 60
+# A failure group shows its error's first line up to this length, and this many
+# of its sources; GPT messages can run to pages.
+_MAX_MESSAGE_CHARS = 120
+_EXAMPLES_PER_GROUP = 3
 
 
 @dataclass
@@ -131,6 +138,45 @@ class OperationSummary[T]:
             processing_time=end_time - start_time,
         )
 
+    def raise_on_failure(
+        self,
+        ignore: type[BaseException] | tuple[type[BaseException], ...] = (),
+    ) -> Self:
+        """Raise if any item failed, otherwise return the summary.
+
+        Runs after the batch, when every product that could be made has been
+        written, and raises one error listing all failures. Running the batch
+        again skips the existing products and retries only the failed items,
+        except bursts a ``BurstDatabase`` already found missing at the source,
+        which the same database reports as failed again without a retry.
+        Returning the summary lets the check sit inside a call chain, as in
+        ``processor.create_coherences(pairs, crs=crs).raise_on_failure().products``.
+
+        Parameters
+        ----------
+        ignore
+            Error type, or tuple of types, whose failures are tolerated, such
+            as ``BurstNotFoundError`` for bursts the source no longer serves.
+            They do not raise, and stay in ``failed_items``.
+
+        Returns
+        -------
+        Self
+            This summary, unchanged.
+
+        Raises
+        ------
+        OperationFailedError
+            If any item failed with an error that is not ignored. Its message
+            lists those items and their errors and counts the ignored ones; its
+            ``summary`` is this summary, so ``err.summary.products`` still
+            holds the products that were made.
+        """
+        ignored = ignore if isinstance(ignore, tuple) else (ignore,)
+        if all(isinstance(r.error, ignored) for r in self.failed_items):
+            return self
+        raise OperationFailedError(self, ignore=ignored)
+
     def print_summary(self, console: Console | None = None) -> None:
         """Print formatted summary table.
 
@@ -157,9 +203,28 @@ class OperationSummary[T]:
 
         if self.failed_items:
             console.print("Failed Items:", style="red bold")
-            for result in self.failed_items:
-                exc_name = type(result.error).__name__
-                console.print(Padding(f"• {result.source}:", (0, 0, 0, 2)))
+            for (exc_name, message), results in _group_failures(self.failed_items):
+                text = f"{exc_name}: {message}" if message else exc_name
+                # The multiplication sign reads as a count, which an x does not.
+                count = f"{len(results)} ×"  # noqa: RUF001
                 console.print(
-                    Padding(f"[bold red]{exc_name}:[/bold red] {result.error}", (0, 0, 0, 4)),
+                    Padding(f"• {count} [bold red]{escape(text)}[/bold red]", (0, 0, 0, 2)),
                 )
+                examples = ", ".join(str(r.source) for r in results[:_EXAMPLES_PER_GROUP])
+                more = ", …" if len(results) > _EXAMPLES_PER_GROUP else ""
+                console.print(Padding(escape(f"e.g. {examples}{more}"), (0, 0, 0, 4)))
+
+
+def _group_failures(
+    failed: list[ErrorResult],
+) -> list[tuple[tuple[str, str], list[ErrorResult]]]:
+    """Group failures by error type and first message line, most frequent first."""
+    groups: dict[tuple[str, str], list[ErrorResult]] = {}
+    for result in failed:
+        lines = str(result.error).strip().splitlines()
+        message = lines[0] if lines else ""
+        if len(message) > _MAX_MESSAGE_CHARS:
+            message = message[: _MAX_MESSAGE_CHARS - 1] + "…"
+        groups.setdefault((type(result.error).__name__, message), []).append(result)
+    # Stable, so groups of equal size keep the order they first failed in.
+    return sorted(groups.items(), key=lambda group: -len(group[1]))

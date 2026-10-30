@@ -12,6 +12,7 @@ from s1bursts.errors import (
     BurstNotInMapError,
     CatalogError,
     ConfigurationError,
+    OperationFailedError,
     S1BurstsError,
     SnapProcessingError,
     TooManyResultsError,
@@ -86,3 +87,9 @@ def test_burst_error_handler_does_not_catch_configuration_error() -> None:
 
     with pytest.raises(ConfigurationError):
         batch_handler()
+
+
+def test_operation_failed_error_is_not_a_per_item_error() -> None:
+    """Raised once a batch has finished, so batch handlers must not record it per item."""
+    assert issubclass(OperationFailedError, S1BurstsError)
+    assert not issubclass(OperationFailedError, BurstError)

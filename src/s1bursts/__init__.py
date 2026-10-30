@@ -10,6 +10,7 @@ search, processing, and compositing services, and the configs they take.
 
 from importlib.metadata import version as _version
 
+from s1bursts.burst import utm_zone_of
 from s1bursts.burstmap import download_burst_map
 from s1bursts.database import BurstDatabase
 from s1bursts.dem import prepare_dem_for_snap
@@ -22,7 +23,9 @@ from s1bursts.snap_graph import (
     BackscatterConfig,
     CoherenceConfig,
     GeocodingConfig,
+    GTCConfig,
     InterferogramConfig,
+    RTCConfig,
 )
 from s1bursts.time_range import TimeRange
 
@@ -34,12 +37,15 @@ __all__ = [
     "BurstProcessor",
     "CoherenceConfig",
     "FileManager",
+    "GTCConfig",
     "GeocodingConfig",
     "InterferogramConfig",
+    "RTCConfig",
     "ResolutionWeighter",
     "SNAPConfig",
     "SearchQuery",
     "TimeRange",
     "download_burst_map",
     "prepare_dem_for_snap",
+    "utm_zone_of",
 ]

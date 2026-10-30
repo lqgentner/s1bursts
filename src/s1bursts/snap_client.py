@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, overload
 import zipfile
 
 from freezebase.errors import RasterWriteError
@@ -38,7 +38,7 @@ from s1bursts.product import (
     InterferogramProduct,
     RTCProduct,
 )
-from s1bursts.snap_graph import NODATA_SENTINEL
+from s1bursts.snap_graph import NODATA_SENTINEL, GTCConfig, RTCConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationResult
 
 if TYPE_CHECKING:
@@ -50,11 +50,7 @@ if TYPE_CHECKING:
     from s1bursts.config import SNAPSettings
     from s1bursts.filemanager import FileManager
     from s1bursts.product_tags import RasterMetadata
-    from s1bursts.snap_graph import (
-        BackscatterConfig,
-        CoherenceConfig,
-        InterferogramConfig,
-    )
+    from s1bursts.snap_graph import CoherenceConfig, InterferogramConfig
 
 logger = logging.getLogger(__name__)
 
@@ -644,29 +640,51 @@ class SNAPClient:
         finally:
             _rasterio_logger.setLevel(_prev_level)
 
+    @overload
     def create_backscatter(
         self,
         burst: Burst,
         crs: CRSInput,
         *,
-        config: BackscatterConfig,
+        config: RTCConfig,
         overwrite: bool = False,
-    ) -> OperationResult[RTCProduct | GTCProduct]:
-        """Compute the backscatter (RTC or GTC) product from a burst.
+    ) -> OperationResult[RTCProduct]: ...
 
-        ``config.flatten_terrain=True`` (default) produces an RTC product;
-        ``False`` produces a GTC product.  All other graph-shape settings
-        (DEM, multilook, resampling, …) come from ``config``.
+    @overload
+    def create_backscatter(
+        self,
+        burst: Burst,
+        crs: CRSInput,
+        *,
+        config: GTCConfig,
+        overwrite: bool = False,
+    ) -> OperationResult[GTCProduct]: ...
+
+    def create_backscatter(
+        self,
+        burst: Burst,
+        crs: CRSInput,
+        *,
+        config: RTCConfig | GTCConfig,
+        overwrite: bool = False,
+    ) -> OperationResult[RTCProduct] | OperationResult[GTCProduct]:
+        """Compute backscatter from a burst, terrain-flattened (RTC) or geocoded (GTC).
+
+        The type of ``config`` selects the product: an ``RTCConfig`` gives an
+        ``RTCProduct``, terrain-flattened gamma-0 backscatter; a ``GTCConfig``
+        a ``GTCProduct``, beta-0 backscatter that is geocoded only.
 
         Parameters
         ----------
         burst
             Burst to process.
         crs
-            The coordinate reference system of the geocoded output, as a CRS
-            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system of the geocoded output, a WGS 84 /
+            UTM zone, north or south, which product file names record. Given as
+            a CRS object, an authority string such as ``"EPSG:32632"`` or an
+            EPSG code.
         config
-            Graph-shape configuration.
+            Graph-shape configuration, ``RTCConfig`` or ``GTCConfig``.
         overwrite
             Whether to overwrite existing product.
 
@@ -674,14 +692,34 @@ class SNAPClient:
         -------
         OperationResult
             Result of the backscatter processing.
+
+        Raises
+        ------
+        TypeError
+            If ``config`` is neither an ``RTCConfig`` nor a ``GTCConfig``.
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
+            because it would fail every burst.
         """
-        product: RTCProduct | GTCProduct
-        if config.flatten_terrain:
-            product = RTCProduct.from_burst(burst, crs=crs)
-            label = "RTC"
-        else:
-            product = GTCProduct.from_burst(burst, crs=crs)
-            label = "GTC"
+        if isinstance(config, RTCConfig):
+            rtc = RTCProduct.from_burst(burst, crs=crs)
+            return self._create_backscatter(burst, rtc, config, overwrite=overwrite)
+        if isinstance(config, GTCConfig):
+            gtc = GTCProduct.from_burst(burst, crs=crs)
+            return self._create_backscatter(burst, gtc, config, overwrite=overwrite)
+        msg = f"`config` must be an RTCConfig or a GTCConfig, received '{type(config).__name__}'."
+        raise TypeError(msg)
+
+    def _create_backscatter[P: RTCProduct | GTCProduct](
+        self,
+        burst: Burst,
+        product: P,
+        config: RTCConfig | GTCConfig,
+        *,
+        overwrite: bool,
+    ) -> OperationResult[P]:
+        """Run the backscatter graph of ``config`` for ``product``."""
+        label = product.product_type
         product_path = self.manager.get_product_path(product)
 
         if not overwrite and self.manager.product_exists(product):
@@ -746,8 +784,10 @@ class SNAPClient:
         pair
             Burst pair to process.
         crs
-            The coordinate reference system of the geocoded output, as a CRS
-            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system of the geocoded output, a WGS 84 /
+            UTM zone, north or south, which product file names record. Given as
+            a CRS object, an authority string such as ``"EPSG:32632"`` or an
+            EPSG code.
         config
             Graph-shape configuration (window size, DEM, …).
         overwrite
@@ -757,6 +797,12 @@ class SNAPClient:
         -------
         OperationResult
             Result of the coherence processing.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
+            because it would fail every burst.
         """
         product = CoherenceProduct.from_burst_pair(pair, crs=crs)
         product_path = self.manager.get_product_path(product)
@@ -827,8 +873,10 @@ class SNAPClient:
         pair
             Burst pair to process.
         crs
-            The coordinate reference system of the geocoded output, as a CRS
-            object, an authority string such as ``"EPSG:32632"`` or an EPSG code.
+            The coordinate reference system of the geocoded output, a WGS 84 /
+            UTM zone, north or south, which product file names record. Given as
+            a CRS object, an authority string such as ``"EPSG:32632"`` or an
+            EPSG code.
         config
             Graph-shape configuration.
         overwrite
@@ -838,6 +886,12 @@ class SNAPClient:
         -------
         OperationResult
             Result of the interferogram processing.
+
+        Raises
+        ------
+        ValueError
+            If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
+            because it would fail every burst.
         """
         product = InterferogramProduct.from_burst_pair(pair, crs=crs)
         product_path = self.manager.get_product_path(product)

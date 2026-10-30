@@ -25,11 +25,11 @@ import pytest
 import rasterio
 
 from s1bursts import (
-    BackscatterConfig,
     BurstDatabase,
     BurstProcessor,
     CoherenceConfig,
     FileManager,
+    GTCConfig,
     InterferogramConfig,
     SearchQuery,
     SNAPConfig,
@@ -398,7 +398,7 @@ class TestSnapProcessing:
             show_progress=False,
             continue_on_error=False,
         )
-        config = BackscatterConfig(flatten_terrain=False)
+        config = GTCConfig()
 
         summary = processor.create_backscatter(
             downloaded_bursts,

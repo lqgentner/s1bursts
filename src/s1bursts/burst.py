@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload, override
 import warnings
 
+from freezebase.mgrs import UTMZones
 import geopandas as gpd
+import numpy as np
+from odc.geo.geobox import GeoBoxBase
+from odc.geo.geom import Geometry
 import pandas as pd
 from pandas import DataFrame, Series, Timedelta, Timestamp
+from pyproj import CRS, Transformer
+import shapely
 
 from s1bursts import ui
 from s1bursts.burstmap import (
@@ -22,11 +29,14 @@ from s1bursts.errors import BurstNotInMapError
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterator
 
+    from numpy.typing import NDArray
     from shapely import MultiPolygon, Polygon
+    from shapely.geometry.base import BaseGeometry
 
     from s1bursts.burstmap import Mode
     from s1bursts.cdse import CDSEResponse
     from s1bursts.query import PassDirection, Polarization, SubSwath
+    from s1bursts.time_range import TimeRange
 
 
 class BurstFootprintMixin:
@@ -188,6 +198,105 @@ _FOOTPRINT_ALIASES = {
     "pass_direction": "_pass_direction",
     "geometry": "_geometry",
 }
+
+# Collection columns that may be empty, in which case the burst map supplies them.
+_FOOTPRINT_COLUMNS = frozenset(_FOOTPRINT_ALIASES)
+# Time and area have dedicated selections; equality on them is rarely meant.
+_UNFILTERABLE_COLUMNS = frozenset({"geometry", "date", "date_1", "date_2"})
+
+# The CRS of every footprint.
+_WGS84 = CRS.from_epsg(4326)
+
+# Footprint edges are densified to steps of at most this many degrees, about
+# 11 km, before they are projected, so they keep their course in the new CRS.
+_FOOTPRINT_STEP_DEG = 0.1
+# A footprint is torn when one densified step is stretched by the CRS this many
+# times more than the footprint's median step, both measured against their
+# length on the ground. Over a global grid of burst footprints in 20 CRSs
+# (Mercator, UTM, polar stereographic, LAEA, LCC, Albers, Mollweide, Robinson,
+# state plane in feet, geographic CRSs with a shifted prime meridian or
+# lon_wrap), every footprint across a CRS's cut stretched one step 550 times
+# or more, and every other footprint at most 22 times, except where a conic
+# CRS is used beyond 88 degrees from its own hemisphere's equator or in the
+# other hemisphere, far outside any area it serves.
+_MAX_STEP_STRETCH = 100.0
+_EARTH_RADIUS_M = 6_371_000.0
+
+
+def _intersecting_mask(
+    footprints: NDArray[np.object_],
+    geometry: BaseGeometry | Geometry | GeoBoxBase,
+) -> NDArray[np.bool_]:
+    """Return which WGS 84 footprints intersect ``geometry``, tested in its own CRS."""
+    if isinstance(geometry, GeoBoxBase):
+        geometry = geometry.extent
+    crs: CRS | None = None
+    if isinstance(geometry, Geometry):
+        area: BaseGeometry = geometry.geom
+        if geometry.crs is not None:
+            crs = CRS.from_user_input(geometry.crs.to_wkt())
+    else:
+        area = geometry
+    if crs is None or crs == _WGS84:
+        return shapely.intersects(footprints, area)
+    # The footprints are projected rather than the area: a projected area keeps
+    # its shape, around a pole or across the antimeridian alike, where its
+    # outline in longitude and latitude would not.
+    transformer = Transformer.from_crs(_WGS84, crs, always_xy=True)
+    dense = shapely.segmentize(footprints, _FOOTPRINT_STEP_DEG)
+    projected = shapely.transform(
+        dense,
+        lambda xy: np.column_stack(transformer.transform(xy[:, 0], xy[:, 1])),
+    )
+    usable = _representable(dense, projected)
+    mask = np.zeros(len(footprints), dtype=bool)
+    mask[usable] = shapely.intersects(projected[usable], area)
+    return mask
+
+
+def _representable(
+    lon_lat: NDArray[np.object_],
+    projected: NDArray[np.object_],
+) -> NDArray[np.bool_]:
+    """Return which projected footprints have finite coordinates and no torn edge.
+
+    A CRS that cuts the globe somewhere other than the antimeridian, at the far
+    side of a cylinder or cone or at a shifted prime meridian, tears a footprint
+    across the cut into a band spanning the map. The step across the cut is
+    stretched far beyond the footprint's others; projections stretch smoothly.
+    """
+    ground, ring, shape_of_ring = _ring_coordinates(lon_lat)
+    xy, _, _ = _ring_coordinates(projected)
+    finite = np.isfinite(xy).all(axis=1)
+    # Non-finite vertices are flagged already; zeroed, they cannot warn here.
+    steps = np.hypot(*np.diff(np.where(finite[:, None], xy, 0.0), axis=0).T)
+    lengths = _ground_lengths(ground)
+    measured = (ring[1:] == ring[:-1]) & (lengths > 0)
+    stretch = steps[measured] / lengths[measured]
+    stretch_ring = ring[1:][measured]
+    median = pd.Series(stretch).groupby(stretch_ring).transform("median").to_numpy()
+    torn = stretch_ring[stretch > _MAX_STEP_STRETCH * median]
+    usable = np.ones(len(projected), dtype=bool)
+    usable[shape_of_ring[np.concatenate([ring[~finite], torn])]] = False
+    return usable
+
+
+def _ring_coordinates(
+    shapes: NDArray[np.object_],
+) -> tuple[NDArray[np.float64], NDArray[np.intp], NDArray[np.intp]]:
+    """Return the coordinates of every ring, the ring of each, and the shape of each ring."""
+    parts, part_of = shapely.get_parts(shapes, return_index=True)
+    rings, ring_of = shapely.get_rings(parts, return_index=True)
+    coords, coord_of = shapely.get_coordinates(rings, return_index=True)
+    return coords, coord_of, part_of[ring_of]
+
+
+def _ground_lengths(lon_lat: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Return the approximate ground length in metres between consecutive vertices."""
+    lon, lat = np.radians(lon_lat[:, 0]), np.radians(lon_lat[:, 1])
+    dlon = (np.diff(lon) + np.pi) % (2 * np.pi) - np.pi
+    mean_lat = (lat[1:] + lat[:-1]) / 2
+    return _EARTH_RADIUS_M * np.hypot(dlon * np.cos(mean_lat), np.diff(lat))
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -443,6 +552,75 @@ class BurstPair:
         return (self.secondary.date - self.primary.date).round("D").days
 
 
+def utm_zone_of(burst: Burst | BurstPair) -> CRS:
+    """Return the WGS 84 / UTM zone that holds a burst's footprint.
+
+    The zone is the one containing the centre of the footprint, by the zone
+    boundaries of ``freezebase.mgrs.UTMZones``, the ones the MGRS grid uses,
+    Norway and Svalbard exceptions included. A centre on a border between two
+    zones takes the eastern one, and one on the equator the northern
+    hemisphere. Use it as the ``crs`` of ``BurstProcessor.create_*`` for
+    bursts processed on their own. For a time series, call it once and reuse
+    the zone: each acquisition has its own footprint, so the dates of a burst
+    near a zone border can fall on different sides of it. Do not use it for
+    products meant for a composite: those take the target cell's zone,
+    ``crs=cell.crs``, which need not be the zone of every burst.
+
+    Parameters
+    ----------
+    burst
+        Burst or burst pair whose footprint to locate.
+
+    Returns
+    -------
+    pyproj.CRS
+        The UTM zone, such as EPSG:32632 for zone 32 north.
+
+    Raises
+    ------
+    ValueError
+        If the centre lies outside the UTM zones, north of 84 degrees or south
+        of 80 degrees.
+    BurstMapUnavailableError
+        If the footprint was not propagated and the burst map has not been
+        downloaded (see ``s1bursts.burstmap.download_burst_map``).
+    BurstNotInMapError
+        If the burst is not found in the burst map.
+    """
+    longitude, latitude = _footprint_centre(burst.geometry)
+    zones = UTMZones().find_intersecting(shapely.Point(longitude, latitude))
+    zones = zones[zones.hemisphere == ("N" if latitude >= 0 else "S")]
+    if zones.empty:
+        msg = f"No UTM zone covers the footprint centre at {longitude:.4f}, {latitude:.4f}."
+        raise ValueError(msg)
+    # Zone numbers grow eastward and a centre in [-180, 180) never touches both
+    # zone 60 and zone 1, so the largest number is the eastern zone.
+    return CRS.from_epsg(int(zones.epsg.max()))
+
+
+# Longitude of the antimeridian, where footprints are split.
+_ANTIMERIDIAN = 180.0
+
+
+def _unwrap_longitudes[G: BaseGeometry](shape: G) -> G:
+    """Move negative longitudes by a full turn, joining the halves of a split geometry."""
+    return shapely.transform(
+        shape,
+        lambda xy: np.column_stack([np.where(xy[:, 0] < 0, xy[:, 0] + 360, xy[:, 0]), xy[:, 1]]),
+    )
+
+
+def _footprint_centre(footprint: Polygon | MultiPolygon) -> tuple[float, float]:
+    """Return the longitude and latitude of a footprint's centroid, across the antimeridian too."""
+    west, _, east, _ = footprint.bounds
+    # A footprint split at the antimeridian spans nearly the whole globe; moved
+    # to 0-360 degrees, its halves join again.
+    if east - west > _ANTIMERIDIAN:
+        footprint = _unwrap_longitudes(footprint)
+    centre = footprint.centroid
+    return (centre.x + _ANTIMERIDIAN) % 360.0 - _ANTIMERIDIAN, centre.y
+
+
 class _BaseBurstCollection[TEntry]:
     """Base class for burst collections with shared functionality.
 
@@ -546,6 +724,123 @@ class _BaseBurstCollection[TEntry]:
             return type(self)(self.df.iloc[index])
         return self._row_to_entry(self.df.iloc[index])
 
+    def _subset(self, mask: Iterable[bool]) -> Self:
+        """Return a new collection of the rows where ``mask`` is true."""
+        return type(self)(self.df[np.fromiter(mask, dtype=bool, count=len(self.df))])
+
+    def _dates_within(self, column: str, time_range: TimeRange) -> Self:
+        """Return the entries whose ``column`` falls on a day of ``time_range``."""
+        return self._subset(date in time_range for date in self.df[column])
+
+    def intersecting(self, geometry: BaseGeometry | Geometry | GeoBoxBase) -> Self:
+        """Select the entries whose footprint intersects a geometry.
+
+        A footprint that only touches the geometry counts as intersecting it.
+        A footprint the collection does not carry is looked up in the burst
+        map.
+
+        Parameters
+        ----------
+        geometry
+            Area to intersect. A shapely geometry is taken as WGS 84 longitude
+            and latitude, the coordinates of ``SearchQuery(intersects=...)``.
+            An ``odc.geo`` ``Geometry`` is tested in its own CRS (one without a
+            CRS is taken as WGS 84 as well), so a polar or near-global area
+            keeps its shape; a footprint that CRS cannot represent, because it
+            lies on the far side of the globe or across the CRS's cut, does not
+            intersect it. A ``GeoBox``, such as an MGRS cell's ``MGRSGeoBox``,
+            stands for its extent. An area in WGS 84 is compared as it is, in
+            longitudes from -180 to 180 like the footprints: one written as
+            170 to 190 degrees east misses the footprints west of the
+            antimeridian, so split it there.
+
+        Returns
+        -------
+        Self
+            New collection of the intersecting entries, possibly empty.
+
+        Raises
+        ------
+        BurstMapUnavailableError
+            If a footprint is missing and the burst map has not been downloaded
+            (see ``s1bursts.burstmap.download_burst_map``).
+        BurstNotInMapError
+            If a missing footprint's burst is not in the burst map.
+        """
+        footprints = self._resolved_column("geometry").to_numpy(dtype=object)
+        return self._subset(_intersecting_mask(footprints, geometry))
+
+    def filter(self, **fields: object) -> Self:
+        """Select the entries whose fields equal the given values.
+
+        Each keyword names a column of ``df`` and gives the value to keep, or
+        any iterable of values to keep any of, such as a list, a set, a NumPy
+        array or a pandas Series. A string is one value. Entries must match every
+        keyword. A relative orbit number or pass direction the collection does
+        not carry is looked up in the burst map. Select by time and area with
+        the dedicated methods instead.
+
+        Parameters
+        ----------
+        **fields
+            Column names and the values to keep, such as
+            ``rel_orbit_number=66``, ``sub_swath=["IW1", "IW2"]`` or
+            ``rel_orbit_number=other.df.rel_orbit_number.unique()``.
+
+        Returns
+        -------
+        Self
+            New collection of the matching entries, possibly empty.
+
+        Raises
+        ------
+        ValueError
+            If a keyword is not a column that can be filtered on.
+        BurstMapUnavailableError
+            If a relative orbit number or pass direction is missing and the
+            burst map has not been downloaded (see
+            ``s1bursts.burstmap.download_burst_map``).
+        BurstNotInMapError
+            If such a missing value's burst is not in the burst map.
+        """
+        filterable = self._filterable_columns()
+        unknown = sorted(set(fields) - set(filterable))
+        if unknown:
+            msg = (
+                f"Cannot filter on {', '.join(map(repr, unknown))}. "
+                f"Filterable fields are {', '.join(filterable)}."
+            )
+            raise ValueError(msg)
+        mask = pd.Series(data=True, index=self.df.index)
+        for column, value in fields.items():
+            # Any iterable but a string is a set of values: arrays, Series, ranges, generators.
+            many = isinstance(value, Iterable) and not isinstance(value, (str, bytes))
+            values = list(value) if many else [value]
+            mask &= self._resolved_column(column).isin(values)
+        return self._subset(mask)
+
+    def _filterable_columns(self) -> list[str]:
+        """Return the columns ``filter`` accepts: the public ones but time and area."""
+        return [
+            c
+            for c in self._ALL_COLUMNS
+            if c not in _UNFILTERABLE_COLUMNS and not c.startswith("_")
+        ]
+
+    def _resolved_column(self, column: str) -> Series:
+        """Return a column, with missing footprint values looked up in the burst map."""
+        values = self.df[column]
+        if column not in _FOOTPRINT_COLUMNS:
+            return values
+        missing = values.isna()
+        if not missing.any():
+            return values
+        resolved = values.astype(object)
+        resolved[missing] = [
+            getattr(self._row_to_entry(row), column) for _, row in self.df[missing].iterrows()
+        ]
+        return resolved
+
     def _repr_html_(self) -> str:
         """Return the rich HTML representation."""
         unique_footprints = self.df.drop_duplicates(
@@ -629,14 +924,14 @@ class BurstCollection(_BaseBurstCollection[Burst]):
         "cdse_id",
         "parent_product_name",
         "geometry",
-        "_rel_orbit_number",
-        "_pass_direction",
+        "rel_orbit_number",
+        "pass_direction",
         "_lines_per_burst",
         "_samples_per_burst",
     ]
     _OPTIONAL_COLUMNS: ClassVar[list[str]] = [
-        "_rel_orbit_number",
-        "_pass_direction",
+        "rel_orbit_number",
+        "pass_direction",
         # Burst pixel dimensions, propagated from CDSE and used only to pick the
         # most complete of near-identical-timestamp duplicates.
         "_lines_per_burst",
@@ -649,6 +944,22 @@ class BurstCollection(_BaseBurstCollection[Burst]):
     def __init__(self, df: gpd.GeoDataFrame | None = None) -> None:
         super().__init__(df)
         self._remove_timestamp_duplicates()
+
+    def within(self, time_range: TimeRange) -> Self:
+        """Select the bursts acquired on a day of a time range.
+
+        Parameters
+        ----------
+        time_range
+            Inclusive window of calendar days. A burst is kept when the UTC
+            day of its acquisition falls in it, as for ``SearchQuery``.
+
+        Returns
+        -------
+        Self
+            New collection of the bursts in the window, possibly empty.
+        """
+        return self._dates_within("date", time_range)
 
     @staticmethod
     def _validate_pair_search(baseline: Timedelta, max_delta: Timedelta) -> None:
@@ -751,7 +1062,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
     @override
     def _row_to_entry(row: Series) -> Burst:
         """Convert a DataFrame row to a Burst instance."""
-        rel_orbit = _scalar_or_none(row.get("_rel_orbit_number"))
+        rel_orbit = _scalar_or_none(row.get("rel_orbit_number"))
         return Burst(
             date=cast("Timestamp", row["date"]),
             burst_id=cast("int", row["burst_id"]),
@@ -766,7 +1077,7 @@ class BurstCollection(_BaseBurstCollection[Burst]):
             _rel_orbit_number=None if rel_orbit is None else int(rel_orbit),
             _pass_direction=cast(
                 "PassDirection | None",
-                _scalar_or_none(row.get("_pass_direction")),
+                _scalar_or_none(row.get("pass_direction")),
             ),
             _geometry=cast("Polygon | MultiPolygon | None", _scalar_or_none(row.get("geometry"))),
         )
@@ -819,8 +1130,8 @@ class BurstCollection(_BaseBurstCollection[Burst]):
                 "parent_product_name": cdse_df["parent_product_name"],
                 "geometry": cdse_df["geometry"],
                 # Propagated from CDSE so footprint properties need no LUT lookup.
-                "_rel_orbit_number": cdse_df["relative_orbit_number"],
-                "_pass_direction": cdse_df["orbit_direction"].str.capitalize(),
+                "rel_orbit_number": cdse_df["relative_orbit_number"],
+                "pass_direction": cdse_df["orbit_direction"].str.capitalize(),
                 # Used only to resolve near-identical-timestamp duplicates.
                 "_lines_per_burst": cdse_df["lines_per_burst"],
                 "_samples_per_burst": cdse_df["samples_per_burst"],
@@ -845,8 +1156,8 @@ class BurstCollection(_BaseBurstCollection[Burst]):
                 "parent_product_name": burst.parent_product_name,
                 # Stored overrides, not the LUT-backed properties, to avoid a burst-map load.
                 "geometry": burst._geometry,  # noqa: SLF001
-                "_rel_orbit_number": burst._rel_orbit_number,  # noqa: SLF001
-                "_pass_direction": burst._pass_direction,  # noqa: SLF001
+                "rel_orbit_number": burst._rel_orbit_number,  # noqa: SLF001
+                "pass_direction": burst._pass_direction,  # noqa: SLF001
             }
             for burst in bursts
         ]
@@ -940,27 +1251,46 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
         "parent_product_name_1",
         "parent_product_name_2",
         "geometry",
-        "_rel_orbit_number",
-        "_pass_direction",
+        "rel_orbit_number",
+        "pass_direction",
     ]
     # Footprint overrides propagated from CDSE (shared by both bursts of a pair);
     # optional so raw-dataframe callers need not supply them.
-    _OPTIONAL_COLUMNS: ClassVar[list[str]] = ["_rel_orbit_number", "_pass_direction"]
+    _OPTIONAL_COLUMNS: ClassVar[list[str]] = ["rel_orbit_number", "pass_direction"]
     # Entry names for display
     _ENTRY_NAME_SINGULAR: ClassVar[str] = "Burst pair"
     _ENTRY_NAME_PLURAL: ClassVar[str] = "Burst pairs"
+
+    def starting_within(self, time_range: TimeRange) -> Self:
+        """Select the pairs whose primary burst was acquired on a day of a time range.
+
+        The secondary burst may fall after the window, so a pair spanning its
+        end is kept.
+
+        Parameters
+        ----------
+        time_range
+            Inclusive window of calendar days, compared with the UTC day of the
+            primary acquisition (``date_1``).
+
+        Returns
+        -------
+        Self
+            New collection of the pairs starting in the window, possibly empty.
+        """
+        return self._dates_within("date_1", time_range)
 
     @staticmethod
     @override
     def _row_to_entry(row: Series) -> BurstPair:
         """Convert a DataFrame row to a BurstPair instance."""
         # Footprint overrides are shared by both bursts of the pair.
-        rel_orbit = _scalar_or_none(row.get("_rel_orbit_number"))
+        rel_orbit = _scalar_or_none(row.get("rel_orbit_number"))
         overrides: dict[str, Any] = {
             "_rel_orbit_number": None if rel_orbit is None else int(rel_orbit),
             "_pass_direction": cast(
                 "PassDirection | None",
-                _scalar_or_none(row.get("_pass_direction")),
+                _scalar_or_none(row.get("pass_direction")),
             ),
             "_geometry": cast(
                 "Polygon | MultiPolygon | None",
@@ -1032,8 +1362,8 @@ class BurstPairCollection(_BaseBurstCollection[BurstPair]):
                 "parent_product_name_2": pair.secondary.parent_product_name,
                 # Stored overrides from the primary burst (not the LUT properties).
                 "geometry": pair.primary._geometry,  # noqa: SLF001
-                "_rel_orbit_number": pair.primary._rel_orbit_number,  # noqa: SLF001
-                "_pass_direction": pair.primary._pass_direction,  # noqa: SLF001
+                "rel_orbit_number": pair.primary._rel_orbit_number,  # noqa: SLF001
+                "pass_direction": pair.primary._pass_direction,  # noqa: SLF001
             }
             for pair in pairs
         ]

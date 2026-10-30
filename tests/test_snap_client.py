@@ -35,9 +35,10 @@ from s1bursts.snap_client import (
 )
 from s1bursts.snap_graph import (
     NODATA_SENTINEL,
-    BackscatterConfig,
     CoherenceConfig,
+    GTCConfig,
     InterferogramConfig,
+    RTCConfig,
 )
 from s1bursts.summary import ErrorResult, OkResult
 
@@ -586,7 +587,7 @@ class TestCreateBackscatter:
             result = client.create_backscatter(
                 burst,
                 crs=self.CRS_UTM32,
-                config=BackscatterConfig(),
+                config=RTCConfig(),
             )
 
         assert isinstance(result, OkResult)
@@ -610,11 +611,21 @@ class TestCreateBackscatter:
             result = client.create_backscatter(
                 burst,
                 crs=self.CRS_UTM32,
-                config=BackscatterConfig(flatten_terrain=False),
+                config=GTCConfig(),
             )
 
         assert isinstance(result, OkResult)
         assert result.result.product_type == "GTC"
+
+    def test_rejects_a_config_that_is_not_rtc_or_gtc(self, client: SNAPClient) -> None:
+        with pytest.raises(TypeError, match="must be an RTCConfig or a GTCConfig"):
+            # The wrong type is what is under test.
+            # pyrefly: ignore [no-matching-overload]
+            client.create_backscatter(
+                _make_burst("2022-01-01"),
+                crs=self.CRS_UTM32,
+                config=CoherenceConfig(),
+            )
 
     def test_skips_existing_product(self, client: SNAPClient) -> None:
         cast("MagicMock", client.manager).product_exists.return_value = True
@@ -623,7 +634,7 @@ class TestCreateBackscatter:
             result = client.create_backscatter(
                 _make_burst("2022-01-01"),
                 crs=self.CRS_UTM32,
-                config=BackscatterConfig(),
+                config=RTCConfig(),
             )
 
         assert isinstance(result, OkResult)
@@ -641,7 +652,7 @@ class TestCreateBackscatter:
             result = client.create_backscatter(
                 burst,
                 crs=self.CRS_UTM32,
-                config=BackscatterConfig(),
+                config=RTCConfig(),
             )
 
         assert isinstance(result, ErrorResult)
@@ -662,7 +673,7 @@ class TestCreateBackscatter:
             result = client.create_backscatter(
                 burst,
                 crs=self.CRS_UTM32,
-                config=BackscatterConfig(),
+                config=RTCConfig(),
             )
 
         assert isinstance(result, ErrorResult)
@@ -678,7 +689,7 @@ class TestCreateBackscatter:
             client.create_backscatter(
                 _make_burst("2022-01-01"),
                 crs=self.CRS_UTM32,
-                config=BackscatterConfig(),
+                config=RTCConfig(),
             )
 
 
@@ -816,6 +827,35 @@ class TestFinalizeProduct:
             band = ds.read(1)
         assert np.isnan(band[0, 1])
         assert np.array_equal(band[[0, 1, 1], [0, 0, 1]], [1.0, 2.0, 3.0])
+
+
+class TestRejectsNonUtmCrs:
+    """A CRS product file names cannot hold fails the call, not just one burst."""
+
+    def test_backscatter(self, client: SNAPClient) -> None:
+        with (
+            patch.object(client, "_run_gpt") as mock_gpt,
+            pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"),
+        ):
+            client.create_backscatter(
+                _make_burst("2022-01-01"),
+                crs="EPSG:25832",
+                config=RTCConfig(),
+            )
+
+        mock_gpt.assert_not_called()
+
+    def test_coherence(self, client: SNAPClient) -> None:
+        pair = BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
+
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
+            client.create_coherence(pair, crs="EPSG:3035", config=CoherenceConfig())
+
+    def test_interferogram(self, client: SNAPClient) -> None:
+        pair = BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
+
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
+            client.create_interferogram(pair, crs=4326, config=InterferogramConfig())
 
 
 class TestCreateCoherence:

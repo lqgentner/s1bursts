@@ -13,6 +13,7 @@ import pytest
 from s1bursts.errors import ConfigurationError, SnapProcessingError
 from s1bursts.processor import BurstProcessor
 from s1bursts.snap_client import SNAPConfig
+from s1bursts.snap_graph import CoherenceConfig, GTCConfig, RTCConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationSummary
 
 if TYPE_CHECKING:
@@ -201,6 +202,36 @@ class TestDispatch:
         cast("MagicMock", processor.snap_client).create_backscatter.assert_called_once()
         assert summary.products == ["rtc"]
 
+    def test_create_backscatter_defaults_to_rtc(self, processor: BurstProcessor) -> None:
+        client = cast("MagicMock", processor.snap_client)
+        client.create_backscatter.return_value = OkResult(source="b", result="rtc")
+
+        processor.create_backscatter([MagicMock()], crs="EPSG:32632")
+
+        assert isinstance(client.create_backscatter.call_args.kwargs["config"], RTCConfig)
+
+    def test_create_backscatter_passes_a_gtc_config_on(self, processor: BurstProcessor) -> None:
+        client = cast("MagicMock", processor.snap_client)
+        client.create_backscatter.return_value = OkResult(source="b", result="gtc")
+        config = GTCConfig(multilook=None)
+
+        summary = processor.create_backscatter(
+            [MagicMock()],
+            crs="EPSG:32632",
+            config=config,
+        )
+
+        assert client.create_backscatter.call_args.kwargs["config"] is config
+        assert summary.products == ["gtc"]
+
+    def test_create_backscatter_rejects_another_config(self, processor: BurstProcessor) -> None:
+        with pytest.raises(TypeError, match="must be an RTCConfig or a GTCConfig"):
+            # The wrong type is what is under test.
+            # pyrefly: ignore [no-matching-overload]
+            processor.create_backscatter([MagicMock()], crs="EPSG:32632", config=CoherenceConfig())
+
+        cast("MagicMock", processor.snap_client).create_backscatter.assert_not_called()
+
     def test_create_coherences(self, processor: BurstProcessor) -> None:
         pair = MagicMock()
         cast("MagicMock", processor.snap_client).create_coherence.return_value = OkResult(
@@ -224,6 +255,48 @@ class TestDispatch:
 
         cast("MagicMock", processor.snap_client).create_interferogram.assert_called_once()
         assert summary.products == ["ifg"]
+
+    @pytest.mark.parametrize(
+        "method",
+        ["create_backscatter", "create_coherences", "create_interferograms"],
+    )
+    @pytest.mark.parametrize(
+        "crs",
+        [
+            pytest.param("EPSG:3035", id="laea-europe"),
+            pytest.param(4326, id="geographic"),
+            pytest.param("EPSG:25832", id="etrs89-utm"),
+        ],
+    )
+    def test_crs_that_is_not_a_wgs84_utm_zone_fails_before_processing(
+        self,
+        processor: BurstProcessor,
+        method: str,
+        crs: str | int,
+    ) -> None:
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
+            getattr(processor, method)([MagicMock()], crs=crs)
+
+        assert not cast("MagicMock", processor.snap_client).method_calls
+
+    @pytest.mark.parametrize(
+        "method",
+        ["create_backscatter", "create_coherences", "create_interferograms"],
+    )
+    def test_crs_is_checked_even_without_items(
+        self,
+        processor: BurstProcessor,
+        method: str,
+    ) -> None:
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
+            getattr(processor, method)([], crs="EPSG:3035")
+
+    @pytest.mark.parametrize(
+        "crs",
+        ["EPSG:32601", 32760, "+proj=utm +zone=32 +south +datum=WGS84 +units=m"],
+    )
+    def test_accepts_any_wgs84_utm_zone(self, processor: BurstProcessor, crs: str | int) -> None:
+        processor.create_backscatter([], crs=crs)
 
     def test_invalid_crs_fails_before_processing(self, processor: BurstProcessor) -> None:
         with pytest.raises(CRSError):

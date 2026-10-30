@@ -72,6 +72,16 @@ class TestBackscatterProducts:
 
         assert product.crs == CRS_UTM32
 
+    @pytest.mark.parametrize("product_cls", [RTCProduct, GTCProduct])
+    @pytest.mark.parametrize("crs", ["EPSG:25832", "EPSG:3035", 4326])
+    def test_from_burst_rejects_a_crs_that_is_not_a_wgs84_utm_zone(
+        self,
+        product_cls: type[RTCProduct | GTCProduct],
+        crs: str | int,
+    ) -> None:
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
+            product_cls.from_burst(make_burst("2022-01-01"), crs=crs)
+
     def test_direct_construction_normalizes_crs_like(self) -> None:
         product = RTCProduct(
             BURST_ID, SUB_SWATH, rasterio.crs.CRS.from_epsg(32632), Timestamp("2022-01-01"), "VV"
@@ -196,6 +206,14 @@ class TestCoregisteredProducts:
         assert product.date_primary == Timestamp("2022-01-01")
         assert product.date_secondary == Timestamp("2022-01-13")
         assert product.baseline_days == 12
+
+    @pytest.mark.parametrize("product_cls", [CoherenceProduct, InterferogramProduct])
+    def test_from_burst_pair_rejects_a_utm_zone_on_another_datum(
+        self,
+        product_cls: type[CoherenceProduct | InterferogramProduct],
+    ) -> None:
+        with pytest.raises(ValueError, match="received 'ETRS89 / UTM zone 32N'"):
+            product_cls.from_burst_pair(self.make_pair(), crs="EPSG:25832")
 
     def test_from_burst_pair_carries_pass_direction_and_crs_string(self) -> None:
         primary, secondary = (
