@@ -17,20 +17,15 @@ import pytest
 import s1bursts
 from s1bursts import product_tags
 from s1bursts.product import (
-    RTCLRWQA,
     CoherenceProduct,
     CohLRWComposite,
-    CohLRWQA,
     CohPassComposite,
-    CohPassQA,
     GTCPassComposite,
-    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
-    QaMetric,
+    Layer,
     RTCLRWComposite,
     RTCPassComposite,
-    RTCPassQA,
     RTCProduct,
 )
 from s1bursts.product_tags import RasterMetadata
@@ -57,27 +52,6 @@ def _coh_lrw() -> CohLRWComposite:
         end_date=_END,
         polarization="VV",
         baseline_days=12,
-    )
-
-
-def _qa(metric: QaMetric) -> RTCLRWQA:
-    return RTCLRWQA(
-        mgrs_code="32TMS03",
-        start_date=_START,
-        end_date=_END,
-        polarization="VV",
-        qa_metric=metric,
-    )
-
-
-def _coh_qa(metric: QaMetric) -> CohLRWQA:
-    return CohLRWQA(
-        mgrs_code="32TMS03",
-        start_date=_START,
-        end_date=_END,
-        polarization="VV",
-        baseline_days=12,
-        qa_metric=metric,
     )
 
 
@@ -186,9 +160,9 @@ def _every_builder() -> dict[str, dict[str, str]]:
         "rtc_pass": product_tags.rtc_pass_metadata(_rtc_pass(), decibel=False, **unweighted).tags,
         "gtc_pass": product_tags.gtc_pass_metadata(_gtc_pass(), decibel=False, **unweighted).tags,
         "coh_pass": product_tags.coh_pass_metadata(_coh_pass(), **unweighted).tags,
-        "qa_num": product_tags.qa_metadata(_qa(QaMetric.NUM), **composite).tags,
-        "qa_cqm": product_tags.qa_metadata(_qa(QaMetric.CQM), **composite).tags,
-        "coh_qa": product_tags.qa_metadata(_coh_qa(QaMetric.NUM), **composite).tags,
+        "qa_num": product_tags.qa_metadata(_rtc_lrw(), Layer.QA_NUM, **composite).tags,
+        "qa_cqm": product_tags.qa_metadata(_rtc_lrw(), Layer.QA_CQM, **composite).tags,
+        "coh_qa": product_tags.qa_metadata(_coh_lrw(), Layer.QA_NUM, **composite).tags,
         "rtc_burst": product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags,
         "gtc_burst": product_tags.backscatter_metadata(_gtc_burst(), GTCConfig()).tags,
         "coh_burst": product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()).tags,
@@ -332,7 +306,7 @@ class TestGTCPass:
         assert meta.band_names == ["VV"]
 
     def test_qa_metadata_accepts_gtc_pass_qa(self) -> None:
-        qa = GTCPassQA(
+        qa = GTCPassComposite(
             mgrs_code="32TMS25",
             start_date=Timestamp("2019-01-01"),
             end_date=Timestamp("2019-01-31"),
@@ -345,7 +319,7 @@ class TestGTCPass:
             "PROCESSING_SOFTWARE_VERSION": "14.0",
         }
         tags = product_tags.qa_metadata(
-            qa, aggregation="mean", n_observations=3, source_tags=source
+            qa, Layer.QA_NUM, aggregation="mean", n_observations=3, source_tags=source
         ).tags
         assert tags["PRODUCT_TYPE"] == "GTC_COMP_D_QA-NUM"
         assert tags["PASS_DIRECTION"] == "Descending"
@@ -490,11 +464,11 @@ class TestCoherenceStatistics:
 class TestQaLayers:
     def _num(self, **kwargs: Any) -> dict[str, str]:
         defaults: dict[str, Any] = {"aggregation": "median", "n_observations": 6}
-        return product_tags.qa_metadata(_qa(QaMetric.NUM), **(defaults | kwargs)).tags
+        return product_tags.qa_metadata(_rtc_lrw(), Layer.QA_NUM, **(defaults | kwargs)).tags
 
     def _cqm(self, **kwargs: Any) -> dict[str, str]:
         defaults: dict[str, Any] = {"aggregation": "median", "n_observations": 6}
-        return product_tags.qa_metadata(_qa(QaMetric.CQM), **(defaults | kwargs)).tags
+        return product_tags.qa_metadata(_rtc_lrw(), Layer.QA_CQM, **(defaults | kwargs)).tags
 
     def test_num_carries_no_scaling_tags(self) -> None:
         # The PFS prose for 2.21 lists a dB-scaling expression, but the metadata
@@ -515,7 +489,8 @@ class TestQaLayers:
 
     def test_num_band_is_dimensionless(self) -> None:
         metadata = product_tags.qa_metadata(
-            _qa(QaMetric.NUM),
+            _rtc_lrw(),
+            Layer.QA_NUM,
             aggregation="median",
             n_observations=6,
         )
@@ -542,13 +517,8 @@ class TestQaLayers:
 
     def test_pass_qa_is_unweighted_and_counts_finite_values(self) -> None:
         tags = product_tags.qa_metadata(
-            RTCPassQA(
-                mgrs_code="32TMS03",
-                start_date=_START,
-                end_date=_END,
-                polarization="VV",
-                pass_direction="Ascending",
-            ),
+            _rtc_pass(),
+            Layer.QA_NUM,
             aggregation="mean",
             n_observations=2,
         ).tags
@@ -557,12 +527,33 @@ class TestQaLayers:
         assert "holding a finite value" in tags["LAYER_DESCRIPTION"]
         assert tags["PASS_DIRECTION"] == "Ascending"
 
+    def test_each_layer_names_its_own_product_type(self) -> None:
+        # The tag matches the file name token, as when every layer was its own product.
+        assert self._num()["PRODUCT_TYPE"] == "RTC_LRW_QA-NUM"
+        assert self._cqm()["PRODUCT_TYPE"] == "RTC_LRW_QA-CQM"
+
+    @pytest.mark.parametrize(
+        ("product", "layer"),
+        [
+            (_rtc_lrw(), Layer.MEASUREMENT),
+            (_rtc_pass(), Layer.QA_CQM),
+        ],
+    )
+    def test_rejects_a_layer_that_is_not_a_qa_layer_of_the_product(
+        self,
+        product: RTCLRWComposite | RTCPassComposite,
+        layer: Layer,
+    ) -> None:
+        with pytest.raises(ValueError, match=f"has no QA layer {layer.name}"):
+            product_tags.qa_metadata(product, layer, aggregation="mean", n_observations=1)
+
     def test_lrw_qa_counts_weighted_contributions(self) -> None:
         assert "non-zero resolution weight" in self._num()["LAYER_DESCRIPTION"]
 
     def test_coherence_qa_takes_the_coherence_family(self) -> None:
         tags = product_tags.qa_metadata(
-            _coh_qa(QaMetric.CQM),
+            _coh_lrw(),
+            Layer.QA_CQM,
             aggregation="median",
             n_observations=4,
         ).tags
@@ -570,7 +561,7 @@ class TestQaLayers:
 
     def test_coherence_pass_qa_carries_the_direction(self) -> None:
         tags = product_tags.qa_metadata(
-            CohPassQA(
+            CohPassComposite(
                 mgrs_code="32TMS03",
                 start_date=_START,
                 end_date=_END,
@@ -578,6 +569,7 @@ class TestQaLayers:
                 pass_direction="Descending",
                 baseline_days=12,
             ),
+            Layer.QA_NUM,
             aggregation="mean",
             n_observations=2,
         ).tags
@@ -775,7 +767,9 @@ class TestRasterMetadata:
                 clip_max_resolution=1.0,
                 n_observations=2,
             ).tags,
-            product_tags.qa_metadata(_qa(QaMetric.CQM), aggregation="mean", n_observations=1).tags,
+            product_tags.qa_metadata(
+                _rtc_lrw(), Layer.QA_CQM, aggregation="mean", n_observations=1
+            ).tags,
             product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags,
             product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()).tags,
             product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig()).tags,
