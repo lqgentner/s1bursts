@@ -2,23 +2,34 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 import threading
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+from pandas import Timestamp
 from pyproj.exceptions import CRSError
 import pytest
+import rasterio
+import rasterio.transform
 
-from s1bursts.errors import SnapProcessingError
+from s1bursts import product_tags
+from s1bursts.burst import Burst, BurstPair
+from s1bursts.errors import ProductSettingsMismatchError, SnapProcessingError
+from s1bursts.filemanager import FileManager
 from s1bursts.processor import BurstProcessor
+from s1bursts.product import CoherenceProduct, InterferogramProduct, RTCProduct
 from s1bursts.snap_client import SNAPConfig
-from s1bursts.snap_graph import CoherenceConfig, GTCConfig, RTCConfig
+from s1bursts.snap_graph import CoherenceConfig, GTCConfig, InterferogramConfig, RTCConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationSummary
 from tests.gated_pool import Gate
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from upath import UPath
 
 
 @pytest.fixture
@@ -38,7 +49,24 @@ def processor(config: SNAPConfig) -> Iterator[BurstProcessor]:
     with patch("s1bursts.processor.SNAPClient") as mock_client_cls:
         proc = BurstProcessor(MagicMock(), config, show_progress=False)
         proc.snap_client = mock_client_cls.return_value
+        cast("MagicMock", proc.manager).product_exists.return_value = False
         yield proc
+
+
+def _burst(date: str, burst_id: int = 30346) -> Burst:
+    """Build a burst carrying its orbit and pass direction, as a search returns it."""
+    return Burst(
+        burst_id=burst_id,
+        sub_swath="IW1",
+        polarization="VV",
+        date=Timestamp(date),
+        _rel_orbit_number=66,
+        _pass_direction="Ascending",
+    )
+
+
+def _pair() -> BurstPair:
+    return BurstPair(_burst("2022-01-05"), _burst("2022-01-17"))
 
 
 class TestSNAPConfig:
@@ -290,7 +318,7 @@ class TestDispatch:
     """The create_* methods must call the matching SNAPClient method per item."""
 
     def test_create_backscatter(self, processor: BurstProcessor) -> None:
-        burst = MagicMock()
+        burst = _burst("2022-01-05")
         cast("MagicMock", processor.snap_client).create_backscatter.return_value = OkResult(
             source=burst,
             result="rtc",
@@ -305,7 +333,7 @@ class TestDispatch:
         client = cast("MagicMock", processor.snap_client)
         client.create_backscatter.return_value = OkResult(source="b", result="rtc")
 
-        processor.create_backscatter([MagicMock()], crs="EPSG:32632")
+        processor.create_backscatter([_burst("2022-01-05")], crs="EPSG:32632")
 
         assert isinstance(client.create_backscatter.call_args.kwargs["config"], RTCConfig)
 
@@ -315,7 +343,7 @@ class TestDispatch:
         config = GTCConfig(multilook=None)
 
         summary = processor.create_backscatter(
-            [MagicMock()],
+            [_burst("2022-01-05")],
             crs="EPSG:32632",
             config=config,
         )
@@ -332,7 +360,7 @@ class TestDispatch:
         cast("MagicMock", processor.snap_client).create_backscatter.assert_not_called()
 
     def test_create_coherences(self, processor: BurstProcessor) -> None:
-        pair = MagicMock()
+        pair = _pair()
         cast("MagicMock", processor.snap_client).create_coherence.return_value = OkResult(
             source=pair,
             result="coh",
@@ -344,7 +372,7 @@ class TestDispatch:
         assert summary.products == ["coh"]
 
     def test_create_interferograms(self, processor: BurstProcessor) -> None:
-        pair = MagicMock()
+        pair = _pair()
         cast("MagicMock", processor.snap_client).create_interferogram.return_value = OkResult(
             source=pair,
             result="ifg",
@@ -402,3 +430,179 @@ class TestDispatch:
             processor.create_backscatter([MagicMock()], crs="EPSG:32632x")
 
         cast("MagicMock", processor.snap_client).create_backscatter.assert_not_called()
+
+
+def _write_product(
+    path: Path | UPath,
+    product: RTCProduct | CoherenceProduct | InterferogramProduct,
+    config: RTCConfig | CoherenceConfig | InterferogramConfig,
+    *,
+    snap_version: tuple[int, ...] | None = None,
+    tagged: bool = True,
+) -> None:
+    """Write a one-pixel stand-in of ``product`` as ``config`` would have made it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tags = product_tags.burst_metadata(product, config, snap_version=snap_version).tags
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=1,
+        height=1,
+        count=1,
+        dtype="float32",
+        crs=product.crs,
+        transform=rasterio.transform.from_origin(400000.0, 5200000.0, 10.0, 10.0),
+    ) as dst:
+        dst.write(np.ones((1, 1, 1), dtype="float32"))
+        if tagged:
+            dst.update_tags(**tags)
+
+
+class TestSkipSettings:
+    """Existing products are checked before any GPT run, and their skips summarised."""
+
+    CRS = "EPSG:32632"
+
+    @pytest.fixture
+    def real(self, tmp_path: Path, config: SNAPConfig) -> BurstProcessor:
+        """Build a processor with a real client and FileManager; tests stub only GPT."""
+        return BurstProcessor(FileManager(tmp_path / "data"), config, show_progress=False)
+
+    def _existing(
+        self,
+        processor: BurstProcessor,
+        burst: Burst,
+        config: RTCConfig,
+        **kwargs: Any,
+    ) -> None:
+        product = RTCProduct.from_burst(burst, self.CRS)
+        _write_product(processor.manager.get_product_path(product), product, config, **kwargs)
+
+    @pytest.mark.parametrize("max_workers", [1, 2])
+    def test_a_mismatch_raises_before_any_gpt_run(
+        self, real: BurstProcessor, max_workers: int
+    ) -> None:
+        real.config.resolved_max_workers = max_workers
+        missing, existing = _burst("2022-01-05"), _burst("2022-01-17")
+        self._existing(real, existing, RTCConfig(grid_spacing=20.0))
+
+        with (
+            patch.object(real.snap_client, "_run_gpt") as mock_gpt,
+            pytest.raises(ProductSettingsMismatchError, match="GRID_SPACING"),
+        ):
+            real.create_backscatter([missing, existing], crs=self.CRS, config=RTCConfig())
+
+        # Previously the missing burst was processed before the mismatch surfaced.
+        mock_gpt.assert_not_called()
+
+    def test_an_unreadable_product_raises_before_any_gpt_run(self, real: BurstProcessor) -> None:
+        missing, existing = _burst("2022-01-05"), _burst("2022-01-17")
+        path = real.manager.get_product_path(RTCProduct.from_burst(existing, self.CRS))
+        path.write_bytes(b"not a raster")
+
+        with (
+            patch.object(real.snap_client, "_run_gpt") as mock_gpt,
+            pytest.raises(OSError, match="not recognized"),
+        ):
+            real.create_backscatter([missing, existing], crs=self.CRS)
+
+        mock_gpt.assert_not_called()
+
+    def test_existing_products_are_not_handed_to_the_client(self, real: BurstProcessor) -> None:
+        bursts = [_burst("2022-01-05"), _burst("2022-01-17")]
+        for burst in bursts:
+            self._existing(real, burst, RTCConfig())
+
+        with patch.object(real.snap_client, "create_backscatter") as create:
+            summary = real.create_backscatter(bursts, crs=self.CRS)
+
+        create.assert_not_called()
+        assert summary.n_skipped == 2
+        assert summary.products == [RTCProduct.from_burst(burst, self.CRS) for burst in bursts]
+
+    def test_unchecked_and_other_snap_skips_warn_once_per_call(
+        self, real: BurstProcessor, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        real.config.resolved_max_workers = 2
+        real.config.resolved_snap_version = (14, 0, 0)
+        bursts = [_burst(f"2022-01-{day:02d}") for day in (5, 17, 29)]
+        self._existing(real, bursts[0], RTCConfig(), tagged=False)
+        self._existing(real, bursts[1], RTCConfig(), tagged=False)
+        self._existing(real, bursts[2], RTCConfig(), snap_version=(13, 0, 0))
+
+        with (
+            caplog.at_level(logging.INFO, logger="s1bursts"),
+            pytest.warns(UserWarning, match="existing product") as record,
+        ):
+            summary = real.create_backscatter(bursts, crs=self.CRS)
+
+        # One warning per kind, not a log line per product.
+        assert "Skipped '" not in caplog.text
+
+        assert (summary.n_skipped, summary.n_unchecked, summary.n_other_snap_version) == (3, 2, 1)
+        messages = [str(warning.message) for warning in record]
+        assert len(messages) == 2
+        assert "Skipped 2 existing product(s) without checking" in messages[0]
+        assert "another SNAP version than the running 14.0.0" in messages[1]
+        assert {warning.filename for warning in record} == {__file__}
+
+    def test_overwrite_neither_checks_nor_skips(self, real: BurstProcessor) -> None:
+        burst = _burst("2022-01-05")
+        self._existing(real, burst, RTCConfig(grid_spacing=20.0))
+        result = OkResult(source=burst, result=RTCProduct.from_burst(burst, self.CRS))
+
+        with (
+            patch.object(
+                real.manager, "product_exists", wraps=real.manager.product_exists
+            ) as exists,
+            patch.object(real.snap_client, "create_backscatter", return_value=result) as create,
+        ):
+            summary = real.create_backscatter([burst], crs=self.CRS, overwrite=True)
+
+        create.assert_called_once()
+        exists.assert_not_called()
+        assert summary.n_processed == 1
+
+    @pytest.mark.parametrize(
+        ("method", "client_method", "product_cls", "graph_config"),
+        [
+            ("create_coherences", "create_coherence", CoherenceProduct, CoherenceConfig()),
+            (
+                "create_interferograms",
+                "create_interferogram",
+                InterferogramProduct,
+                InterferogramConfig(),
+            ),
+        ],
+    )
+    def test_existing_pair_products_are_checked_up_front(
+        self,
+        real: BurstProcessor,
+        method: str,
+        client_method: str,
+        product_cls: type[CoherenceProduct | InterferogramProduct],
+        graph_config: CoherenceConfig | InterferogramConfig,
+    ) -> None:
+        pair = _pair()
+        product = product_cls.from_burst_pair(pair, self.CRS)
+        _write_product(real.manager.get_product_path(product), product, graph_config)
+
+        with patch.object(real.snap_client, client_method) as create:
+            summary = getattr(real, method)([pair], crs=self.CRS, config=graph_config)
+
+        create.assert_not_called()
+        assert summary.products == [product]
+
+    def test_a_mismatch_inside_a_worker_still_names_no_rerun(
+        self, processor: BurstProcessor
+    ) -> None:
+        mismatch = ProductSettingsMismatchError("other settings", path=Path("p.tif"))
+
+        with pytest.raises(ProductSettingsMismatchError) as excinfo:
+            processor._process_collection(["a", "b"], MagicMock(side_effect=mismatch), "Test")
+
+        # A rerun would meet the same product, so the note does not promise a skip.
+        assert excinfo.value.__notes__ == [
+            "Stopped with 0 of 2 items finished; products already written are kept."
+        ]

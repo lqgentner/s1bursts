@@ -46,10 +46,11 @@ from s1bursts.product import (
     RTCProduct,
     _layer_product_type,
 )
+from s1bursts.settings_check import _check_composite, _warn_unchecked
 from s1bursts.time_range import TimeRange, calendar_day
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Sequence
+    from collections.abc import Callable, Collection, Iterable, Sequence
     from pathlib import Path
 
     from freezebase.mgrs import MGRSGeoBox
@@ -172,9 +173,7 @@ class ResolutionWeighter:
         *,
         aggregation: Literal["mean", "median"] | float = "mean",
         clip_max_resolution: float | None = None,
-        decibel: bool = False,
         write_qa: bool = False,
-        cqm_decibel: bool = False,
         overwrite: bool = False,
         time_range: TimeRange | None = None,
     ) -> RTCLRWComposite:
@@ -198,9 +197,6 @@ class ResolutionWeighter:
         clip_max_resolution
             Upper limit for $W = 1/A$, used to suppress extreme weights in
             radar shadow. ``1.0`` is the weight of a flat reference facet.
-        decibel
-            Convert the result from power to decibels after aggregation.
-            Non-positive values become NaN.
         write_qa
             If ``True``, also write the two QA layers: a
             contributing-observations map (``Layer.QA_NUM``) and a composite
@@ -208,12 +204,12 @@ class ResolutionWeighter:
             ``QA-CQM`` is $1 / \sum_i W_i A_i$ under every ``aggregation``:
             under ``median`` or a quantile it describes the weighting, not the
             observations the composite's value was taken from.
-        cqm_decibel
-            Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
-            linear units. Independent of ``decibel``.
         overwrite
             If ``False`` and every requested layer's file already exists, skip
-            computation and return the existing product. Otherwise every
+            computation and return the existing product, after checking that
+            each file records the requested grid and compositing parameters
+            and linear units; any other difference, such as the DEM of the
+            inputs, is not checked. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
             If no input reaches the cell, an earlier composite of the same
@@ -246,6 +242,20 @@ class ResolutionWeighter:
             ``geobox``, or the inputs were made with different DEMs.
         CompositeInputError
             If an input product is missing or cannot be read.
+        ProductSettingsMismatchError
+            If ``overwrite`` is ``False`` and an existing layer file records
+            another grid than ``geobox``, other compositing parameters, or
+            values in decibels. Not a ``CompositeError``: other cells would
+            meet it too.
+        OSError or RasterioError
+            If ``overwrite`` is ``False`` and an existing layer file cannot be
+            read to check its settings.
+
+        Warns
+        -----
+        UserWarning
+            If an existing composite was skipped without checking its
+            settings, because a file was written before s1bursts 0.3.0.
         """
         rtc_products = list(rtc_products)
         if not rtc_products:
@@ -265,6 +275,14 @@ class ResolutionWeighter:
             layers=RTCLRWComposite.supported_layers if write_qa else _MEASUREMENT_ONLY,
         )
         if not overwrite and self._all_exist(product):
+            checked = _check_composite(
+                self._fm,
+                product,
+                geobox,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+            )
+            _warn_unchecked(0 if checked else 1, stacklevel=2, per_burst=False)
             return product
 
         try:
@@ -286,8 +304,6 @@ class ResolutionWeighter:
 
         weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(rtc_obs, weights, aggregation)
-        if decibel:
-            composite = self._to_decibel(composite)
         source_tags = self._input_tags(rtc_products)
         n_observations = len(rtc_obs)
         self._save(
@@ -300,7 +316,6 @@ class ResolutionWeighter:
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
                 n_observations=n_observations,
-                decibel=decibel,
                 source_tags=source_tags,
                 acquisitions=observed,
             ),
@@ -314,7 +329,6 @@ class ResolutionWeighter:
                 geobox,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
-                cqm_decibel=cqm_decibel,
                 source_tags=source_tags,
                 acquisitions=observed,
             )
@@ -329,7 +343,6 @@ class ResolutionWeighter:
         aggregation: Literal["mean", "median"] | float = "mean",
         clip_max_resolution: float | None = None,
         write_qa: bool = False,
-        cqm_decibel: bool = False,
         overwrite: bool = False,
         time_range: TimeRange | None = None,
     ) -> CohLRWComposite:
@@ -363,12 +376,12 @@ class ResolutionWeighter:
             ``QA-CQM`` is $1 / \sum_i W_i A_i$ under every ``aggregation``:
             under ``median`` or a quantile it describes the weighting, not the
             observations the composite's value was taken from.
-        cqm_decibel
-            Write ``QA-CQM`` as $-10 \log_{10}(\sum_i W_i A_i)$ instead of
-            linear units.
         overwrite
             If ``False`` and every requested layer's file already exists, skip
-            computation and return the existing product. Otherwise every
+            computation and return the existing product, after checking that
+            each file records the requested grid and compositing parameters
+            and linear units; any other difference, such as the DEM of the
+            inputs, is not checked. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
             If no input reaches the cell, an earlier composite of the same
@@ -402,6 +415,20 @@ class ResolutionWeighter:
             product supplies the scattering area of an observation.
         CompositeInputError
             If an input product is missing or cannot be read.
+        ProductSettingsMismatchError
+            If ``overwrite`` is ``False`` and an existing layer file records
+            another grid than ``geobox``, other compositing parameters, or
+            values in decibels. Not a ``CompositeError``: other cells would
+            meet it too.
+        OSError or RasterioError
+            If ``overwrite`` is ``False`` and an existing layer file cannot be
+            read to check its settings.
+
+        Warns
+        -----
+        UserWarning
+            If an existing composite was skipped without checking its
+            settings, because a file was written before s1bursts 0.3.0.
         """
         coh_products = list(coh_products)
         if not coh_products:
@@ -428,6 +455,14 @@ class ResolutionWeighter:
             layers=CohLRWComposite.supported_layers if write_qa else _MEASUREMENT_ONLY,
         )
         if not overwrite and self._all_exist(product):
+            checked = _check_composite(
+                self._fm,
+                product,
+                geobox,
+                aggregation=aggregation,
+                clip_max_resolution=clip_max_resolution,
+            )
+            _warn_unchecked(0 if checked else 1, stacklevel=2, per_burst=False)
             return product
 
         try:
@@ -475,7 +510,6 @@ class ResolutionWeighter:
                 geobox,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
-                cqm_decibel=cqm_decibel,
                 source_tags=source_tags,
                 acquisitions=observed,
             )
@@ -487,7 +521,6 @@ class ResolutionWeighter:
         geobox: MGRSGeoBox,
         *,
         aggregation: Literal["mean", "median"] | float = "mean",
-        decibel: bool = False,
         write_qa: bool = False,
         overwrite: bool = False,
         time_range: TimeRange | None = None,
@@ -510,16 +543,15 @@ class ResolutionWeighter:
             Temporal aggregation method.  Pass ``"mean"`` or ``"median"`` for
             the corresponding statistic, or a float in ``(0, 1)`` for an
             interpolated quantile at that level.
-        decibel
-            If ``True``, convert the aggregated composite from intensity
-            (power) to decibels before writing; non-positive intensities
-            become NaN.  Aggregation always happens in the linear domain.
         write_qa
             If ``True``, also write the contributing-observations QA layer
             (``Layer.QA_NUM``) of each pass direction.
         overwrite
             If ``False`` and every requested layer's file already exists, skip
-            computation and return the existing product. Otherwise every
+            computation and return the existing product, after checking that
+            each file records the requested grid and compositing parameters
+            and linear units; any other difference, such as the DEM of the
+            inputs, is not checked. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
             A direction that no input reaches has the files of an earlier
@@ -554,19 +586,34 @@ class ResolutionWeighter:
             ``geobox``, or the inputs were made with different DEMs.
         CompositeInputError
             If an input product is missing or cannot be read.
+        ProductSettingsMismatchError
+            If ``overwrite`` is ``False`` and an existing layer file records
+            another grid than ``geobox``, other compositing parameters, or
+            values in decibels. Not a ``CompositeError``: other cells would
+            meet it too.
+        OSError or RasterioError
+            If ``overwrite`` is ``False`` and an existing layer file cannot be
+            read to check its settings.
+
+        Warns
+        -----
+        UserWarning
+            If an existing composite was skipped without checking its
+            settings, because a file was written before s1bursts 0.3.0.
         """
-        return self._compose_backscatter_by_pass(
+        composites, n_unchecked = self._compose_backscatter_by_pass(
             rtc_products,
             geobox,
             name="rtc_products",
             composite_cls=RTCPassComposite,
             metadata_fn=product_tags.rtc_pass_metadata,
             aggregation=aggregation,
-            decibel=decibel,
             write_qa=write_qa,
             overwrite=overwrite,
             time_range=time_range,
         )
+        _warn_unchecked(n_unchecked, stacklevel=2, per_burst=False)
+        return composites
 
     def compose_gtc_by_pass(
         self,
@@ -574,7 +621,6 @@ class ResolutionWeighter:
         geobox: MGRSGeoBox,
         *,
         aggregation: Literal["mean", "median"] | float = "mean",
-        decibel: bool = False,
         write_qa: bool = False,
         overwrite: bool = False,
         time_range: TimeRange | None = None,
@@ -584,8 +630,7 @@ class ResolutionWeighter:
         Bursts from the same orbit and acquisition date are mosaicked using the
         first non-NaN pixel strategy.  The resulting orbit-date observations are
         then aggregated temporally (mean or median) per pass direction
-        (ascending / descending).  The stored value is beta-0 power, or
-        decibels with ``decibel=True``.
+        (ascending / descending).  The stored value is beta-0 power.
 
         Parameters
         ----------
@@ -598,16 +643,15 @@ class ResolutionWeighter:
             Temporal aggregation method.  Pass ``"mean"`` or ``"median"`` for
             the corresponding statistic, or a float in ``(0, 1)`` for an
             interpolated quantile at that level.
-        decibel
-            If ``True``, convert the aggregated composite from intensity
-            (power) to decibels before writing; non-positive intensities
-            become NaN.  Aggregation always happens in the linear domain.
         write_qa
             If ``True``, also write the contributing-observations QA layer
             (``Layer.QA_NUM``) of each pass direction.
         overwrite
             If ``False`` and every requested layer's file already exists, skip
-            computation and return the existing product. Otherwise every
+            computation and return the existing product, after checking that
+            each file records the requested grid and compositing parameters
+            and linear units; any other difference, such as the DEM of the
+            inputs, is not checked. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
             A direction that no input reaches has the files of an earlier
@@ -641,19 +685,34 @@ class ResolutionWeighter:
             ``geobox``, or the inputs were made with different DEMs.
         CompositeInputError
             If an input product is missing or cannot be read.
+        ProductSettingsMismatchError
+            If ``overwrite`` is ``False`` and an existing layer file records
+            another grid than ``geobox``, other compositing parameters, or
+            values in decibels. Not a ``CompositeError``: other cells would
+            meet it too.
+        OSError or RasterioError
+            If ``overwrite`` is ``False`` and an existing layer file cannot be
+            read to check its settings.
+
+        Warns
+        -----
+        UserWarning
+            If an existing composite was skipped without checking its
+            settings, because a file was written before s1bursts 0.3.0.
         """
-        return self._compose_backscatter_by_pass(
+        composites, n_unchecked = self._compose_backscatter_by_pass(
             gtc_products,
             geobox,
             name="gtc_products",
             composite_cls=GTCPassComposite,
             metadata_fn=product_tags.gtc_pass_metadata,
             aggregation=aggregation,
-            decibel=decibel,
             write_qa=write_qa,
             overwrite=overwrite,
             time_range=time_range,
         )
+        _warn_unchecked(n_unchecked, stacklevel=2, per_burst=False)
+        return composites
 
     def _compose_backscatter_by_pass[C: (RTCPassComposite, GTCPassComposite)](
         self,
@@ -664,11 +723,10 @@ class ResolutionWeighter:
         composite_cls: type[C],
         metadata_fn: Callable[..., RasterMetadata],
         aggregation: Literal["mean", "median"] | float,
-        decibel: bool,
         write_qa: bool,
         overwrite: bool,
         time_range: TimeRange | None,
-    ) -> dict[PassDirection, C]:
+    ) -> tuple[dict[PassDirection, C], int]:
         """Per-pass unweighted backscatter composite shared by the RTC and GTC entry points."""
         inputs = list(products)
         if not inputs:
@@ -694,7 +752,6 @@ class ResolutionWeighter:
                 product,
                 aggregation=aggregation,
                 n_observations=entry.n_observations,
-                decibel=decibel,
                 source_tags=entry.source_tags,
                 acquisitions=entry.acquisitions,
             )
@@ -705,7 +762,6 @@ class ResolutionWeighter:
             make=make,
             metadata=metadata,
             aggregation=aggregation,
-            decibel=decibel,
             overwrite=overwrite,
         )
 
@@ -717,26 +773,33 @@ class ResolutionWeighter:
         make: Callable[[PassDirection], C],
         metadata: Callable[[C, _PassObservations], RasterMetadata],
         aggregation: Literal["mean", "median"] | float,
-        decibel: bool,
         overwrite: bool,
-    ) -> dict[PassDirection, C]:
+    ) -> tuple[dict[PassDirection, C], int]:
         """Composite each pass direction on its own, skipping finished ones before any read.
+
+        Every existing direction is checked before any is built, so a
+        mismatch in one writes none. Returns the composites and the number of
+        skipped ones whose settings could not be checked.
 
         Raises
         ------
         EmptyCompositeError
             If no direction has an input with a valid pixel in the cell.
+        ProductSettingsMismatchError
+            If a direction's composite exists with other settings.
         """
         by_pass: defaultdict[PassDirection, list[ComposableProduct]] = defaultdict(list)
         for prod in products:
             by_pass[prod.pass_direction].append(prod)
 
         result: dict[PassDirection, C] = {}
+        n_unchecked = 0
+        if not overwrite:
+            result, n_unchecked = self._existing_by_pass(by_pass, make, geobox, aggregation)
         for direction, subset in sorted(by_pass.items()):
-            product = make(direction)
-            if not overwrite and self._all_exist(product):
-                result[direction] = product
+            if direction in result:
                 continue
+            product = make(direction)
 
             groups = self._reaching(
                 self._stitch_by_orbit_date(self._load_band(subset, geobox, band=1))
@@ -749,8 +812,6 @@ class ResolutionWeighter:
                 continue
             observations = np.stack(list(groups.values()))  # (N, H, W)
             composite = self._aggregate_unweighted(observations, aggregation)
-            if decibel:
-                composite = self._to_decibel(composite)
             entry = _PassObservations(
                 composite=composite,
                 n_observations=len(observations),
@@ -779,7 +840,26 @@ class ResolutionWeighter:
         if not result:
             msg = f"no input observation has a valid pixel in cell {geobox.mgrs_code}"
             raise EmptyCompositeError(msg)
-        return result
+        # Sorted, as before the existing directions were checked first.
+        return dict(sorted(result.items())), n_unchecked
+
+    def _existing_by_pass[C: (RTCPassComposite, GTCPassComposite, CohPassComposite)](
+        self,
+        directions: Iterable[PassDirection],
+        make: Callable[[PassDirection], C],
+        geobox: MGRSGeoBox,
+        aggregation: Literal["mean", "median"] | float,
+    ) -> tuple[dict[PassDirection, C], int]:
+        """Check the existing direction composites, returning them and how many went unchecked."""
+        existing: dict[PassDirection, C] = {}
+        n_unchecked = 0
+        for direction in sorted(directions):
+            product = make(direction)
+            if self._all_exist(product):
+                if not _check_composite(self._fm, product, geobox, aggregation=aggregation):
+                    n_unchecked += 1
+                existing[direction] = product
+        return existing, n_unchecked
 
     def compose_coherence_by_pass(
         self,
@@ -814,7 +894,10 @@ class ResolutionWeighter:
             (``Layer.QA_NUM``) of each pass direction.
         overwrite
             If ``False`` and every requested layer's file already exists, skip
-            computation and return the existing product. Otherwise every
+            computation and return the existing product, after checking that
+            each file records the requested grid and compositing parameters
+            and linear units; any other difference, such as the DEM of the
+            inputs, is not checked. Otherwise every
             requested layer is written, replacing an existing file, so the
             measurement and its QA layers always come from the same run.
             A direction that no input reaches has the files of an earlier
@@ -849,6 +932,20 @@ class ResolutionWeighter:
             ``geobox``, or the inputs were made with different DEMs.
         CompositeInputError
             If an input product is missing or cannot be read.
+        ProductSettingsMismatchError
+            If ``overwrite`` is ``False`` and an existing layer file records
+            another grid than ``geobox``, other compositing parameters, or
+            values in decibels. Not a ``CompositeError``: other cells would
+            meet it too.
+        OSError or RasterioError
+            If ``overwrite`` is ``False`` and an existing layer file cannot be
+            read to check its settings.
+
+        Warns
+        -----
+        UserWarning
+            If an existing composite was skipped without checking its
+            settings, because a file was written before s1bursts 0.3.0.
         """
         coh_products = list(coh_products)
         if not coh_products:
@@ -882,15 +979,16 @@ class ResolutionWeighter:
                 acquisitions=entry.acquisitions,
             )
 
-        return self._compose_by_pass(
+        composites, n_unchecked = self._compose_by_pass(
             coh_products,
             geobox,
             make=make,
             metadata=metadata,
             aggregation=aggregation,
-            decibel=False,
             overwrite=overwrite,
         )
+        _warn_unchecked(n_unchecked, stacklevel=2, per_burst=False)
+        return composites
 
     # ------------------------------------------------------------------
     # Private helpers — I/O
@@ -1005,7 +1103,7 @@ class ResolutionWeighter:
                 logger.debug("removed %s, which no input reaches", path.name)
 
     def _all_exist(self, product: CompositeProduct) -> bool:
-        """Whether every layer of ``product`` has its file already, logging the skip."""
+        """Whether every requested layer of ``product`` has its file already, logging the skip."""
         if not all(self._fm.product_exists(product, layer) for layer in product.layers):
             return False
         logger.debug("skipping existing %s", self._fm.get_product_path(product).name)
@@ -1140,7 +1238,6 @@ class ResolutionWeighter:
         *,
         aggregation: Literal["mean", "median"] | float,
         clip_max_resolution: float | None,
-        cqm_decibel: bool,
         source_tags: Mapping[str, str],
         acquisitions: product_tags.Acquisitions,
     ) -> None:
@@ -1165,7 +1262,7 @@ class ResolutionWeighter:
         )
         cqm = self._calc_cqm(values, scattering_area, weights)
         self._save(
-            self._to_decibel(cqm) if cqm_decibel else cqm,
+            cqm,
             product,
             Layer.QA_CQM,
             geobox,
@@ -1175,7 +1272,6 @@ class ResolutionWeighter:
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
                 n_observations=n_observations,
-                cqm_decibel=cqm_decibel,
                 source_tags=source_tags,
                 acquisitions=acquisitions,
             ),
@@ -1387,14 +1483,6 @@ class ResolutionWeighter:
         if clip_max_resolution is not None:
             weights = weights.clip(max=clip_max_resolution)
         return weights
-
-    @staticmethod
-    def _to_decibel(data: NDArray[np.floating[Any]]) -> NDArray[np.float32]:
-        """Convert intensity (power) to decibels; non-positive values become NaN."""
-        decibel = np.full_like(data, np.nan, dtype=np.float32)
-        valid = data > 0
-        decibel[valid] = 10.0 * np.log10(data[valid])
-        return decibel
 
     @staticmethod
     def _count_observations(values: NDArray[np.floating[Any]]) -> NDArray[np.uint16]:

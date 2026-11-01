@@ -73,7 +73,6 @@ _PIXEL_CONVENTION = "pixel centre"
 
 # The PFS calls stored values "linear power" while the metadata enum uses "Power".
 _LINEAR_POWER_UNIT = "linear power"
-_DECIBEL_UNIT = "dB"
 
 # The package version identifies the metadata vocabulary, including QA-NUM semantics.
 _PIPELINE_SOFTWARE = "s1bursts"
@@ -166,22 +165,14 @@ def _pipeline() -> dict[str, str]:
     }
 
 
-def _backscatter(*, gamma0: bool, decibel: bool) -> dict[str, str]:
-    """Build the measurement and scaling tags for a backscatter raster (spec 3.1, 3.2).
-
-    ``BACKSCATTER_CONVENTION`` is enumerated ``[Amplitude, Power]`` and
-    describes the stored quantity, so decibel data gets neither it nor the
-    conversion equation, which would invite a second conversion.
-    """
-    tags = {"BACKSCATTER_MEASUREMENT": "Gamma-0" if gamma0 else "Beta-0"}
-    if decibel:
-        tags["BACKSCATTER_SCALING"] = "decibel"
-        tags["BACKSCATTER_CONVERSION_APPLIED"] = "10*log10(power)"
-    else:
-        tags["BACKSCATTER_CONVENTION"] = "Power"
+def _backscatter(*, gamma0: bool) -> dict[str, str]:
+    """Build the measurement and scaling tags for a linear backscatter raster (spec 3.1, 3.2)."""
+    return {
+        "BACKSCATTER_MEASUREMENT": "Gamma-0" if gamma0 else "Beta-0",
+        "BACKSCATTER_CONVENTION": "Power",
         # Item 3.2 has no parameter of its own; the metadata spec puts it here.
-        tags["BACKSCATTER_CONVERSION_EQ"] = CONVERSION_EQ
-    return tags
+        "BACKSCATTER_CONVERSION_EQ": CONVERSION_EQ,
+    }
 
 
 def _aggregation_string(aggregation: Aggregation) -> str:
@@ -354,7 +345,6 @@ def rtc_lrw_metadata(
     aggregation: Aggregation,
     clip_max_resolution: float | None,
     n_observations: int,
-    decibel: bool,
     source_tags: Mapping[str, str] | None = None,
     acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
@@ -370,8 +360,6 @@ def rtc_lrw_metadata(
         Weight clip actually applied.
     n_observations
         Number of orbit-date observations entering the composite (spec 2.21).
-    decibel
-        Whether the stored values are decibels rather than linear power.
     source_tags
         Tags of one of the per-burst inputs, from which the processing
         provenance is inherited.
@@ -386,7 +374,7 @@ def rtc_lrw_metadata(
     """
     tags = {
         **_tile(product, family="Composite Backscatter", acquisitions=acquisitions),
-        **_backscatter(gamma0=True, decibel=decibel),
+        **_backscatter(gamma0=True),
         **_lrw(aggregation, clip_max_resolution),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "gamma0",
@@ -398,7 +386,7 @@ def rtc_lrw_metadata(
     return RasterMetadata(
         tags=tags,
         band_names=[product.polarization],
-        units=[_DECIBEL_UNIT if decibel else _LINEAR_POWER_UNIT],
+        units=[_LINEAR_POWER_UNIT],
     )
 
 
@@ -481,7 +469,6 @@ def rtc_pass_metadata(
     *,
     aggregation: Aggregation,
     n_observations: int,
-    decibel: bool,
     source_tags: Mapping[str, str] | None = None,
     acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
@@ -495,8 +482,6 @@ def rtc_pass_metadata(
         Temporal aggregation actually applied.
     n_observations
         Number of orbit-date observations entering the composite.
-    decibel
-        Whether the stored values are decibels rather than linear power.
     source_tags
         Tags of one of the per-burst inputs.
     acquisitions
@@ -510,7 +495,7 @@ def rtc_pass_metadata(
     """
     tags = {
         **_tile(product, family="Composite Backscatter", acquisitions=acquisitions),
-        **_backscatter(gamma0=True, decibel=decibel),
+        **_backscatter(gamma0=True),
         **_unweighted(aggregation),
         "PASS_DIRECTION": product.pass_direction,
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
@@ -523,7 +508,7 @@ def rtc_pass_metadata(
     return RasterMetadata(
         tags=tags,
         band_names=[product.polarization],
-        units=[_DECIBEL_UNIT if decibel else _LINEAR_POWER_UNIT],
+        units=[_LINEAR_POWER_UNIT],
     )
 
 
@@ -532,7 +517,6 @@ def gtc_pass_metadata(
     *,
     aggregation: Aggregation,
     n_observations: int,
-    decibel: bool,
     source_tags: Mapping[str, str] | None = None,
     acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
@@ -546,8 +530,6 @@ def gtc_pass_metadata(
         Temporal aggregation actually applied.
     n_observations
         Number of orbit-date observations entering the composite.
-    decibel
-        Whether the stored values are decibels rather than linear power.
     source_tags
         Tags of one of the per-burst inputs.
     acquisitions
@@ -561,7 +543,7 @@ def gtc_pass_metadata(
     """
     tags = {
         **_tile(product, family="Composite Backscatter", acquisitions=acquisitions),
-        **_backscatter(gamma0=False, decibel=decibel),
+        **_backscatter(gamma0=False),
         **_unweighted(aggregation),
         "PASS_DIRECTION": product.pass_direction,
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
@@ -575,7 +557,7 @@ def gtc_pass_metadata(
     return RasterMetadata(
         tags=tags,
         band_names=[product.polarization],
-        units=[_DECIBEL_UNIT if decibel else _LINEAR_POWER_UNIT],
+        units=[_LINEAR_POWER_UNIT],
     )
 
 
@@ -644,14 +626,13 @@ def qa_metadata(
     aggregation: Aggregation,
     n_observations: int,
     clip_max_resolution: float | None = None,
-    cqm_decibel: bool = False,
     source_tags: Mapping[str, str] | None = None,
     acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
     """Metadata for a QA layer: contributing observations or composite quality map.
 
-    Neither layer carries a backscatter convention or a conversion equation: a
-    per-pixel observation count has no dB scaling, and the CQM declares its own.
+    Neither layer carries a backscatter convention: a per-pixel observation
+    count has no dB scaling, and the CQM declares its own conversion equation.
 
     Parameters
     ----------
@@ -666,8 +647,6 @@ def qa_metadata(
     clip_max_resolution
         Weight clip actually applied; ignored for a pass composite's QA, which
         applies no weighting.
-    cqm_decibel
-        Whether a ``QA-CQM`` layer stores decibels rather than linear values.
     source_tags
         Tags of one of the per-burst inputs.
     acquisitions
@@ -725,15 +704,9 @@ def qa_metadata(
         "LAYER_NAME": "cqm",
         "LAYER_DESCRIPTION": "Composite local resolution, 1/sum(W_i * A_i); dimensionless.",
     }
-    if cqm_decibel:
-        tags["CQM_SCALING"] = "decibel"
-        tags["CQM_CONVERSION_APPLIED"] = "10*log10(cqm)"
-    else:
-        # <CQMdBScaling>: the declaration of a conversion, on linear data.
-        tags["CQM_CONVERSION_EQ"] = CONVERSION_EQ
-    return RasterMetadata(
-        tags=tags, band_names=["cqm"], units=[_DECIBEL_UNIT if cqm_decibel else ""]
-    )
+    # <CQMdBScaling>: the declaration of a conversion, on linear data.
+    tags["CQM_CONVERSION_EQ"] = CONVERSION_EQ
+    return RasterMetadata(tags=tags, band_names=["cqm"], units=[""])
 
 
 # ----------------------------------------------------------------------
@@ -762,10 +735,13 @@ def _burst(
         "GRID_SPACING": f"{config.grid_spacing:g} m",
         "DEM": config.dem if isinstance(config.dem, str) else config.dem_name or UNKNOWN,
     }
-    tags["PROCESSING_SOFTWARE_VERSION"] = (
-        ".".join(str(part) for part in snap_version) if snap_version is not None else UNKNOWN
-    )
+    tags["PROCESSING_SOFTWARE_VERSION"] = _software_version(snap_version)
     return tags
+
+
+def _software_version(snap_version: tuple[int, ...] | None) -> str:
+    """Render a SNAP version as ``PROCESSING_SOFTWARE_VERSION`` records it."""
+    return ".".join(str(part) for part in snap_version) if snap_version is not None else UNKNOWN
 
 
 def backscatter_metadata(
@@ -806,7 +782,7 @@ def backscatter_metadata(
         raise ValueError(msg)
     tags = {
         **_burst(product, config=config, snap_version=snap_version),
-        **_backscatter(gamma0=gamma0, decibel=False),
+        **_backscatter(gamma0=gamma0),
         "POLARIZATION": product.polarization,
         "ACQUISITION_DATE": _date(product.date),
         "TERRAIN_CORRECTION": "Radiometric and geometric" if gamma0 else "Geometric",
@@ -973,6 +949,46 @@ def burst_metadata(
                 f"cannot build metadata for {type(product).__name__} from {type(config).__name__}."
             )
             raise TypeError(msg)
+
+
+# The per-burst tags that record a processing setting. A tag a product type
+# does not write, such as the coherence window of an RTC product, compares as
+# absent on both sides.
+_BURST_SETTING_KEYS = (
+    "GRID_SPACING",
+    "DEM",
+    "MULTILOOK_RANGE",
+    "MULTILOOK_AZIMUTH",
+    "COHERENCE_WINDOW_RANGE",
+    "COHERENCE_WINDOW_AZIMUTH",
+    "FLAT_EARTH_PHASE_REMOVED",
+    "TOPOGRAPHIC_PHASE_REMOVED",
+)
+
+
+def _burst_settings(
+    product: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct,
+    config: BackscatterConfig | CoherenceConfig | InterferogramConfig,
+) -> dict[str, str | None]:
+    """Return the setting tags a per-burst product made with ``config`` carries, None if absent.
+
+    Taken from the tags ``burst_metadata`` writes, so they compare with a
+    file's recorded tags exactly as written.
+    """
+    tags = burst_metadata(product, config).tags
+    return {key: tags.get(key) for key in _BURST_SETTING_KEYS}
+
+
+def _composite_settings(
+    product: MGRSTileProduct,
+    *,
+    aggregation: Aggregation,
+    clip_max_resolution: float | None = None,
+) -> dict[str, str]:
+    """Return the setting tags a composite made with these arguments carries in every layer."""
+    weighted = isinstance(product, RTCLRWComposite | CohLRWComposite)
+    tags = _lrw(aggregation, clip_max_resolution) if weighted else _unweighted(aggregation)
+    return {"COMPOSITING_PARAMETERS": tags["COMPOSITING_PARAMETERS"]}
 
 
 __all__ = [

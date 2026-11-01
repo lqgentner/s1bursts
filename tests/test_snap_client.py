@@ -21,10 +21,17 @@ import rasterio.errors
 import rasterio.transform
 from upath import UPath
 
+from s1bursts import product_tags
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.config import SNAPSettings
-from s1bursts.errors import BurstMapUnavailableError, ConfigurationError, SnapProcessingError
+from s1bursts.errors import (
+    BurstMapUnavailableError,
+    ConfigurationError,
+    ProductSettingsMismatchError,
+    SnapProcessingError,
+)
 from s1bursts.filemanager import FileManager
+from s1bursts.product import CoherenceProduct, GTCProduct, InterferogramProduct, RTCProduct
 from s1bursts.product_tags import RasterMetadata
 from s1bursts.snap_client import (
     SNAPClient,
@@ -644,6 +651,8 @@ class TestCreateBackscatter:
 
     def test_skips_existing_product(self, client: SNAPClient) -> None:
         cast("MagicMock", client.manager).product_exists.return_value = True
+        product = RTCProduct.from_burst(_make_burst("2022-01-01"), self.CRS_UTM32)
+        _write_tagged(client, product, RTCConfig())
 
         with patch.object(client, "_run_gpt") as mock_gpt:
             result = client.create_backscatter(
@@ -872,6 +881,164 @@ class TestRejectsNonUtmCrs:
 
         with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
             client.create_interferogram(pair, crs=4326, config=InterferogramConfig())
+
+
+def _write_tagged(
+    client: SNAPClient,
+    product: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct,
+    config: RTCConfig | GTCConfig | CoherenceConfig | InterferogramConfig,
+    *,
+    snap_version: tuple[int, ...] | None = None,
+    tagged: bool = True,
+) -> Path:
+    """Write the file ``config`` makes for ``product`` where the client looks for it."""
+    path = cast("Path", client.manager.get_product_path(product))
+    made_with = snap_version or client.config.resolved_snap_version
+    metadata = product_tags.burst_metadata(product, config, snap_version=made_with)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=1,
+        height=1,
+        count=1,
+        dtype="float32",
+        crs=product.crs,
+        transform=rasterio.transform.from_origin(400000.0, 5200000.0, 10.0, 10.0),
+    ) as dst:
+        dst.write(np.ones((1, 1, 1), dtype="float32"))
+        if tagged:
+            dst.update_tags(**metadata.tags)
+    return path
+
+
+class TestSkipChecksTheSettings:
+    """An existing product is returned unchanged only if it records the requested settings."""
+
+    CRS_UTM32 = CRS("EPSG:32632")
+
+    @pytest.fixture(autouse=True)
+    def existing(self, client: SNAPClient) -> None:
+        cast("MagicMock", client.manager).product_exists.return_value = True
+
+    def _pair(self) -> BurstPair:
+        return BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
+
+    def test_other_settings_raise_rather_than_fail_the_item(self, client: SNAPClient) -> None:
+        product = RTCProduct.from_burst(_make_burst("2022-01-01"), self.CRS_UTM32)
+        _write_tagged(client, product, RTCConfig(grid_spacing=20.0))
+
+        with (
+            patch.object(client, "_run_gpt") as mock_gpt,
+            pytest.raises(ProductSettingsMismatchError, match="GRID_SPACING"),
+        ):
+            client.create_backscatter(
+                _make_burst("2022-01-01"), crs=self.CRS_UTM32, config=RTCConfig()
+            )
+
+        mock_gpt.assert_not_called()
+
+    def test_a_coherence_window_change_raises(self, client: SNAPClient) -> None:
+        pair = self._pair()
+        product = CoherenceProduct.from_burst_pair(pair, self.CRS_UTM32)
+        _write_tagged(client, product, CoherenceConfig(window=(10, 2)))
+
+        with pytest.raises(ProductSettingsMismatchError, match="COHERENCE_WINDOW"):
+            client.create_coherence(pair, crs=self.CRS_UTM32, config=CoherenceConfig())
+
+    def test_a_matching_coherence_is_skipped(self, client: SNAPClient) -> None:
+        pair = self._pair()
+        product = CoherenceProduct.from_burst_pair(pair, self.CRS_UTM32)
+        _write_tagged(client, product, CoherenceConfig())
+
+        result = client.create_coherence(pair, crs=self.CRS_UTM32, config=CoherenceConfig())
+
+        assert isinstance(result, OkResult)
+        assert result.skipped
+
+    def test_a_matching_interferogram_is_skipped(self, client: SNAPClient) -> None:
+        pair = self._pair()
+        product = InterferogramProduct.from_burst_pair(pair, self.CRS_UTM32)
+        _write_tagged(client, product, InterferogramConfig())
+
+        result = client.create_interferogram(
+            pair, crs=self.CRS_UTM32, config=InterferogramConfig()
+        )
+
+        assert isinstance(result, OkResult)
+        assert result.skipped
+
+    def test_an_untagged_product_is_skipped_and_says_so(
+        self, client: SNAPClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        product = GTCProduct.from_burst(_make_burst("2022-01-01"), self.CRS_UTM32)
+        _write_tagged(client, product, GTCConfig(), tagged=False)
+
+        with caplog.at_level(logging.WARNING, logger="s1bursts"):
+            result = client.create_backscatter(
+                _make_burst("2022-01-01"), crs=self.CRS_UTM32, config=GTCConfig()
+            )
+
+        assert isinstance(result, OkResult)
+        assert (result.skipped, result.unchecked, result.other_snap_version) == (
+            True,
+            "untagged",
+            None,
+        )
+        assert "without checking its settings (untagged)" in caplog.text
+
+    def test_another_snap_version_is_recorded_in_the_result(
+        self, client: SNAPClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        client.config.resolved_snap_version = (14, 0, 0)
+        product = RTCProduct.from_burst(_make_burst("2022-01-01"), self.CRS_UTM32)
+        _write_tagged(client, product, RTCConfig(), snap_version=(13, 0, 0))
+
+        with caplog.at_level(logging.WARNING, logger="s1bursts"):
+            result = client.create_backscatter(
+                _make_burst("2022-01-01"), crs=self.CRS_UTM32, config=RTCConfig()
+            )
+
+        assert isinstance(result, OkResult)
+        assert (result.unchecked, result.other_snap_version) == (None, "13.0.0")
+        assert "made by SNAP 13.0.0 rather than the running 14.0.0" in caplog.text
+
+    def test_overwrite_neither_reads_nor_skips_the_existing_product(
+        self, client: SNAPClient
+    ) -> None:
+        path = cast("Path", cast("MagicMock", client.manager).get_product_path.return_value)
+        path.write_bytes(b"not a raster")
+
+        with (
+            patch.object(client, "_run_gpt") as mock_gpt,
+            patch.object(client, "_finalize_product"),
+        ):
+            result = client.create_backscatter(
+                _make_burst("2022-01-01"),
+                crs=self.CRS_UTM32,
+                config=GTCConfig(),
+                overwrite=True,
+            )
+
+        assert isinstance(result, OkResult)
+        assert not result.skipped
+        mock_gpt.assert_called_once()
+
+    def test_an_unreadable_product_raises(self, client: SNAPClient) -> None:
+        path = cast("Path", cast("MagicMock", client.manager).get_product_path.return_value)
+        path.write_bytes(b"not a raster")
+
+        # Previously skipped by its name alone.
+        with (
+            patch.object(client, "_run_gpt") as mock_gpt,
+            pytest.raises(rasterio.errors.RasterioIOError) as excinfo,
+        ):
+            client.create_backscatter(
+                _make_burst("2022-01-01"), crs=self.CRS_UTM32, config=GTCConfig()
+            )
+
+        assert "overwrite=True" in excinfo.value.__notes__[0]
+        mock_gpt.assert_not_called()
 
 
 class TestCreateCoherence:

@@ -141,7 +141,6 @@ def _lrw(**kwargs: Any) -> dict[str, str]:
         "aggregation": "median",
         "clip_max_resolution": None,
         "n_observations": 7,
-        "decibel": False,
     }
     return product_tags.rtc_lrw_metadata(_rtc_lrw(), **(defaults | kwargs)).tags
 
@@ -157,8 +156,8 @@ def _every_builder() -> dict[str, dict[str, str]]:
     return {
         "rtc_lrw": _lrw(),
         "coh_lrw": product_tags.coh_lrw_metadata(_coh_lrw(), **composite).tags,
-        "rtc_pass": product_tags.rtc_pass_metadata(_rtc_pass(), decibel=False, **unweighted).tags,
-        "gtc_pass": product_tags.gtc_pass_metadata(_gtc_pass(), decibel=False, **unweighted).tags,
+        "rtc_pass": product_tags.rtc_pass_metadata(_rtc_pass(), **unweighted).tags,
+        "gtc_pass": product_tags.gtc_pass_metadata(_gtc_pass(), **unweighted).tags,
         "coh_pass": product_tags.coh_pass_metadata(_coh_pass(), **unweighted).tags,
         "qa_num": product_tags.qa_metadata(_rtc_lrw(), Layer.QA_NUM, **composite).tags,
         "qa_cqm": product_tags.qa_metadata(_rtc_lrw(), Layer.QA_CQM, **composite).tags,
@@ -187,43 +186,22 @@ class TestMetadataVocabulary:
         for name, tags in _every_builder().items():
             assert [key for key in tags if "CEOS" in key] == [], name
 
-    def test_the_pointer_does_not_vary_by_scaling(self) -> None:
-        # Scaling is stated by BACKSCATTER_SCALING, not by qualifying the
-        # reference; a pointer has nothing to scope.
-        assert (
-            _lrw(decibel=True)["METADATA_VOCABULARY"] == _lrw(decibel=False)["METADATA_VOCABULARY"]
-        )
-
 
 class TestBackscatterScaling:
-    """Linear and decibel rasters must never carry each other's tags."""
+    """Composites are linear power and declare the decibel conversion, not apply it."""
 
     def test_linear_declares_the_conversion(self) -> None:
-        tags = _lrw(decibel=False)
+        tags = _lrw()
         assert tags["BACKSCATTER_CONVENTION"] == "Power"
         assert tags["BACKSCATTER_CONVERSION_EQ"] == "dB = 10*log10(DN)"
-        assert "BACKSCATTER_SCALING" not in tags
+        assert not [key for key in tags if key.endswith("_SCALING")]
 
-    def test_decibel_omits_the_convention_and_the_equation(self) -> None:
-        # BACKSCATTER_CONVENTION is enumerated [Amplitude, Power] and describes
-        # the stored values, so neither value fits dB-stored data; emitting the
-        # equation alongside would invite a second conversion.
-        tags = _lrw(decibel=True)
-        assert "BACKSCATTER_CONVENTION" not in tags
-        assert "BACKSCATTER_CONVERSION_EQ" not in tags
-        assert tags["BACKSCATTER_SCALING"] == "decibel"
-        assert tags["BACKSCATTER_CONVERSION_APPLIED"] == "10*log10(power)"
-
-    def test_unit_follows_the_scaling(self) -> None:
-        common: dict[str, Any] = {
-            "aggregation": "median",
-            "clip_max_resolution": None,
-            "n_observations": 1,
-        }
-        linear = product_tags.rtc_lrw_metadata(_rtc_lrw(), decibel=False, **common)
-        decibel = product_tags.rtc_lrw_metadata(_rtc_lrw(), decibel=True, **common)
-        assert linear.units == ["linear power"]
-        assert decibel.units == ["dB"]
+    def test_the_unit_is_linear_power(self) -> None:
+        common: dict[str, Any] = {"aggregation": "median", "n_observations": 1}
+        lrw = product_tags.rtc_lrw_metadata(_rtc_lrw(), clip_max_resolution=None, **common)
+        assert lrw.units == ["linear power"]
+        assert product_tags.rtc_pass_metadata(_rtc_pass(), **common).units == ["linear power"]
+        assert product_tags.gtc_pass_metadata(_gtc_pass(), **common).units == ["linear power"]
 
     def test_gtc_measures_beta_nought(self) -> None:
         config = GTCConfig()
@@ -270,7 +248,6 @@ class TestCompositingParameters:
             _rtc_pass(),
             aggregation="median",
             n_observations=4,
-            decibel=False,
         ).tags
         assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
         assert "COMPOSITING_METHOD_REFERENCE" not in tags
@@ -289,7 +266,6 @@ class TestGTCPass:
             _gtc_pass(),
             aggregation="mean",
             n_observations=5,
-            decibel=False,
             source_tags=source,
         )
         tags = meta.tags
@@ -498,22 +474,10 @@ class TestQaLayers:
         assert metadata.units == [""]
 
     def test_linear_cqm_declares_the_conversion(self) -> None:
-        tags = self._cqm(cqm_decibel=False)
+        tags = self._cqm()
         assert tags["CQM_CONVERSION_EQ"] == "dB = 10*log10(DN)"
         assert "CQM_SCALING" not in tags
         assert tags["QA_LAYER"] == "Composite Quality Map Image"
-
-    def test_decibel_cqm_states_that_it_was_applied(self) -> None:
-        tags = self._cqm(cqm_decibel=True)
-        assert "CQM_CONVERSION_EQ" not in tags
-        assert tags["CQM_SCALING"] == "decibel"
-        assert tags["CQM_CONVERSION_APPLIED"] == "10*log10(cqm)"
-
-    def test_cqm_decibel_does_not_leak_onto_the_num_layer(self) -> None:
-        # Only the CQM is written in dB; the count is unaffected by the flag.
-        tags = self._num(cqm_decibel=True)
-        assert "CQM_SCALING" not in tags
-        assert "CQM_CONVERSION_APPLIED" not in tags
 
     def test_pass_qa_is_unweighted_and_counts_finite_values(self) -> None:
         tags = product_tags.qa_metadata(
@@ -760,7 +724,6 @@ class TestRasterMetadata:
         # coerced silently and could format differently across versions.
         for tags in (
             _lrw(),
-            _lrw(decibel=True),
             product_tags.coh_lrw_metadata(
                 _coh_lrw(),
                 aggregation=0.5,

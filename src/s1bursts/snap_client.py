@@ -41,6 +41,7 @@ from s1bursts.product import (
     InterferogramProduct,
     RTCProduct,
 )
+from s1bursts.settings_check import _skip_existing
 from s1bursts.snap_graph import NODATA_SENTINEL, GTCConfig, RTCConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationResult
 
@@ -785,12 +786,16 @@ class SNAPClient:
         config
             Graph-shape configuration, ``RTCConfig`` or ``GTCConfig``.
         overwrite
-            Whether to overwrite existing product.
+            Whether to overwrite an existing product. Without it, an existing
+            product is returned as skipped, after checking that the settings
+            it records match ``config``.
 
         Returns
         -------
         OperationResult
-            Result of the backscatter processing.
+            Result of the backscatter processing. A skipped product's result
+            records in ``unchecked`` and ``other_snap_version`` what its check
+            could not confirm; such a skip is also logged.
 
         Raises
         ------
@@ -803,6 +808,13 @@ class SNAPClient:
             If the disk is full, over quota or read-only, which would fail
             every remaining item alike: an ``OSError`` saying so, or an error
             caused by one or whose message or GPT output says so.
+        ProductSettingsMismatchError
+            If the product exists, ``overwrite`` is ``False``, and the product
+            records other settings than ``config``: grid spacing, DEM,
+            multilook, coherence window or the interferogram's phase removal.
+        OSError or RasterioError
+            If the product exists, ``overwrite`` is ``False``, and it cannot
+            be read to check its settings.
         """
         if isinstance(config, RTCConfig):
             rtc = RTCProduct.from_burst(burst, crs=crs)
@@ -813,6 +825,25 @@ class SNAPClient:
         msg = f"`config` must be an RTCConfig or a GTCConfig, received '{type(config).__name__}'."
         raise TypeError(msg)
 
+    def _existing[P: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct](
+        self,
+        source: Burst | BurstPair,
+        product: P,
+        config: RTCConfig | GTCConfig | CoherenceConfig | InterferogramConfig,
+        *,
+        overwrite: bool,
+    ) -> OkResult[P] | None:
+        """Return the skipped result of an existing product whose settings match, else None."""
+        if overwrite:
+            return None
+        return _skip_existing(
+            self.manager,
+            source,
+            product,
+            config,
+            snap_version=self.config.resolved_snap_version,
+        )
+
     def _create_backscatter[P: RTCProduct | GTCProduct](
         self,
         burst: Burst,
@@ -821,13 +852,13 @@ class SNAPClient:
         *,
         overwrite: bool,
     ) -> OperationResult[P]:
-        """Run the backscatter graph of ``config`` for ``product``."""
+        """Run the backscatter graph of ``config`` for ``product``, unless it exists."""
         label = product.product_type
         product_path = self.manager.get_product_path(product)
 
-        if not overwrite and self.manager.product_exists(product):
-            logger.debug("%s product already exists: '%s'", label, product_path.name)
-            return OkResult(source=burst, result=product, skipped=True)
+        skipped = self._existing(burst, product, config, overwrite=overwrite)
+        if skipped is not None:
+            return skipped
 
         logger.info("Creating %s product: '%s'", label, product_path.name)
 
@@ -893,12 +924,16 @@ class SNAPClient:
         config
             Graph-shape configuration (window size, DEM, …).
         overwrite
-            Whether to overwrite existing product.
+            Whether to overwrite an existing product. Without it, an existing
+            product is returned as skipped, after checking that the settings
+            it records match ``config``.
 
         Returns
         -------
         OperationResult
-            Result of the coherence processing.
+            Result of the coherence processing. A skipped product's result
+            records in ``unchecked`` and ``other_snap_version`` what its check
+            could not confirm; such a skip is also logged.
 
         Raises
         ------
@@ -909,13 +944,20 @@ class SNAPClient:
             If the disk is full, over quota or read-only, which would fail
             every remaining item alike: an ``OSError`` saying so, or an error
             caused by one or whose message or GPT output says so.
+        ProductSettingsMismatchError
+            If the product exists, ``overwrite`` is ``False``, and the product
+            records other settings than ``config``: grid spacing, DEM,
+            multilook, coherence window or the interferogram's phase removal.
+        OSError or RasterioError
+            If the product exists, ``overwrite`` is ``False``, and it cannot
+            be read to check its settings.
         """
         product = CoherenceProduct.from_burst_pair(pair, crs=crs)
         product_path = self.manager.get_product_path(product)
 
-        if not overwrite and self.manager.product_exists(product):
-            logger.debug("Coherence product already exists: '%s'", product_path.name)
-            return OkResult(source=pair, result=product, skipped=True)
+        skipped = self._existing(pair, product, config, overwrite=overwrite)
+        if skipped is not None:
+            return skipped
 
         logger.info("Creating coherence product: '%s'", product_path.name)
 
@@ -985,12 +1027,16 @@ class SNAPClient:
         config
             Graph-shape configuration.
         overwrite
-            Whether to overwrite existing product.
+            Whether to overwrite an existing product. Without it, an existing
+            product is returned as skipped, after checking that the settings
+            it records match ``config``.
 
         Returns
         -------
         OperationResult
-            Result of the interferogram processing.
+            Result of the interferogram processing. A skipped product's result
+            records in ``unchecked`` and ``other_snap_version`` what its check
+            could not confirm; such a skip is also logged.
 
         Raises
         ------
@@ -1001,13 +1047,20 @@ class SNAPClient:
             If the disk is full, over quota or read-only, which would fail
             every remaining item alike: an ``OSError`` saying so, or an error
             caused by one or whose message or GPT output says so.
+        ProductSettingsMismatchError
+            If the product exists, ``overwrite`` is ``False``, and the product
+            records other settings than ``config``: grid spacing, DEM,
+            multilook, coherence window or the interferogram's phase removal.
+        OSError or RasterioError
+            If the product exists, ``overwrite`` is ``False``, and it cannot
+            be read to check its settings.
         """
         product = InterferogramProduct.from_burst_pair(pair, crs=crs)
         product_path = self.manager.get_product_path(product)
 
-        if not overwrite and self.manager.product_exists(product):
-            logger.debug("Interferogram product already exists: '%s'", product_path.name)
-            return OkResult(source=pair, result=product, skipped=True)
+        skipped = self._existing(pair, product, config, overwrite=overwrite)
+        if skipped is not None:
+            return skipped
 
         logger.info("Creating interferogram product: '%s'", product_path.name)
 
