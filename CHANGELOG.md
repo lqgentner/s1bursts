@@ -270,6 +270,70 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   Therefore, two runs over the same products could differ in the composite
   and `QA-CQM`. The burst choice is now deterministic. Composites made with
   earlier versions remain valid and need not be regenerated.
+- **Breaking:** a burst that neither endpoint of `BurstCatalog.download()`
+  could download is recorded with one error naming both failures, with the
+  primary endpoint's error as its `__cause__`. Previously only the fallback's
+  error was kept, so an OData outage was reported as missing S3 credentials.
+  The error is a `BurstNotFoundError` when both endpoints found the burst
+  missing and a `BurstDownloadError` otherwise; an endpoint's own error type,
+  such as `HTTPError`, is no longer what the summary holds.
+
+  ```python
+  # before
+  err = summary.failed_items[0].error
+  # BurstDownloadError("CDSE S3 credentials not configured ... endpoint='odata' ...")
+  # after
+  # BurstDownloadError("OData: HTTPError: 503 Server Error ...; S3: CDSE S3 credentials not configured ...")
+  err.__cause__  # the OData HTTPError
+  ```
+- **Breaking:** a burst counts as missing at the source only when both
+  endpoints say so. An HTTP 404 from the OData endpoint is now a
+  `BurstNotFoundError`, and a `BurstCatalog` caches a burst as unavailable
+  only when both endpoints' failures are not-found errors. Previously one
+  `BurstNotFoundError` was enough, so an OData 503 together with a product not
+  yet on S3 marked the burst missing for the catalog's lifetime, and
+  `raise_on_failure(ignore=BurstNotFoundError)` ignored it.
+- **Breaking:** credentials that CDSE rejects (HTTP 400, 401 or 403 on the
+  token request) raise `ConfigurationError` from `CDSEAuth`, quoting the
+  identity server's reason. With OData as the chosen endpoint they stop
+  `BurstCatalog.download()` after one login attempt; with OData as the
+  fallback each burst records them as a `BurstDownloadError`, so S3 keeps
+  working, still after one login attempt per call. Previously the `HTTPError`
+  was recorded for every burst, each of which logged in again.
+
+  ```python
+  # before
+  catalog.download(bursts).failed_items  # one HTTPError 401 per burst
+  # after
+  catalog.download(bursts)  # raises ConfigurationError: CDSE rejected the username and password
+  ```
+- Any other failed token request raises an error that keeps neither the
+  request nor the response, as cause or context. Previously the `HTTPError`
+  recorded for a burst kept the request, whose body held the password (or,
+  for a refresh, the refresh token).
+- **Breaking:** item-local data errors are recorded per item as `BurstError`
+  subclasses instead of aborting the batch: a rasterio error or `OSError`
+  while staging the input or writing the product of a `BurstProcessor.create_*`
+  item becomes a `SnapProcessingError`, and a malformed annotation,
+  calibration, noise, RFI or manifest file of an S3 parent product (an XML
+  parse error, or a value that is missing or does not convert) a
+  `BurstDownloadError`, each with the original as `__cause__`. A `FileNotFoundError` or `RasterWriteError`
+  that `BurstProcessor` already recorded is now wrapped the same way.
+
+  ```python
+  # before
+  summary.raise_on_failure(ignore=RasterWriteError)
+  # after
+  summary.raise_on_failure(ignore=SnapProcessingError)
+  ```
+- **Breaking:** an `OSError` meaning that the disk is full, over quota or
+  read-only (`ENOSPC`, `EDQUOT`, `EROFS`) stops `BurstCatalog.download()` and
+  the `BurstProcessor.create_*` methods, also when it is the cause of another
+  error such as `RasterWriteError`. GPT and GDAL report such a disk only in
+  their message, without an errno, so an error whose message, or the message
+  of an error it was raised from, says so (`No space left on device`, `Disk
+  quota exceeded`, `Read-only file system`) stops the batch too. Previously it
+  was recorded for every remaining item.
 - A batch stops promptly. When Ctrl-C or an error ends
   `BurstCatalog.download()` or a `BurstProcessor.create_*` method, the queued
   items are cancelled and only the running ones finish, instead of the whole

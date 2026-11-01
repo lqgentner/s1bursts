@@ -12,7 +12,9 @@ can still fail on a batch that finished with failures:
   It affects every item, so it propagates and fails fast; per-item handlers
   do not catch it. The one exception is the credentials of a download
   endpoint: ``BurstCatalog`` turns their absence into a per-burst
-  ``BurstDownloadError``, so that the other endpoint is still tried.
+  ``BurstDownloadError``, so that the other endpoint is still tried, and does
+  the same with credentials CDSE rejects for the fallback endpoint. Rejected
+  credentials of the endpoint the caller chose still raise.
 - ``OperationFailedError`` reports a *finished batch* with failed items. It is
   raised on request by ``OperationSummary.raise_on_failure()``, after every
   item has run, and lists the items that failed.
@@ -20,15 +22,67 @@ can still fail on a batch that finished with failures:
 Every other ``S1BurstsError`` fails the whole call that raised it, as does
 anything that is not one (a plain ``ValueError`` for an invalid argument, a
 third-party ``CRSError``). Leaving those to propagate keeps an environment-wide
-problem from being silently logged once per item.
+problem from being silently logged once per item. For the same reason, an
+``OSError`` meaning that the disk is full, over quota or read-only fails the
+call even when one item's code path raised it, while other ``OSError``
+failures are recorded per item. GPT and GDAL report such a disk only in their
+message, so an error whose message says so fails the call as well.
 """
 
 from __future__ import annotations
 
+import copy
+import errno
+import os
 from typing import TYPE_CHECKING, Any, Self
 
 if TYPE_CHECKING:
     from s1bursts.summary import ErrorResult, OperationSummary
+
+
+# Failures of the file system rather than of one item: every remaining item would
+# fail alike. EDQUOT is missing from Windows' errno.
+_ENVIRONMENT_ERRNOS = frozenset(
+    code
+    for code in (errno.ENOSPC, getattr(errno, "EDQUOT", None), errno.EROFS)
+    if code is not None
+)
+
+
+# How the C library, and Java on top of it, describe those failures in a message.
+_ENVIRONMENT_MESSAGES = frozenset(
+    {os.strerror(code) for code in _ENVIRONMENT_ERRNOS} | {"No space left on device"},
+)
+
+
+def _is_environment_wide(error: BaseException) -> bool:
+    """Whether an error, or one it was raised from, means a full, over-quota or read-only disk."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    # Wrappers such as freezebase's RasterWriteError keep the OSError as their cause.
+    while current is not None and id(current) not in seen:
+        if isinstance(current, OSError) and current.errno in _ENVIRONMENT_ERRNOS:
+            return True
+        # GPT and GDAL report a full disk in their message only, without an errno.
+        message = str(current)
+        if any(text in message for text in _ENVIRONMENT_MESSAGES):
+            return True
+        seen.add(id(current))
+        current = current.__cause__
+    return False
+
+
+def _copy_error[E: BaseException](error: E) -> E:
+    """Return a new instance of ``error``, with its arguments, attributes and cause but no notes.
+
+    An error kept to be reported again is handed out as a copy, so that a note or
+    traceback added where one copy is raised does not reach the others.
+    """
+    duplicate = copy.copy(error)
+    # The copy would otherwise share the original's list of notes.
+    vars(duplicate).pop("__notes__", None)
+    duplicate.__cause__ = error.__cause__
+    return duplicate
 
 
 class S1BurstsError(Exception):
@@ -187,4 +241,8 @@ class BurstDownloadError(BurstError):
 
 
 class SnapProcessingError(BurstError):
-    """A SNAP GPT graph failed for a single burst or burst pair."""
+    """Processing a single burst or burst pair with SNAP failed.
+
+    Raised when the GPT graph fails, and for an error staging the input SLCs
+    or writing the product, which is kept as the cause.
+    """

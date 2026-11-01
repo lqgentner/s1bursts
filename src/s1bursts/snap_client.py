@@ -23,6 +23,7 @@ from freezebase.raster import (
     rewrite_tiff,
 )
 import rasterio
+from rasterio.errors import RasterioError
 
 from s1bursts import product_tags
 from s1bursts.config import get_settings, warn_if_tmpdir_unusable
@@ -30,6 +31,7 @@ from s1bursts.errors import (
     BurstError,
     ConfigurationError,
     SnapProcessingError,
+    _is_environment_wide,
 )
 from s1bursts.product import (
     CoherenceProduct,
@@ -298,6 +300,21 @@ def _extract_gpt_error(
         nonempty = [line for line in lines if line.strip()]
         detail = "\n".join(nonempty[-10:]).strip()
     return detail[:max_chars]
+
+
+# Failures of one item: its GPT run, or staging its input or writing its product.
+_ITEM_ERRORS = (BurstError, OSError, RasterioError, RasterWriteError)
+
+
+def _item_failure(source: Burst | BurstPair, error: Exception) -> ErrorResult:
+    """Record ``error`` as a failure of ``source`` alone, unless every item would fail alike."""
+    if _is_environment_wide(error):
+        raise error
+    if not isinstance(error, BurstError):
+        wrapped = SnapProcessingError(f"{type(error).__name__}: {error}")
+        wrapped.__cause__ = error
+        error = wrapped
+    return ErrorResult(source=source, error=error)
 
 
 def _normalize_nodata(dataset: rasterio.io.DatasetWriter, nodata: float) -> int:
@@ -713,6 +730,10 @@ class SNAPClient:
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
             because it would fail every burst.
+        OSError, SnapProcessingError or RasterWriteError
+            If the disk is full, over quota or read-only, which would fail
+            every remaining item alike: an ``OSError`` saying so, or an error
+            caused by one or whose message or GPT output says so.
         """
         if isinstance(config, RTCConfig):
             rtc = RTCProduct.from_burst(burst, crs=crs)
@@ -773,9 +794,10 @@ class SNAPClient:
                         ),
                         normalize_nodata=config.replace_zeros_with_nan,
                     )
-                except (BurstError, FileNotFoundError, RasterWriteError) as e:
+                except _ITEM_ERRORS as e:
+                    result = _item_failure(burst, e)
                     logger.exception("Failed to process burst '%s'", burst)
-                    return ErrorResult(source=burst, error=e)
+                    return result
 
         logger.info("Successfully created '%s'", product_path.name)
         return OkResult(source=burst, result=product)
@@ -816,6 +838,10 @@ class SNAPClient:
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
             because it would fail every burst.
+        OSError, SnapProcessingError or RasterWriteError
+            If the disk is full, over quota or read-only, which would fail
+            every remaining item alike: an ``OSError`` saying so, or an error
+            caused by one or whose message or GPT output says so.
         """
         product = CoherenceProduct.from_burst_pair(pair, crs=crs)
         product_path = self.manager.get_product_path(product)
@@ -864,9 +890,10 @@ class SNAPClient:
                         ),
                         normalize_nodata=config.replace_zeros_with_nan,
                     )
-                except (BurstError, FileNotFoundError, RasterWriteError) as e:
+                except _ITEM_ERRORS as e:
+                    result = _item_failure(pair, e)
                     logger.exception("Failed to process burst pair '%s'", pair)
-                    return ErrorResult(source=pair, error=e)
+                    return result
 
         logger.info("Successfully created '%s'", product_path.name)
         return OkResult(source=pair, result=product)
@@ -905,6 +932,10 @@ class SNAPClient:
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
             because it would fail every burst.
+        OSError, SnapProcessingError or RasterWriteError
+            If the disk is full, over quota or read-only, which would fail
+            every remaining item alike: an ``OSError`` saying so, or an error
+            caused by one or whose message or GPT output says so.
         """
         product = InterferogramProduct.from_burst_pair(pair, crs=crs)
         product_path = self.manager.get_product_path(product)
@@ -953,9 +984,10 @@ class SNAPClient:
                         ),
                         normalize_nodata=config.replace_zeros_with_nan,
                     )
-                except (BurstError, FileNotFoundError, RasterWriteError) as e:
+                except _ITEM_ERRORS as e:
+                    result = _item_failure(pair, e)
                     logger.exception("Failed to process burst pair '%s'", pair)
-                    return ErrorResult(source=pair, error=e)
+                    return result
 
         logger.info("Successfully created '%s'", product_path.name)
         return OkResult(source=pair, result=product)

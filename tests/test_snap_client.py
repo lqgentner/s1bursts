@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import logging
+import os
 from pathlib import Path
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any, cast
@@ -15,6 +17,7 @@ from pandas import Timestamp
 from pyproj import CRS
 import pytest
 import rasterio
+import rasterio.errors
 import rasterio.transform
 from upath import UPath
 
@@ -686,7 +689,8 @@ class TestCreateBackscatter:
             )
 
         assert isinstance(result, ErrorResult)
-        assert isinstance(result.error, RasterWriteError)
+        assert isinstance(result.error, SnapProcessingError)
+        assert isinstance(result.error.__cause__, RasterWriteError)
 
     def test_unrelated_runtime_error_propagates(self, client: SNAPClient) -> None:
         """Only a failed product write becomes a per-burst error."""
@@ -954,7 +958,8 @@ class TestCreateInterferogram:
             )
 
         assert isinstance(result, ErrorResult)
-        assert isinstance(result.error, RasterWriteError)
+        assert isinstance(result.error, SnapProcessingError)
+        assert isinstance(result.error.__cause__, RasterWriteError)
         assert result.source is pair
 
 
@@ -993,6 +998,97 @@ def test_missing_burst_map_for_the_secondary_propagates(
         getattr(client, method)(pair, crs=CRS("EPSG:32632"), config=config)
 
     mock_gpt.assert_not_called()
+
+
+def _create(client: SNAPClient, method: str) -> ErrorResult | OkResult[Any]:
+    """Run ``method`` of ``client`` for a burst or a pair, as it takes."""
+    crs = CRS("EPSG:32632")
+    if method == "create_backscatter":
+        return client.create_backscatter(_make_burst("2022-01-01"), crs, config=RTCConfig())
+    pair = BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
+    if method == "create_coherence":
+        return client.create_coherence(pair, crs, config=CoherenceConfig())
+    return client.create_interferogram(pair, crs, config=InterferogramConfig())
+
+
+_CREATE_METHODS = ["create_backscatter", "create_coherence", "create_interferogram"]
+
+
+@pytest.mark.parametrize("method", _CREATE_METHODS)
+@pytest.mark.parametrize(
+    ("stage", "error"),
+    [
+        pytest.param("_stage_slc", FileNotFoundError(2, "No such file"), id="staging"),
+        pytest.param(
+            "_finalize_product",
+            rasterio.errors.RasterioIOError("Read or write failed"),
+            id="finalizing",
+        ),
+        pytest.param("_finalize_product", OSError(5, "Input/output error"), id="os-error"),
+    ],
+)
+def test_a_data_error_is_recorded_as_a_processing_error(
+    client: SNAPClient,
+    method: str,
+    stage: str,
+    error: Exception,
+) -> None:
+    """Previously a rasterio or OSError while writing the product aborted the whole batch."""
+    with patch.object(client, "_run_gpt"), patch.object(client, stage, side_effect=error):
+        result = _create(client, method)
+
+    assert isinstance(result, ErrorResult)
+    assert isinstance(result.error, SnapProcessingError)
+    assert str(result.error) == f"{type(error).__name__}: {error}"
+    assert result.error.__cause__ is error
+
+
+@pytest.mark.parametrize("method", _CREATE_METHODS)
+@pytest.mark.parametrize("code", [errno.ENOSPC, errno.EDQUOT, errno.EROFS])
+def test_a_full_or_read_only_disk_stops_the_run(
+    client: SNAPClient,
+    method: str,
+    code: int,
+) -> None:
+    """Every remaining item would fail alike, so it is not recorded per item."""
+    disk_error = OSError(code, os.strerror(code))
+
+    with (
+        patch.object(client, "_stage_slc", side_effect=disk_error),
+        pytest.raises(OSError, match=os.strerror(code)) as excinfo,
+    ):
+        _create(client, method)
+
+    assert excinfo.value is disk_error
+
+
+def test_a_full_disk_reported_by_gdal_stops_the_run(client: SNAPClient) -> None:
+    """GDAL reports a full disk in its message only, without an errno."""
+    gdal_error = rasterio.errors.RasterioIOError(
+        "TIFFWriteEncodedTile: No space left on device",
+    )
+
+    with (
+        patch.object(client, "_run_gpt"),
+        patch.object(client, "_finalize_product", side_effect=gdal_error),
+        pytest.raises(rasterio.errors.RasterioIOError) as excinfo,
+    ):
+        _create(client, "create_backscatter")
+
+    assert excinfo.value is gdal_error
+
+
+def test_a_full_disk_behind_a_write_error_stops_the_run(client: SNAPClient) -> None:
+    """Freezebase keeps the OSError as the cause of the RasterWriteError it raises."""
+    write_error = RasterWriteError("Failed to rewrite GeoTIFF")
+    write_error.__cause__ = OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+    with (
+        patch.object(client, "_run_gpt"),
+        patch.object(client, "_finalize_product", side_effect=write_error),
+        pytest.raises(RasterWriteError),
+    ):
+        _create(client, "create_backscatter")
 
 
 class TestResourceBudget:

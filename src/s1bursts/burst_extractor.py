@@ -27,9 +27,10 @@ The following properties of CDSE burst products are retained:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import logging
 from operator import itemgetter
 from pathlib import Path
@@ -51,12 +52,36 @@ import requests
 from upath import UPath
 
 from s1bursts.config import get_settings
-from s1bursts.errors import BurstNotFoundError, ConfigurationError
+from s1bursts.errors import BurstDownloadError, BurstNotFoundError, ConfigurationError
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from s1bursts.config import CDSES3Settings
 
 logger = logging.getLogger(__name__)
+
+
+# What a malformed SAFE file raises while it is parsed: lxml's parse errors,
+# and the conversions and lookups of the values read from it.
+_PARSE_ERRORS = (
+    etree.LxmlError,
+    ValueError,
+    IndexError,
+    AttributeError,
+    InvalidOperation,
+    TypeError,
+)
+
+
+@contextmanager
+def _parsing(product_name: str, what: str) -> Generator[None]:
+    """Report a parse error of a SAFE file as a failure of this burst."""
+    try:
+        yield
+    except _PARSE_ERRORS as e:
+        msg = f"Malformed {what} in '{product_name}': {type(e).__name__}: {e}"
+        raise BurstDownloadError(msg) from e
 
 
 def _parse_xml(data: bytes) -> etree._Element:
@@ -580,6 +605,9 @@ def extract_burst_from_s3(  # noqa: PLR0915
         If ``sub_swath`` is not a recognised subswath identifier.
     BurstNotFoundError
         If the parent product or the requested burst cannot be found.
+    BurstDownloadError
+        If the product's annotation, calibration, noise, RFI or manifest file
+        is malformed. The parse error is kept as the cause.
     ConfigurationError
         If the CDSE S3 credentials are not configured.
     """
@@ -602,36 +630,35 @@ def extract_burst_from_s3(  # noqa: PLR0915
     ann_text = ann_upath.read_text()
     manifest_text = (product_root / "manifest.safe").read_text()
 
-    ann_root = _parse_xml(ann_text.encode())
-    mfst_root = _parse_xml(manifest_text.encode())
-
-    meta = _resolve_burst(
-        ann_root,
-        mfst_root,
-        relative_burst_id=burst_id,
-        sub_swath=swath,
-        annotation_filename=ann_upath.name,
-    )
+    with _parsing(parent_product_name, "annotation or manifest"):
+        ann_root = _parse_xml(ann_text.encode())
+        mfst_root = _parse_xml(manifest_text.encode())
+        meta = _resolve_burst(
+            ann_root,
+            mfst_root,
+            relative_burst_id=burst_id,
+            sub_swath=swath,
+            annotation_filename=ann_upath.name,
+        )
+        # Read GCPs before editing shifts annotation lines to the burst origin.
+        geoloc_pts: list[tuple[float, float, float, float, float]] = [
+            (
+                float(p.findtext("pixel")),
+                float(p.findtext("line")) - meta.starting_line,
+                float(p.findtext("longitude")),
+                float(p.findtext("latitude")),
+                float(p.findtext("height")),
+            )
+            for p in ann_root.findall(
+                "geolocationGrid/geolocationGridPointList/geolocationGridPoint",
+            )
+        ]
     logger.debug(
         "Burst %d → burst_number=%d, starting_line=%d",
         burst_id,
         meta.burst_number,
         meta.starting_line,
     )
-
-    # Read GCPs before editing shifts annotation lines to the burst origin.
-    geoloc_pts: list[tuple[float, float, float, float, float]] = [
-        (
-            float(p.findtext("pixel")),
-            float(p.findtext("line")) - meta.starting_line,
-            float(p.findtext("longitude")),
-            float(p.findtext("latitude")),
-            float(p.findtext("height")),
-        )
-        for p in ann_root.findall(
-            "geolocationGrid/geolocationGridPointList/geolocationGridPoint",
-        )
-    ]
 
     safe_name = (
         f"S1{meta.platform_number}_SLC_{meta.sensing_time_compact}"
@@ -644,42 +671,48 @@ def extract_burst_from_s3(  # noqa: PLR0915
         (safe_dir / "measurement").mkdir()
 
         logger.info("Editing annotation and auxiliary XML files")
-        ann_bytes = _edit_annotation(ann_root, meta)
+        with _parsing(parent_product_name, "annotation"):
+            ann_bytes = _edit_annotation(ann_root, meta)
         (safe_dir / "annotation" / f"{meta.new_pattern}.xml").write_bytes(ann_bytes)
 
         cal_text = (
             product_root / f"annotation/calibration/calibration-{ann_upath.name}"
         ).read_text()
+        with _parsing(parent_product_name, "calibration annotation"):
+            cal_bytes = _edit_calibration(cal_text, meta)
         (
             safe_dir / "annotation" / "calibration" / f"calibration-{meta.new_pattern}.xml"
-        ).write_bytes(
-            _edit_calibration(cal_text, meta),
-        )
+        ).write_bytes(cal_bytes)
 
         noise_text = (product_root / f"annotation/calibration/noise-{ann_upath.name}").read_text()
+        with _parsing(parent_product_name, "noise annotation"):
+            noise_bytes = _edit_noise(noise_text, meta)
         (safe_dir / "annotation" / "calibration" / f"noise-{meta.new_pattern}.xml").write_bytes(
-            _edit_noise(noise_text, meta),
+            noise_bytes,
         )
 
         rfi_upath = product_root / f"annotation/rfi/rfi-{ann_upath.name}"
         if rfi_upath.exists():
+            rfi_text = rfi_upath.read_text()
+            with _parsing(parent_product_name, "RFI annotation"):
+                rfi_bytes = _edit_rfi(rfi_text, meta)
             (safe_dir / "annotation" / "rfi").mkdir()
             (safe_dir / "annotation" / "rfi" / f"rfi-{meta.new_pattern}.xml").write_bytes(
-                _edit_rfi(rfi_upath.read_text(), meta),
+                rfi_bytes,
             )
 
         # Build the manifest after shifting the annotation footprint.
         old_pattern = ann_upath.name[:-4]
-        footprint = _build_footprint(ann_root)
-        (safe_dir / "manifest.safe").write_bytes(
-            _edit_manifest(
+        with _parsing(parent_product_name, "annotation or manifest"):
+            footprint = _build_footprint(ann_root)
+            manifest_bytes = _edit_manifest(
                 manifest_text,
                 meta,
                 sub_swath=swath,
                 old_pattern=old_pattern,
                 footprint=footprint,
-            ),
-        )
+            )
+        (safe_dir / "manifest.safe").write_bytes(manifest_bytes)
 
         tiff_s3_path = product_root / f"measurement/{ann_upath.name[:-4]}.tiff"
         dst_tiff = safe_dir / "measurement" / f"{meta.new_pattern}.tiff"

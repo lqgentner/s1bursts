@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from functools import partial
+from http import HTTPStatus
 import logging
 import threading
 import time
@@ -22,7 +24,10 @@ from s1bursts.errors import (
     BurstNotFoundError,
     CatalogError,
     ConfigurationError,
+    S1BurstsError,
     TooManyResultsError,
+    _copy_error,
+    _is_environment_wide,
 )
 from s1bursts.summary import ErrorResult, OkResult, OperationResult, OperationSummary
 
@@ -34,6 +39,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 type Endpoint = Literal["odata", "s3"]
+
+
+_ENDPOINT_LABELS: dict[Endpoint, str] = {"odata": "OData", "s3": "S3"}
+
+
+def _describe(error: Exception) -> str:
+    """Describe an error by its message, prefixed with its type unless it is one of ours."""
+    if isinstance(error, S1BurstsError):
+        return str(error)
+    return f"{type(error).__name__}: {error}"
 
 
 def _cdse_id_present(cdse_id: str | None) -> TypeGuard[str]:
@@ -93,8 +108,9 @@ class BurstCatalog:
         self._unavailable_bursts: dict[Burst, BurstNotFoundError] = {}
         self._unavailable_lock = threading.Lock()
         self._auth_lock = threading.Lock()
+        self._auth_rejected: ConfigurationError | None = None
 
-    def _ensure_auth(self) -> None:
+    def _ensure_auth(self, *, primary: bool = True) -> None:
         """Create the CDSE OData authentication handler on first use.
 
         Deferred so that searching (which needs no auth) and S3-only downloads
@@ -103,20 +119,32 @@ class BurstCatalog:
         immediately before an OData request, so a user who configured only
         ``CDSE_S3_*`` credentials is never asked for OData credentials unless an
         OData attempt actually happens (as primary endpoint or as S3 fallback).
+        Credentials CDSE rejects raise ``ConfigurationError`` where OData is the
+        ``primary`` endpoint, and ``BurstDownloadError`` where it is the fallback.
         """
         with self._auth_lock:
-            if self.client.auth is None:
-                # Outside the try: an invalid setting is not a missing credential.
-                get_settings()
-                try:
-                    self.client.auth = CDSEAuth()
-                except ConfigurationError as e:
+            if self._auth_rejected is None and self.client.auth is None:
+                cdse = get_settings().cdse
+                if cdse.username is None or cdse.password is None:
                     msg = (
                         "OData download requires CDSE credentials, but none are "
                         "configured. Set CDSE_USERNAME and CDSE_PASSWORD, or download "
                         "with endpoint='s3' using CDSE_S3_* credentials only."
                     )
-                    raise BurstDownloadError(msg) from e
+                    raise BurstDownloadError(msg)
+                try:
+                    self.client.auth = CDSEAuth()
+                except ConfigurationError as e:
+                    # Logging in again for every burst could lock the account.
+                    self._auth_rejected = e
+            rejected = self._auth_rejected
+        if rejected is None:
+            return
+        # Copies, so that a note added where one is raised does not reach the others.
+        if primary:
+            raise _copy_error(rejected)
+        # The endpoint the caller chose may still work, so it fails this burst only.
+        raise BurstDownloadError(str(rejected)) from _copy_error(rejected)
 
     def search(self, query: SearchQuery) -> BurstCollection:
         """Search for Sentinel-1 bursts matching the query.
@@ -175,18 +203,30 @@ class BurstCatalog:
         Returns
         -------
         OperationSummary
-            Summary of download results.
+            Summary of download results. A burst that neither endpoint could
+            download is recorded with one error naming the failure of each,
+            such as ``OData: HTTPError: 503 ...; S3: ...``: a
+            ``BurstNotFoundError`` if both found it missing, a
+            ``BurstDownloadError`` otherwise.
 
         Raises
         ------
         TypeError
             If an item is neither a ``Burst`` nor a ``BurstPair``.
         ConfigurationError
-            If an environment variable holds an invalid value. Missing
-            credentials of an endpoint are recorded per burst instead.
+            If an environment variable holds an invalid value, or CDSE rejects
+            the username and password with OData as ``endpoint``, which the
+            next call tries again. Missing credentials of an endpoint, and
+            rejected ones of the fallback endpoint, are recorded per burst
+            instead.
+        OSError
+            If the disk is full, over quota or read-only, which would fail
+            every remaining burst alike.
         """
         start_time = time.time()
         burst_list = self._unique_bursts(bursts)
+        # The credentials may have been corrected since a previous call.
+        self._auth_rejected = None
 
         results: list[OperationResult[Burst]] = []
 
@@ -295,15 +335,19 @@ class BurstCatalog:
                 str(burst),
                 cached_error,
             )
-            return ErrorResult(source=burst, error=cached_error)
+            return ErrorResult(source=burst, error=_copy_error(cached_error))
 
         # Determine primary and fallback endpoints
+        primary_name: Endpoint
+        fallback_name: Endpoint
         if endpoint.lower() == "odata":
+            primary_name, fallback_name = "odata", "s3"
             primary_method = self._download_burst_odata
             fallback_method = self._download_burst_s3
         elif endpoint.lower() == "s3":
+            primary_name, fallback_name = "s3", "odata"
             primary_method = self._download_burst_s3
-            fallback_method = self._download_burst_odata
+            fallback_method = partial(self._download_burst_odata, primary=False)
         else:
             msg = f"`endpoint` must be 'odata' or 's3', received '{endpoint}'"
             raise ValueError(msg)
@@ -333,52 +377,68 @@ class BurstCatalog:
             )
             return fallback_result
 
-        # Both endpoints failed: surface both root causes, otherwise the downstream
-        # FileNotFoundError (missing SLC) hides why the SLC was never produced.
-        logger.error(
-            "Both endpoints failed for burst %s. Primary %s: %s. Fallback %s: %s.",
-            str(burst),
-            type(primary_result.error).__name__,
-            primary_result.error,
-            type(fallback_result.error).__name__,
-            fallback_result.error,
+        error = self._combine_endpoint_errors(
+            {primary_name: primary_result.error, fallback_name: fallback_result.error},
         )
-
-        # Cache only definitive absences, not transient transport failures.
-        not_found_error = next(
-            (
-                err
-                for err in (fallback_result.error, primary_result.error)
-                if isinstance(err, BurstNotFoundError)
-            ),
-            None,
-        )
-        if not_found_error is not None:
+        logger.error("Both endpoints failed for burst %s: %s", str(burst), error)
+        if isinstance(error, BurstNotFoundError):
             with self._unavailable_lock:
-                self._unavailable_bursts[burst] = not_found_error
+                # A copy, so that a note added where this one is raised stays here.
+                self._unavailable_bursts[burst] = _copy_error(error)
 
         if not self.continue_on_error:
-            raise fallback_result.error
-        return fallback_result
+            raise error
+        return ErrorResult(source=burst, error=error)
 
-    def _download_burst_odata(self, burst: Burst) -> OperationResult[Burst]:
+    @staticmethod
+    def _combine_endpoint_errors(errors: dict[Endpoint, Exception]) -> BurstError:
+        """Return one error naming the failure of each endpoint, caused by the first one's."""
+        detail = "; ".join(
+            f"{_ENDPOINT_LABELS[name]}: {_describe(error)}" for name, error in errors.items()
+        )
+        # Absent only if every endpoint says so: one transient failure can hide a
+        # burst that is there.
+        combined: BurstError = (
+            BurstNotFoundError(detail)
+            if all(isinstance(error, BurstNotFoundError) for error in errors.values())
+            else BurstDownloadError(detail)
+        )
+        combined.__cause__ = next(iter(errors.values()))
+        return combined
+
+    def _download_burst_odata(
+        self,
+        burst: Burst,
+        *,
+        primary: bool = True,
+    ) -> OperationResult[Burst]:
         """Download burst using OData API.
 
         Writes the result to the deterministic SLC path resolved by
-        ``FileManager`` (local or S3 via UPath).
+        ``FileManager`` (local or S3 via UPath). ``primary`` is whether OData is
+        the endpoint the caller chose rather than the fallback.
         """
         if not _cdse_id_present(burst.cdse_id):
             msg = "ODATA download requires `cdse_id`, received None."
             return ErrorResult(source=burst, error=BurstDownloadError(msg))
         try:
-            self._ensure_auth()
+            self._ensure_auth(primary=primary)
             self.client.download_burst(
                 burst.cdse_id,
                 save_path=self.file_manager.get_slc_path(burst),
                 progress=False,
             )
             return OkResult(source=burst, result=burst)
-        except (BurstError, DownloadError, HTTPError, OSError) as e:
+        except HTTPError as e:
+            if e.response is None or e.response.status_code != HTTPStatus.NOT_FOUND:
+                return ErrorResult(source=burst, error=e)
+            msg = f"CDSE does not serve the burst '{burst.cdse_id}' (HTTP 404)."
+            not_found = BurstNotFoundError(msg)
+            not_found.__cause__ = e
+            return ErrorResult(source=burst, error=not_found)
+        except (BurstError, DownloadError, OSError) as e:
+            if _is_environment_wide(e):
+                raise
             return ErrorResult(source=burst, error=e)
 
     def _download_burst_s3(self, burst: Burst) -> OperationResult[Burst]:
@@ -412,6 +472,8 @@ class BurstCatalog:
             )
             return ErrorResult(source=burst, error=BurstDownloadError(msg))
         except (BurstError, OSError) as e:
+            if _is_environment_wide(e):
+                raise
             return ErrorResult(source=burst, error=e)
 
     @staticmethod

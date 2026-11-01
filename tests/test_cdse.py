@@ -40,6 +40,118 @@ class TestCDSEAuth:
         with pytest.raises(ConfigurationError, match="CDSE credentials not configured"):
             CDSEAuth()
 
+    @pytest.mark.parametrize("status", [400, 401, 403])
+    def test_rejected_credentials_raise_a_configuration_error(self, status: int) -> None:
+        """Previously an HTTPError, which a download recorded per burst and retried."""
+        rejected = MagicMock()
+        rejected.status_code = status
+        rejected.json.return_value = {
+            "error": "invalid_grant",
+            "error_description": "Invalid user credentials",
+        }
+        with (
+            patch("s1bursts.cdse.requests.post", return_value=rejected) as mock_post,
+            pytest.raises(ConfigurationError, match=r"rejected the username and password") as e,
+        ):
+            CDSEAuth(username="someone", password="hunter2")
+
+        mock_post.assert_called_once()
+        assert f"(HTTP {status}: Invalid user credentials)" in str(e.value)
+        assert "hunter2" not in str(e.value)
+        assert "someone" not in str(e.value)
+        # A chained HTTPError would keep the request, whose body holds the password.
+        assert e.value.__cause__ is None
+        assert e.value.__context__ is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(ValueError("not JSON"), id="not-json"),
+            pytest.param(["a list"], id="not-an-object"),
+            pytest.param({"error_description": "  "}, id="blank"),
+        ],
+    )
+    def test_a_rejection_without_a_description_names_the_status(self, body: object) -> None:
+        rejected = MagicMock()
+        rejected.status_code = 401
+        if isinstance(body, Exception):
+            rejected.json.side_effect = body
+        else:
+            rejected.json.return_value = body
+
+        with (
+            patch("s1bursts.cdse.requests.post", return_value=rejected),
+            pytest.raises(ConfigurationError, match=r"\(HTTP 401\)\."),
+        ):
+            CDSEAuth(username="someone", password="hunter2")
+
+    @staticmethod
+    def _failing_response(status: int, secret: str) -> MagicMock:
+        """Return a token response that fails with an HTTPError holding ``secret``."""
+        request = requests.Request(
+            "POST",
+            "https://identity.example/token",
+            data={"password": secret},
+        ).prepare()
+        response = MagicMock()
+        response.status_code = status
+        response.request = request
+        response.raise_for_status.side_effect = requests.HTTPError(
+            f"{status} Server Error for url: https://identity.example/token",
+            response=response,
+        )
+        return response
+
+    def test_another_login_failure_keeps_no_request(self) -> None:
+        """The request holds the password in its body, so the error must not keep it."""
+        failing = self._failing_response(500, "hunter2")
+
+        with (
+            patch("s1bursts.cdse.requests.post", return_value=failing),
+            pytest.raises(requests.HTTPError, match="500 Server Error") as e,
+        ):
+            CDSEAuth(username="someone", password="hunter2")
+
+        assert e.value.request is None
+        assert e.value.response is None
+        assert e.value.__cause__ is None
+        assert e.value.__context__ is None
+
+    def test_a_failed_refresh_keeps_no_request(self) -> None:
+        """The refresh request holds the refresh token in its body."""
+        with patch("s1bursts.cdse.requests.post", return_value=make_token_response()):
+            auth = CDSEAuth(username="user", password="pass")
+        auth.token_expires_at = time.time() - 1
+        request = MagicMock()
+        headers: dict[str, str] = {}
+        request.headers = headers
+
+        with (
+            patch(
+                "s1bursts.cdse.requests.post",
+                return_value=self._failing_response(500, "refresh-1"),
+            ),
+            pytest.raises(requests.HTTPError, match="500 Server Error") as e,
+        ):
+            auth(request)
+
+        assert e.value.request is None
+        assert e.value.__context__ is None
+
+    def test_an_error_with_another_constructor_is_copied_as_a_request_exception(self) -> None:
+        """Requests' JSONDecodeError takes a document and a position besides the message."""
+        broken = MagicMock()
+        broken.status_code = 200
+        broken.json.side_effect = requests.JSONDecodeError("Expecting value", "<html>", 0)
+
+        with (
+            patch("s1bursts.cdse.requests.post", return_value=broken),
+            pytest.raises(requests.RequestException, match="Expecting value") as e,
+        ):
+            CDSEAuth(username="someone", password="hunter2")
+
+        assert type(e.value) is requests.RequestException
+
     def test_initial_token_fetch_and_header(self) -> None:
         with patch(
             "s1bursts.cdse.requests.post",
