@@ -24,8 +24,9 @@ from s1bursts.errors import (
     TooManyResultsError,
 )
 from s1bursts.query import SearchQuery
-from s1bursts.summary import ErrorResult, OkResult
+from s1bursts.summary import ErrorResult, OkResult, OperationResult
 from s1bursts.time_range import TimeRange
+from tests.gated_pool import Gate
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -247,6 +248,103 @@ class TestDownloadDispatch:
 
         assert mock_download.call_count == 2
         assert summary.n_processed == 2
+
+
+class TestStoppingADownload:
+    """A download that stops early cancels its queue and says what it kept."""
+
+    @staticmethod
+    def _bursts(n: int) -> list[Burst]:
+        return [_make_burst(f"2016-07-{day:02d}") for day in range(1, n + 1)]
+
+    def test_ctrl_c_cancels_the_queued_downloads(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Previously the queue was drained before the KeyboardInterrupt surfaced."""
+        catalog = _make_catalog()
+        catalog.show_progress = False
+        gate = Gate(n_running=2)
+        monkeypatch.setattr("s1bursts.catalog.ThreadPoolExecutor", gate.executor())
+        monkeypatch.setattr("s1bursts.catalog.as_completed", gate.interrupt)
+        bursts = self._bursts(6)
+
+        def download(burst: Burst, _endpoint: str) -> OkResult[Burst]:
+            gate.enter(burst)
+            return OkResult(source=burst, result=burst)
+
+        with (
+            patch.object(catalog, "_download_single_burst", side_effect=download),
+            pytest.raises(KeyboardInterrupt) as excinfo,
+        ):
+            catalog.download(bursts, max_workers=2)
+
+        assert set(gate.started) == set(bursts[:2])
+        assert excinfo.value.__notes__ == [
+            (
+                "Stopped with 2 of 6 bursts finished; SLCs already downloaded are kept, "
+                "and a rerun without overwrite skips them."
+            )
+        ]
+
+    def test_ctrl_c_while_submitting_cancels_what_was_queued(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        catalog = _make_catalog()
+        catalog.show_progress = False
+        gate = Gate(n_running=2)
+        monkeypatch.setattr(
+            "s1bursts.catalog.ThreadPoolExecutor",
+            gate.executor(interrupt_at_submit=4),
+        )
+        bursts = self._bursts(6)
+
+        def download(burst: Burst, _endpoint: str) -> OkResult[Burst]:
+            gate.enter(burst)
+            return OkResult(source=burst, result=burst)
+
+        with (
+            patch.object(catalog, "_download_single_burst", side_effect=download),
+            pytest.raises(KeyboardInterrupt) as excinfo,
+        ):
+            catalog.download(bursts, max_workers=2)
+
+        # The third and fourth were queued and cancelled; the first two may have
+        # been cancelled too if no worker had taken them yet.
+        assert set(gate.started) <= set(bursts[:2])
+        n_finished = len(gate.started)
+        assert f"Stopped with {n_finished} of 6 bursts finished" in excinfo.value.__notes__[0]
+
+    def test_a_failure_without_continue_on_error_cancels_the_queue(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Previously the queue was drained before the first failure was raised."""
+        catalog = _make_catalog()
+        catalog.show_progress = False
+        catalog.continue_on_error = False
+        gate = Gate(n_running=2)
+        monkeypatch.setattr("s1bursts.catalog.ThreadPoolExecutor", gate.executor())
+        bursts = self._bursts(8)
+
+        def odata(burst: Burst) -> OperationResult[Burst]:
+            if burst == bursts[0]:
+                return ErrorResult(source=burst, error=HTTPError("503 Service Unavailable"))
+            gate.enter(burst)
+            return OkResult(source=burst, result=burst)
+
+        def s3(burst: Burst) -> ErrorResult:
+            return ErrorResult(source=burst, error=HTTPError("502 Bad Gateway"))
+
+        with (
+            patch.object(catalog, "_download_burst_odata", side_effect=odata),
+            patch.object(catalog, "_download_burst_s3", side_effect=s3),
+            pytest.raises(HTTPError) as excinfo,
+        ):
+            catalog.download(bursts, max_workers=2)
+
+        # The worker freed by the failure may have taken the third burst first.
+        assert set(gate.started) <= set(bursts[1:3])
+        n_finished = 1 + len(gate.started)
+        assert f"Stopped with {n_finished} of 8 bursts finished" in excinfo.value.__notes__[0]
 
 
 class TestEndpointWrappers:

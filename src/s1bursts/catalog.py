@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import logging
 import threading
 import time
@@ -62,7 +62,9 @@ class BurstCatalog:
         Whether to continue downloading after individual failures. ``True``,
         the default, attempts every burst and records each failure in the
         summary, so one missing burst does not end a long download; ``False``
-        raises at the first burst that fails on both endpoints. A burst this
+        raises at the first burst that fails on both endpoints, once the
+        downloads already running have finished, without starting the queued
+        ones. A burst this
         catalog already found missing at the source is not requested again:
         it is recorded as failed without raising, whichever the setting, and a
         rerun on the same catalog reports it again rather than retrying it.
@@ -204,24 +206,43 @@ class BurstCatalog:
         # OData code path (see `_ensure_auth`) so that `endpoint="s3"` works with
         # only CDSE_S3_* credentials configured.
         if bursts_to_download:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [
-                    executor.submit(self._download_single_burst, burst, endpoint_to_use)
-                    for burst in bursts_to_download
-                ]
-
-                # Setup iterator with or without progress tracking
-                progress = create_progress(show_progress=self.show_progress)
-                with progress:
-                    task_id = progress.add_task(
-                        "Downloading bursts",
-                        total=len(bursts_to_download),
-                    )
-                    for future in as_completed(futures):
-                        results.append(future.result())
-                        progress.advance(task_id)
-                    # Ensure the progress bar shows 100% completion
-                    progress.update(task_id, refresh=True)
+            futures: list[Future[OperationResult[Burst]]] = []
+            try:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    progress = create_progress(show_progress=self.show_progress)
+                    with progress:
+                        task_id = progress.add_task(
+                            "Downloading bursts",
+                            total=len(bursts_to_download),
+                        )
+                        # Submitting inside the try, so that an interrupt while the
+                        # queue is filled also cancels what was queued.
+                        try:
+                            # extend keeps the futures submitted before an interrupt.
+                            futures.extend(
+                                executor.submit(
+                                    self._download_single_burst, burst, endpoint_to_use
+                                )
+                                for burst in bursts_to_download
+                            )
+                            for future in as_completed(futures):
+                                results.append(future.result())
+                                progress.advance(task_id)
+                        except BaseException:
+                            # Leaving the block joins the workers, which would run
+                            # the whole queue first; only the running downloads finish.
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            raise
+                        # Ensure the progress bar shows 100% completion
+                        progress.update(task_id, refresh=True)
+            except BaseException as err:
+                # Counted once the running downloads have finished, so it includes them.
+                n_finished = sum(future.done() and not future.cancelled() for future in futures)
+                err.add_note(
+                    f"Stopped with {n_finished} of {len(bursts_to_download)} bursts finished; "
+                    "SLCs already downloaded are kept, and a rerun without overwrite skips them."
+                )
+                raise
 
             # Invalidate fsspec directory cache so that subsequent glob/ls
             # calls see the newly uploaded files (relevant for S3-backed UPath

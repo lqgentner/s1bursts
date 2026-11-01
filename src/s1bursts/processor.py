@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from functools import partial
 import logging
 import time
@@ -56,7 +56,9 @@ class BurstProcessor:
     continue_on_error
         Whether to continue processing after an error. ``True``, the default,
         attempts every item and records each failure in the summary, so one bad
-        burst does not end a long job; ``False`` raises at the first error.
+        burst does not end a long job; ``False`` raises at the first error,
+        once the items already running have finished, without starting the
+        queued ones.
         Follow a run with ``OperationSummary.raise_on_failure()`` to fail
         once all items have been attempted.
     """
@@ -264,6 +266,11 @@ class BurstProcessor:
             item_description="Interferogram",
         )
 
+    def _raise_unless_continuing[T](self, result: OperationResult[T]) -> None:
+        """Raise the error of a failed item unless the batch continues on error."""
+        if isinstance(result, ErrorResult) and not self.continue_on_error:
+            raise result.error
+
     def _process_collection[I, T](
         self,
         collection: Iterable[I],
@@ -281,26 +288,46 @@ class BurstProcessor:
             f"Processing {item_description.lower()}",
             total=len(items),
         )
-        with progress:
-            if max_workers <= 1:
-                for item in items:
-                    result = process_fn(item)
-                    if isinstance(result, ErrorResult) and not self.continue_on_error:
-                        raise result.error
-                    results.append(result)
-                    progress.advance(task_id)
-            else:
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = [executor.submit(process_fn, item) for item in items]
-                    for future in as_completed(futures):
-                        result = future.result()
-                        if isinstance(result, ErrorResult) and not self.continue_on_error:
-                            executor.shutdown(wait=False, cancel_futures=True)
-                            raise result.error
+        futures: list[Future[OperationResult[T]]] = []
+        try:
+            with progress:
+                if max_workers <= 1:
+                    for item in items:
+                        result = process_fn(item)
+                        results.append(result)
+                        self._raise_unless_continuing(result)
                         progress.advance(task_id)
-                # Submission order, so the summary does not depend on thread timing.
-                results.extend(future.result() for future in futures)
-            progress.update(task_id, refresh=True)
+                else:
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        # Submitting inside the try, so that an interrupt while the
+                        # queue is filled also cancels what was queued.
+                        try:
+                            # extend keeps the futures submitted before an interrupt.
+                            futures.extend(executor.submit(process_fn, item) for item in items)
+                            for future in as_completed(futures):
+                                result = future.result()
+                                self._raise_unless_continuing(result)
+                                progress.advance(task_id)
+                        except BaseException:
+                            # Leaving the block joins the workers, which would run
+                            # the whole queue first; only the running items finish.
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            raise
+                    # Submission order, so the summary does not depend on thread timing.
+                    results.extend(future.result() for future in futures)
+                progress.update(task_id, refresh=True)
+        except BaseException as err:
+            # Counted once the running items have finished, so it includes them.
+            n_finished = (
+                sum(future.done() and not future.cancelled() for future in futures)
+                if futures
+                else len(results)
+            )
+            err.add_note(
+                f"Stopped with {n_finished} of {len(items)} items finished; products "
+                "already written are kept, and a rerun without overwrite skips them."
+            )
+            raise
 
         return OperationSummary.from_results(
             results,

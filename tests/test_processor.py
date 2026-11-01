@@ -15,6 +15,7 @@ from s1bursts.processor import BurstProcessor
 from s1bursts.snap_client import SNAPConfig
 from s1bursts.snap_graph import CoherenceConfig, GTCConfig, RTCConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationSummary
+from tests.gated_pool import Gate
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -185,6 +186,104 @@ class TestProcessCollection:
 
         with pytest.raises(SnapProcessingError, match="boom"):
             processor._process_collection(["a", "b"], process_fn, "Test")
+
+
+class TestStoppingABatch:
+    """A batch that stops early cancels its queue and says what it kept."""
+
+    @pytest.fixture
+    def gate(self, processor: BurstProcessor, monkeypatch: pytest.MonkeyPatch) -> Gate:
+        processor.config.resolved_max_workers = 2
+        gate = Gate(n_running=2)
+        monkeypatch.setattr("s1bursts.processor.ThreadPoolExecutor", gate.executor())
+        return gate
+
+    def test_ctrl_c_cancels_the_queued_items(
+        self,
+        processor: BurstProcessor,
+        gate: Gate,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Previously the queue was drained before the KeyboardInterrupt surfaced."""
+        monkeypatch.setattr("s1bursts.processor.as_completed", gate.interrupt)
+
+        def process_fn(item: str) -> OkResult[str]:
+            gate.enter(item)
+            return OkResult(source=item, result=item)
+
+        with pytest.raises(KeyboardInterrupt) as excinfo:
+            processor._process_collection(list("abcdef"), process_fn, "Test")
+
+        assert sorted(cast("list[str]", gate.started)) == ["a", "b"]
+        assert excinfo.value.__notes__ == [
+            (
+                "Stopped with 2 of 6 items finished; products already written are kept, "
+                "and a rerun without overwrite skips them."
+            )
+        ]
+
+    @pytest.mark.parametrize("continue_on_error", [True, False])
+    def test_an_error_cancels_the_queued_items(
+        self,
+        processor: BurstProcessor,
+        gate: Gate,
+        continue_on_error: bool,
+    ) -> None:
+        """An unexpected error, or a recorded one without continue_on_error, ends the batch."""
+        processor.continue_on_error = continue_on_error
+
+        def process_fn(item: str) -> OkResult[str] | ErrorResult:
+            if item == "a":
+                if continue_on_error:
+                    msg = "bug"
+                    raise RuntimeError(msg)
+                return ErrorResult(source=item, error=SnapProcessingError("bug"))
+            gate.enter(item)
+            return OkResult(source=item, result=item)
+
+        with pytest.raises((RuntimeError, SnapProcessingError), match="bug") as excinfo:
+            processor._process_collection(list("abcdefgh"), process_fn, "Test")
+
+        # The worker freed by "a" may have taken "c" before the queue was cancelled.
+        assert set(cast("list[str]", gate.started)) <= {"b", "c"}
+        n_finished = 1 + len(gate.started)
+        assert f"Stopped with {n_finished} of 8 items finished" in excinfo.value.__notes__[0]
+
+    def test_ctrl_c_while_submitting_cancels_what_was_queued(
+        self,
+        processor: BurstProcessor,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        processor.config.resolved_max_workers = 2
+        gate = Gate(n_running=2)
+        monkeypatch.setattr(
+            "s1bursts.processor.ThreadPoolExecutor",
+            gate.executor(interrupt_at_submit=4),
+        )
+
+        def process_fn(item: str) -> OkResult[str]:
+            gate.enter(item)
+            return OkResult(source=item, result=item)
+
+        with pytest.raises(KeyboardInterrupt) as excinfo:
+            processor._process_collection(list("abcdef"), process_fn, "Test")
+
+        # "c" and "d" were queued and cancelled; "a" or "b" may have been
+        # cancelled too if no worker had taken it yet.
+        assert set(cast("list[str]", gate.started)) <= {"a", "b"}
+        n_finished = len(gate.started)
+        assert f"Stopped with {n_finished} of 6 items finished" in excinfo.value.__notes__[0]
+
+    def test_the_sequential_path_adds_the_note_too(self, processor: BurstProcessor) -> None:
+        process_fn = MagicMock(
+            side_effect=[OkResult(source="a", result="A"), KeyboardInterrupt, None],
+        )
+
+        with pytest.raises(KeyboardInterrupt) as excinfo:
+            processor._process_collection(["a", "b", "c"], process_fn, "Test")
+
+        assert process_fn.call_count == 2
+        assert "Stopped with 1 of 3 items finished" in excinfo.value.__notes__[0]
 
 
 class TestDispatch:
