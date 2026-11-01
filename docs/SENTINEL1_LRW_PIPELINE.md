@@ -172,9 +172,9 @@ Deterministic paths and discovery, local or on S3 through `UPath`:
 
 - `FileManager(base_dir, slc_dir=None, prod_dir=None, comp_dir=None)`; the defaults are `base_dir/s1-slc`, `s1-prod`, `s1-comp`.
 - `get_slc_path(burst)`, `get_product_path(product, layer=Layer.MEASUREMENT)`, `product_exists(product, layer=Layer.MEASUREMENT)`; `layer` selects a composite's file and must be the measurement for a per-burst product.
-- Discovery by glob and regex: `find_slc_bursts`, `find_rtc_products`, `find_gtc_products`, `find_coherence_products`, `find_interferogram_products` (these four also filter on `pass_direction`), `find_rtc_lrw_products`, `find_coh_lrw_products`, `find_rtc_pass_composites`, `find_gtc_pass_composites`, `find_coh_pass_composites`. A composite finder returns one product per identity, holding the layers whose files it found. Date filtering is left to a list comprehension over the result.
+- Discovery by glob and regex: `find(product_type, *, time_range=None, **filters)`, with `Burst` as the type of SLC bursts. Each type is filtered on the fields its file name records: `rel_orbit_number`, `burst_id`, `sub_swath` and `polarization` for SLC bursts; those plus `crs` and `pass_direction` for RTC and GTC, plus `baseline_days` for coherence and interferograms; `mgrs_code` and `polarization` for composites, plus `baseline_days` for coherence and `pass_direction` for pass composites. A filter the type does not have, or a value no file name holds, raises `ValueError`. `time_range` takes a `TimeRange` and keeps a burst or backscatter product by its `date`, a coherence or interferogram by its `date_primary` (as `BurstPairCollection.starting_within`), and a composite whose whole period lies in the window. A composite is returned once per identity, holding the layers whose files were found.
 
-Every filename is built and parsed by one engine: each product class registers a prefix, an ordered `FieldSpec` list and a suffix in `_PARSERS`, so `get_slc_path(burst).exists()` is the existence check (one HEAD request on S3, no glob).
+Every filename is built and parsed by one engine: each product class registers its name in `_NAME_FORMATS`, as literal text and `FieldSpec`s in name order, with its directory, suffix, filters and the dates `time_range` compares, so `find()` and `get_product_path()` read one table, and `get_slc_path(burst).exists()` is the existence check (one HEAD request on S3, no glob).
 
 | Product | Pattern |
 |---|---|
@@ -191,7 +191,7 @@ Every filename is built and parsed by one engine: each product class registers a
 | LRW QA layers | `S1_RTC_LRW_QA-{NUM,CQM}_…` and `S1_COH{bb}_LRW_QA-{NUM,CQM}_…` with the composite's fields |
 | Pass QA layers | `S1_RTC_COMP_{A/D}_QA-NUM_…`, `S1_GTC_COMP_{A/D}_QA-NUM_…` and `S1_COH{bb}_COMP_{A/D}_QA-NUM_…` |
 
-A per-burst product name carries its track as one token, the relative orbit followed by the pass direction (`066A`), so a product found on disk knows both without the burst-ID map. The SLC name has no pass direction, so a burst found with `find_slc_bursts` takes it from the map when its products are created.
+A per-burst product name carries its track as one token, the relative orbit followed by the pass direction (`066A`), so a product found on disk knows both without the burst-ID map. The SLC name has no pass direction, so a burst found with `find(Burst)` takes it from the map when its products are created.
 
 The SAFE folder inside an SLC zip keeps ESA's `S1{A,B}_SLC_{sensingTime}_{burst_id}_{sub_swath}_{polarization}_{datatake_id}.SAFE` name, which preserves the platform and datatake and is what SNAP reads. `Burst.date` is CDSE's `BeginningDateTime`, the annotation's `sensingTime`.
 
@@ -337,35 +337,34 @@ processor.create_interferograms(pairs, crs=crs)
 from freezebase.mgrs import MGRSGeoBox
 
 from s1bursts import ResolutionWeighter
-from s1bursts.product import Layer
+from s1bursts.product import CoherenceProduct, Layer, RTCProduct
 
 cell = MGRSGeoBox.from_mgrs("32TMT64", resolution=10.0)
 weighter = ResolutionWeighter(file_manager)
 
-rtc_products = file_manager.find_rtc_products(polarization="VV")
+rtc_products = file_manager.find(RTCProduct, polarization="VV")
 composite = weighter.compose_rtc_lrw(rtc_products, cell, write_qa=True)
 cqm_path = file_manager.get_product_path(composite, Layer.QA_CQM)
 
-coh_products = file_manager.find_coherence_products(polarization="VV", baseline_days=12)
+coh_products = file_manager.find(CoherenceProduct, polarization="VV", baseline_days=12)
 weighter.compose_coherence_lrw(coh_products, rtc_products, cell)
 ```
 
 ### Query existing products
 
 ```python
-from pandas import Timestamp
+from s1bursts import TimeRange
+from s1bursts.product import CoherenceProduct, RTCLRWComposite, RTCPassComposite, RTCProduct
 
-rtc_products = file_manager.find_rtc_products(burst_id=174374, sub_swath="IW1", polarization="VV")
-coh_products = file_manager.find_coherence_products(
-    burst_id=174374, sub_swath="IW1", baseline_days=6
+year = TimeRange("2024-01-01", "2024-12-31")
+rtc_products = file_manager.find(
+    RTCProduct, burst_id=174374, sub_swath="IW1", polarization="VV", time_range=year
+)
+coh_products = file_manager.find(
+    CoherenceProduct, burst_id=174374, sub_swath="IW1", baseline_days=6
 )
 
-# Date filtering via list comprehension
-filtered = [
-    p for p in rtc_products if Timestamp("2024-01-01") <= p.date <= Timestamp("2024-12-31")
-]
-
 # Composites
-lrw = file_manager.find_rtc_lrw_products(mgrs_code="32TMT64", polarization="VV")
-pass_asc = file_manager.find_rtc_pass_composites(mgrs_code="32TMT64", pass_direction="Ascending")
+lrw = file_manager.find(RTCLRWComposite, mgrs_code="32TMT64", polarization="VV")
+pass_asc = file_manager.find(RTCPassComposite, mgrs_code="32TMT64", pass_direction="Ascending")
 ```

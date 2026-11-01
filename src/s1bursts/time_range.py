@@ -87,3 +87,15 @@ class TimeRange:
         ``start <= t < stop`` keeps every instant of every day of the window.
         """
         return Timestamp(self.start), Timestamp(self.end) + Timedelta(days=1)
+
+
+def _check_time_range(value: object) -> TimeRange | None:
+    """Return ``value`` unless it is neither ``None`` nor a ``TimeRange``, then raise TypeError."""
+    if value is not None and not isinstance(value, TimeRange):
+        msg = (
+            f"time_range must be a TimeRange, received `{type(value).__name__}`. "
+            "Its days are inclusive: TimeRange('2022-01-01', '2022-12-31') keeps "
+            "every acquisition on 31 December."
+        )
+        raise TypeError(msg)
+    return value
