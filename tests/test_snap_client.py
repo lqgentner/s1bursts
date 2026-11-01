@@ -29,6 +29,8 @@ from s1bursts.product_tags import RasterMetadata
 from s1bursts.snap_client import (
     SNAPClient,
     SNAPConfig,
+    _decode,
+    _describe_exit,
     _extract_gpt_error,
     _resolve_gpt_path,
     external_dem_needs_half_pixel_shift,
@@ -1091,6 +1093,67 @@ def test_a_full_disk_behind_a_write_error_stops_the_run(client: SNAPClient) -> N
         _create(client, "create_backscatter")
 
 
+@pytest.mark.parametrize(
+    ("returncode", "expected"),
+    [
+        pytest.param(0, "exit 0", id="success"),
+        pytest.param(1, "exit 1", id="error"),
+        pytest.param(-999, "exit -999", id="unknown-signal"),
+    ],
+)
+def test_describe_exit_without_a_known_signal(returncode: int, expected: str) -> None:
+    assert _describe_exit(returncode) == expected
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [(b"40%\n", "40%\n"), ("40%\n", "40%\n"), (None, None)],
+)
+def test_decode_accepts_what_timeout_expired_holds(
+    output: bytes | str | None,
+    expected: str | None,
+) -> None:
+    """TimeoutExpired holds bytes even in text mode, and str on Windows."""
+    assert _decode(output) == expected
+
+
+def test_a_full_disk_in_the_gpt_output_stops_the_run(client: SNAPClient) -> None:
+    """GPT reports a full disk in its output only, which the message may not include."""
+    gpt_error = SnapProcessingError(
+        "GPT processing failed with exit 1: Error: Cannot write target product",
+        returncode=1,
+        output_tail="java.io.IOException: No space left on device",
+    )
+
+    with (
+        patch.object(client, "_run_gpt", side_effect=gpt_error),
+        pytest.raises(SnapProcessingError) as excinfo,
+    ):
+        _create(client, "create_backscatter")
+
+    assert excinfo.value is gpt_error
+
+
+def test_a_failure_is_logged_once_without_a_traceback(
+    client: SNAPClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Previously logged with a traceback by both _run_gpt and create_*."""
+    error = SnapProcessingError("GPT processing failed with exit 1: boom")
+
+    with (
+        caplog.at_level(logging.INFO),
+        patch.object(client, "_run_gpt", side_effect=error),
+    ):
+        result = _create(client, "create_backscatter")
+
+    assert isinstance(result, ErrorResult)
+    failures = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(failures) == 1
+    assert failures[0].exc_info is None
+    assert "boom" in failures[0].getMessage()
+
+
 class TestResourceBudget:
     """SNAPConfig must reject a budget that cannot describe a runnable job."""
 
@@ -1361,21 +1424,85 @@ class TestRunGpt:
 
         assert not (tmp_path / "out.tif").exists()
 
-    def test_reports_a_timeout(
+    def test_a_timeout_reports_the_output_tail(
         self,
         gpt_client: Callable[[str], SNAPClient],
         tmp_path: Path,
     ) -> None:
-        client = gpt_client("sleep 5")
+        """Previously the message showed the command line and none of GPT's output."""
+        client = gpt_client('echo "Executing processing graph"; echo "40%"; exec sleep 10')
+        client.config.timeout = 0.5
 
-        with pytest.raises(SnapProcessingError, match="GPT processing failed"):
-            client._run_gpt(
-                graph=tmp_path / "graph.xml",
-                source_files={},
-                target_file=tmp_path / "out.tif",
-                snap_userdir=tmp_path / "userdir",
-                timeout=1,
-            )
+        with pytest.raises(SnapProcessingError) as excinfo:
+            self._invoke(client, tmp_path)
+
+        error = excinfo.value
+        assert str(error) == (
+            "GPT processing failed: timed out after 0.5 s (SNAPConfig.timeout). "
+            "Last output:\nExecuting processing graph\n40%"
+        )
+        assert error.output_tail == "Executing processing graph\n40%"
+        assert error.returncode is None
+
+    @pytest.mark.parametrize(
+        ("signal_number", "expected"),
+        [
+            pytest.param(
+                9,
+                "with exit -9 (SIGKILL; usually out of memory: lower SNAPConfig.max_workers "
+                "or max_ram_gb): ",
+                id="sigkill",
+            ),
+            pytest.param(15, "with exit -15 (SIGTERM): ", id="sigterm"),
+        ],
+    )
+    def test_names_the_signal_that_ended_gpt(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+        signal_number: int,
+        expected: str,
+    ) -> None:
+        """Previously only `exit -9`, without saying what that usually means."""
+        client = gpt_client(f'echo "Writing target product"; kill -{signal_number} $$')
+
+        with pytest.raises(SnapProcessingError) as excinfo:
+            self._invoke(client, tmp_path)
+
+        assert expected in str(excinfo.value)
+        assert excinfo.value.returncode == -signal_number
+        assert excinfo.value.output_tail == "Writing target product"
+
+    def test_keeps_the_exit_code_and_the_output_tail(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        lines = "; ".join(f'echo "line {i}"' for i in range(30))
+        client = gpt_client(f'{lines}; echo "Error: boom" >&2; exit 3')
+
+        with pytest.raises(SnapProcessingError) as excinfo:
+            self._invoke(client, tmp_path)
+
+        tail = excinfo.value.output_tail
+        assert excinfo.value.returncode == 3
+        assert tail is not None
+        assert tail.splitlines() == [*(f"line {i}" for i in range(11, 30)), "Error: boom"]
+
+    def test_does_not_log_the_failure_itself(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The caller logs it once; previously it was logged here too, with a traceback."""
+        client = gpt_client('echo "Error: boom" >&2; exit 1')
+        caplog.clear()
+
+        with caplog.at_level(logging.INFO), pytest.raises(SnapProcessingError):
+            self._invoke(client, tmp_path)
+
+        assert not [r for r in caplog.records if r.levelno >= logging.INFO]
 
     def test_reports_a_silent_run_that_produced_nothing(
         self,
@@ -1385,8 +1512,28 @@ class TestRunGpt:
         """GPT can exit zero without writing the target; that is still a failure."""
         client = gpt_client("exit 0")
 
-        with pytest.raises(SnapProcessingError, match="output not found"):
+        with pytest.raises(SnapProcessingError, match="output not found") as excinfo:
             self._invoke(client, tmp_path)
+
+        assert excinfo.value.returncode == 0
+        assert excinfo.value.output_tail is None
+
+    def test_reports_a_gpt_that_cannot_be_started(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+    ) -> None:
+        client = gpt_client("exit 0")
+        start_error = OSError(errno.ENOEXEC, "Exec format error")
+
+        with (
+            patch("s1bursts.snap_client.subprocess.run", side_effect=start_error),
+            pytest.raises(SnapProcessingError, match="Exec format error") as excinfo,
+        ):
+            self._invoke(client, tmp_path)
+
+        assert excinfo.value.returncode is None
+        assert excinfo.value.__cause__ is start_error
 
     def test_falls_back_to_the_output_tail_without_an_error_marker(
         self,
@@ -1425,3 +1572,73 @@ class TestStageSlc:
 
         assert staged == work / "S1_SLC_remote.zip"
         assert staged.read_bytes() == b"remote burst"
+
+
+class TestTimeout:
+    @pytest.fixture
+    def snap_bin(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        monkeypatch.delenv("SNAP_BIN", raising=False)
+        monkeypatch.delenv("SNAP_TIMEOUT", raising=False)
+        _make_executable(tmp_path / "gpt")
+        return tmp_path
+
+    def test_defaults_to_an_hour(self, snap_bin: Path) -> None:
+        assert SNAPConfig(bin=snap_bin).timeout == 3600
+
+    def test_reads_snap_timeout(self, snap_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SNAP_TIMEOUT", "7200")
+
+        assert SNAPConfig(bin=snap_bin).timeout == 7200
+
+    def test_none_in_the_environment_disables_it(
+        self,
+        snap_bin: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SNAP_TIMEOUT", "none")
+
+        assert SNAPConfig(bin=snap_bin).timeout is None
+
+    def test_an_argument_overrides_the_environment(
+        self,
+        snap_bin: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SNAP_TIMEOUT", "7200")
+
+        assert SNAPConfig(bin=snap_bin, timeout=None).timeout is None
+        assert SNAPConfig(bin=snap_bin, timeout=60).timeout == 60
+
+    @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), 1e400])
+    def test_rejects_an_argument_that_is_not_positive_and_finite(
+        self,
+        snap_bin: Path,
+        timeout: float,
+    ) -> None:
+        """An infinite timeout would read as a limit that never fires; None says so."""
+        with pytest.raises(ValueError, match=r"positive, finite .*; pass None for no limit"):
+            SNAPConfig(bin=snap_bin, timeout=timeout)
+
+    @pytest.mark.parametrize("value", ["inf", "1e400", "nan", "-inf"])
+    def test_rejects_a_non_finite_environment_value(
+        self,
+        snap_bin: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        value: str,
+    ) -> None:
+        monkeypatch.setenv("SNAP_TIMEOUT", value)
+
+        with pytest.raises(ConfigurationError, match=r"SNAP_TIMEOUT: .*SNAP_TIMEOUT=none"):
+            SNAPConfig(bin=snap_bin)
+
+    @pytest.mark.parametrize("value", ["0", "-5", "an hour"])
+    def test_rejects_an_invalid_environment_value(
+        self,
+        snap_bin: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        value: str,
+    ) -> None:
+        monkeypatch.setenv("SNAP_TIMEOUT", value)
+
+        with pytest.raises(ConfigurationError, match="SNAP_TIMEOUT"):
+            SNAPConfig(bin=snap_bin)

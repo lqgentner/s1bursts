@@ -71,9 +71,23 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   in_window = bursts.within(window).filter(rel_orbit_number=[66, 139])
   pairs = bursts.find_pairs(baseline=12).starting_within(window)
   ```
+- `SNAPConfig(timeout=...)` sets how many seconds one `gpt` run may take,
+  defaulting to `SNAP_TIMEOUT` or 3600 as before; `None`, or
+  `SNAP_TIMEOUT=none`, removes the limit; an infinite or NaN value is
+  rejected. It was fixed at one hour.
+- `SnapProcessingError` carries `returncode`, the exit code of `gpt`
+  (negative for the signal that ended it), and `output_tail`, the last lines
+  it printed, so a failure can be inspected without parsing the message.
 
 ### Changed
 
+- SNAP failures say more. A `gpt` run ended by a signal names it, as in
+  `exit -9 (SIGKILL; usually out of memory: lower SNAPConfig.max_workers or
+  max_ram_gb)`. A run that times out reports the last lines `gpt` printed
+  instead of the command line. Each failure is logged once, without a
+  traceback, instead of twice with one. The message of a failed run
+  reads `GPT processing failed with exit 1: …` instead of `GPT processing
+  failed (exit 1): …`.
 - **Breaking:** `BurstDatabase` is renamed `BurstCatalog`, and its module
   `s1bursts.database` is now `s1bursts.catalog`. It is a client for the CDSE
   burst catalog, and failures of that catalog raise `CatalogError`. The old
@@ -332,7 +346,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   error such as `RasterWriteError`. GPT and GDAL report such a disk only in
   their message, without an errno, so an error whose message, or the message
   of an error it was raised from, says so (`No space left on device`, `Disk
-  quota exceeded`, `Read-only file system`) stops the batch too. Previously it
+  quota exceeded`, `Read-only file system`) stops the batch too, as does a
+  failed GPT run whose output says so. Previously it
   was recorded for every remaining item.
 - A batch stops promptly. When Ctrl-C or an error ends
   `BurstCatalog.download()` or a `BurstProcessor.create_*` method, the queued

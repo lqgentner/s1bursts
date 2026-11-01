@@ -26,7 +26,8 @@ problem from being silently logged once per item. For the same reason, an
 ``OSError`` meaning that the disk is full, over quota or read-only fails the
 call even when one item's code path raised it, while other ``OSError``
 failures are recorded per item. GPT and GDAL report such a disk only in their
-message, so an error whose message says so fails the call as well.
+message, so an error whose message, or GPT output, says so fails the call as
+well.
 """
 
 from __future__ import annotations
@@ -64,8 +65,10 @@ def _is_environment_wide(error: BaseException) -> bool:
         if isinstance(current, OSError) and current.errno in _ENVIRONMENT_ERRNOS:
             return True
         # GPT and GDAL report a full disk in their message only, without an errno.
-        message = str(current)
-        if any(text in message for text in _ENVIRONMENT_MESSAGES):
+        messages = [str(current)]
+        if isinstance(current, SnapProcessingError) and current.output_tail:
+            messages.append(current.output_tail)
+        if any(text in message for message in messages for text in _ENVIRONMENT_MESSAGES):
             return True
         seen.add(id(current))
         current = current.__cause__
@@ -245,4 +248,33 @@ class SnapProcessingError(BurstError):
 
     Raised when the GPT graph fails, and for an error staging the input SLCs
     or writing the product, which is kept as the cause.
+
+    Parameters
+    ----------
+    *args
+        The message, as for any exception.
+    returncode
+        Exit code of ``gpt``, negative for the signal that ended it.
+    output_tail
+        The last lines ``gpt`` printed.
+
+    Attributes
+    ----------
+    returncode
+        Exit code of ``gpt``, negative for the signal that ended it, such as
+        ``-9`` for ``SIGKILL``. ``None`` if ``gpt`` timed out or did not run,
+        or the failure came from staging or writing.
+    output_tail
+        The last lines ``gpt`` printed to stdout and stderr, or ``None`` if
+        it printed nothing or did not run.
     """
+
+    def __init__(
+        self,
+        *args: object,
+        returncode: int | None = None,
+        output_tail: str | None = None,
+    ) -> None:
+        super().__init__(*args)
+        self.returncode = returncode
+        self.output_tail = output_tail

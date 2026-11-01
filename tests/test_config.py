@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import ValidationError
 import pytest
 
-from s1bursts.config import get_settings, warn_if_tmpdir_unusable
+from s1bursts.config import SNAPSettings, get_settings, warn_if_tmpdir_unusable
 from s1bursts.errors import ConfigurationError
 
 
@@ -26,6 +26,10 @@ class TestGetSettings:
         assert settings.cdse.password.get_secret_value() == "secret"
         assert settings.snap.max_workers == 4
         assert settings.snap.max_ram_gb == 16.0
+
+    def test_a_timeout_passed_as_none_means_no_limit(self) -> None:
+        assert SNAPSettings(timeout=None).timeout is None
+        assert SNAPSettings(timeout=90).timeout == 90
 
     def test_environment_changes_are_picked_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Settings must be re-read on each call (late load_dotenv support)."""
