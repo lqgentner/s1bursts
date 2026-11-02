@@ -13,7 +13,6 @@ from s1bursts.errors import NoUTMZoneError, ProductSettingsMismatchError
 from s1bursts.product import (
     CoherenceProduct,
     GTCProduct,
-    InterferogramProduct,
     RTCProduct,
     _check_output_crs,
 )
@@ -23,7 +22,6 @@ from s1bursts.snap_client import SNAPClient, SNAPConfig, _item_failure
 from s1bursts.snap_graph import (
     CoherenceConfig,
     GTCConfig,
-    InterferogramConfig,
     RTCConfig,
 )
 from s1bursts.summary import ErrorResult, OperationResult, OperationSummary
@@ -296,98 +294,13 @@ class BurstProcessor:
         self._warn_about_skips(summary)
         return summary
 
-    def create_interferograms(
-        self,
-        pairs: Iterable[BurstPair],
-        crs: CRSInput | Literal["auto"],
-        *,
-        config: InterferogramConfig | None = None,
-        overwrite: bool = False,
-    ) -> OperationSummary[InterferogramProduct]:
-        """Create interferogram products from burst pairs.
-
-        Parameters
-        ----------
-        pairs
-            Burst pairs to process, such as a ``BurstPairCollection`` or a
-            list of ``BurstPair`` objects.
-        crs
-            The coordinate reference system of the geocoded output, a WGS 84 /
-            UTM zone, north or south, which product file names record. Given as
-            a CRS object, an authority string such as ``"EPSG:32632"`` or an
-            EPSG code, or ``"auto"`` to process each pair in the UTM zone
-            that holds its footprint (``utm_zone``). Use ``"auto"`` for
-            pairs processed on their own, such as a time series, and the
-            target cell's ``crs`` for products meant for a composite: an input
-            in another zone than the cell raises ``InconsistentInputsError``
-            when composited.
-        config
-            Graph-shape configuration; defaults to ``InterferogramConfig()``.
-        overwrite
-            Whether to overwrite existing products. Without it, every existing
-            product is checked against ``config`` before any item is
-            processed, and skipped if its recorded settings match.
-
-        Returns
-        -------
-        OperationSummary
-            Summary of processing results.
-
-        Raises
-        ------
-        ValueError
-            If ``crs`` is not a WGS 84 / UTM zone, raised before any item is
-            processed. Under ``"auto"``, a footprint outside the UTM zones
-            fails its item alone, recorded as a ``NoUTMZoneError``.
-        BurstMapUnavailableError
-            With ``"auto"``, if an item carries no footprint and the burst
-            map has not been downloaded, which every such item would meet.
-        OSError, SnapProcessingError or RasterWriteError
-            If the disk is full, over quota or read-only, which would fail
-            every remaining item alike: an ``OSError`` saying so, or an error
-            caused by one or whose message or GPT output says so.
-        ProductSettingsMismatchError
-            If a product exists with other settings than ``config`` and
-            ``overwrite`` is ``False``. Every product existing when the call
-            starts is checked before any item is processed, so for those it is
-            raised before any GPT run; a product written by another process
-            meanwhile is checked when its item is reached.
-        OSError or RasterioError
-            If a product exists, ``overwrite`` is ``False``, and it cannot be
-            read to check its settings; checked up front in the same way.
-
-        Warns
-        -----
-        UserWarning
-            Once per call, counting the existing products skipped without
-            checking their settings: written before s1bursts 0.3.0, or made
-            with an external DEM without ``dem_name``. Once more if another
-            SNAP version made some of them. The summary counts both, and each
-            skipped result records why.
-        """
-        cfg = config or InterferogramConfig()
-        utm_crs = _check_output_crs(crs)
-        client = self.snap_client
-        summary = self._run(
-            pairs,
-            lambda pair: InterferogramProduct.from_burst_pair(pair, utm_crs),
-            lambda pair: client.create_interferogram(
-                pair, utm_crs, config=cfg, overwrite=overwrite
-            ),
-            config=cfg,
-            overwrite=overwrite,
-            item_description="Interferogram",
-        )
-        self._warn_about_skips(summary)
-        return summary
-
-    def _run[I, P: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct](
+    def _run[I, P: RTCProduct | GTCProduct | CoherenceProduct](
         self,
         items: Iterable[I],
         product_of: Callable[[I], P],
         create: Callable[[I], OperationResult[P]],
         *,
-        config: RTCConfig | GTCConfig | CoherenceConfig | InterferogramConfig,
+        config: RTCConfig | GTCConfig | CoherenceConfig,
         overwrite: bool,
         item_description: str,
     ) -> OperationSummary[P]:
@@ -407,11 +320,11 @@ class BurstProcessor:
             start_time=start_time,
         )
 
-    def _existing[I, P: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct](
+    def _existing[I, P: RTCProduct | GTCProduct | CoherenceProduct](
         self,
         items: list[I],
         product_of: Callable[[I], P],
-        config: RTCConfig | GTCConfig | CoherenceConfig | InterferogramConfig,
+        config: RTCConfig | GTCConfig | CoherenceConfig,
     ) -> list[OperationResult[P] | None]:
         """Return each item's skipped result if its product exists, before any item runs.
 

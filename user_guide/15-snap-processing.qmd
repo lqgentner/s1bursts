@@ -38,9 +38,7 @@ pixel by pixel, using the DEM. `Coherence` estimates the similarity of the two
 within a moving window, set by `window`. `TOPSAR-Deburst`,
 `ReplaceZerosWithNoData` and `Terrain-Correction` then run as in the
 backscatter graph; the coherence graph has no noise removal, calibration or
-multilooking. The interferogram graph replaces `Coherence` with
-`Interferogram` and keeps the phase together with each acquisition's
-brightness.
+multilooking.
 
 ## Inspect a graph
 
@@ -93,12 +91,12 @@ print(f':::{{.callout-note collapse="true"}}\n## The full graph\n\n```xml\n{xml}
 The graph leaves two placeholders, `${source}` for the burst file and `${crs}`
 for the UTM zone. s1bursts fills them in for every burst it processes, which
 is why the UTM zone is passed to the `create_*` methods rather than stored in
-the settings. `CoherenceConfig` and `InterferogramConfig` return their graphs
-the same way, with `${primary}` and `${secondary}` in place of `${source}`.
+the settings. `CoherenceConfig` returns its graph the same way, with
+`${primary}` and `${secondary}` in place of `${source}`.
 
 ### For your SNAP version
 
-The coherence and interferogram graphs differ slightly between SNAP 13 and 14.
+The coherence graph differs slightly between SNAP 13 and 14.
 Without a version, s1bursts builds the graph for SNAP 13. Pass the version of
 your installation to see the exact graph that processing will run:
 

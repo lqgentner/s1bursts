@@ -41,12 +41,11 @@ if TYPE_CHECKING:
     from s1bursts.product import (
         CoherenceProduct,
         GTCProduct,
-        InterferogramProduct,
         MGRSTileProduct,
         RTCProduct,
     )
     from s1bursts.product_tags import Aggregation
-    from s1bursts.snap_graph import BackscatterConfig, CoherenceConfig, InterferogramConfig
+    from s1bursts.snap_graph import BackscatterConfig, CoherenceConfig
     from s1bursts.summary import UncheckedReason
 
 logger = logging.getLogger(__name__)
@@ -66,8 +65,6 @@ _ARGUMENTS = {
     "MULTILOOK_AZIMUTH": "multilook",
     "COHERENCE_WINDOW_RANGE": "window",
     "COHERENCE_WINDOW_AZIMUTH": "window",
-    "FLAT_EARTH_PHASE_REMOVED": "subtract_flat_earth_phase",
-    "TOPOGRAPHIC_PHASE_REMOVED": "subtract_topographic_phase",
     "COMPOSITING_PARAMETERS": "aggregation, clip_max_resolution",
     "CRS": "geobox",
     "TRANSFORM": "geobox",
@@ -130,8 +127,8 @@ def _mismatch(path: Path | UPath, differences: _Differences) -> ProductSettingsM
 
 def _check_burst_product(
     path: Path | UPath,
-    product: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct,
-    config: BackscatterConfig | CoherenceConfig | InterferogramConfig,
+    product: RTCProduct | GTCProduct | CoherenceProduct,
+    config: BackscatterConfig | CoherenceConfig,
     *,
     snap_version: tuple[int, ...] | None,
 ) -> _BurstSkip:
@@ -162,11 +159,11 @@ def _check_burst_product(
     return _BurstSkip(unchecked="unknown_dem" if dem_unknown else None, other_snap_version=other)
 
 
-def _skip_existing[P: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct](
+def _skip_existing[P: RTCProduct | GTCProduct | CoherenceProduct](
     file_manager: FileManager,
     source: object,
     product: P,
-    config: BackscatterConfig | CoherenceConfig | InterferogramConfig,
+    config: BackscatterConfig | CoherenceConfig,
     *,
     snap_version: tuple[int, ...] | None,
     log_level: int = logging.WARNING,

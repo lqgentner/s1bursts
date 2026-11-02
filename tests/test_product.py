@@ -18,7 +18,6 @@ from s1bursts.product import (
     CohPassComposite,
     GTCPassComposite,
     GTCProduct,
-    InterferogramProduct,
     Layer,
     MGRSTileProduct,
     RTCLRWComposite,
@@ -263,7 +262,7 @@ class TestBackscatterProducts:
             assert hash(first) == hash(second)
 
 
-class TestCoregisteredProducts:
+class TestCoherenceProduct:
     def make_pair(self) -> BurstPair:
         return BurstPair(make_burst("2022-01-01"), make_burst("2022-01-13"))
 
@@ -274,13 +273,9 @@ class TestCoregisteredProducts:
         assert product.date_secondary == Timestamp("2022-01-13")
         assert product.baseline_days == 12
 
-    @pytest.mark.parametrize("product_cls", [CoherenceProduct, InterferogramProduct])
-    def test_from_burst_pair_rejects_a_utm_zone_on_another_datum(
-        self,
-        product_cls: type[CoherenceProduct | InterferogramProduct],
-    ) -> None:
+    def test_from_burst_pair_rejects_a_utm_zone_on_another_datum(self) -> None:
         with pytest.raises(ValueError, match="received 'ETRS89 / UTM zone 32N'"):
-            product_cls.from_burst_pair(self.make_pair(), crs="EPSG:25832")
+            CoherenceProduct.from_burst_pair(self.make_pair(), crs="EPSG:25832")
 
     def test_from_burst_pair_carries_pass_direction_and_crs_string(self) -> None:
         primary, secondary = (
@@ -298,11 +293,10 @@ class TestCoregisteredProducts:
         assert product.pass_direction == "Ascending"
         assert product.crs == CRS_UTM32
 
-    def test_product_types(self) -> None:
-        pair = self.make_pair()
+    def test_product_type(self) -> None:
+        product = CoherenceProduct.from_burst_pair(self.make_pair(), crs=CRS_UTM32)
 
-        assert CoherenceProduct.from_burst_pair(pair, crs=CRS_UTM32).product_type == "COH"
-        assert InterferogramProduct.from_burst_pair(pair, crs=CRS_UTM32).product_type == "IFG"
+        assert product.product_type == "COH"
 
 
 class TestMGRSTileProducts:

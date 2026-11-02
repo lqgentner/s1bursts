@@ -360,8 +360,8 @@ class GTCProduct(BackscatterProduct):
 
 
 @dataclass(repr=False, frozen=True)
-class CoregisteredProduct(GeocodedBurst, ABC):
-    """Base class for co-registered (stacked) products from two bursts.
+class CoherenceProduct(GeocodedBurst):
+    """Coherence product from burst pair.
 
     Parameters
     ----------
@@ -398,7 +398,7 @@ class CoregisteredProduct(GeocodedBurst, ABC):
 
     @classmethod
     def from_burst_pair(cls, pair: BurstPair, crs: CRSInput | Literal["auto"]) -> Self:
-        """Create CoregisteredProduct from BurstPair.
+        """Create CoherenceProduct from BurstPair.
 
         Parameters
         ----------
@@ -413,8 +413,8 @@ class CoregisteredProduct(GeocodedBurst, ABC):
 
         Returns
         -------
-        CoregisteredProduct
-            Coregistered product metadata.
+        CoherenceProduct
+            Coherence product metadata.
 
         Raises
         ------
@@ -439,63 +439,11 @@ class CoregisteredProduct(GeocodedBurst, ABC):
             _rel_orbit_number=pair.rel_orbit_number,
         )
 
-
-@dataclass(repr=False, frozen=True)
-class CoherenceProduct(CoregisteredProduct):
-    """Coherence product from burst pair.
-
-    Parameters
-    ----------
-    burst_id
-        Burst identifier.
-    sub_swath
-        Sub-swath identifier.
-    crs
-        The coordinate reference system.
-    date_primary
-        Primary acquisition date.
-    date_secondary
-        Secondary acquisition date.
-    polarization
-        The polarization.
-    pass_direction
-        Pass direction, ``"Ascending"`` or ``"Descending"``. Keyword-only.
-    """
-
     @property
     @override
     def product_type(self) -> str:
         """Get product type identifier."""
         return "COH"
-
-
-@dataclass(repr=False, frozen=True)
-class InterferogramProduct(CoregisteredProduct):
-    """Interferogram product from burst pair.
-
-    Parameters
-    ----------
-    burst_id
-        Burst identifier.
-    sub_swath
-        Sub-swath identifier.
-    crs
-        The coordinate reference system.
-    date_primary
-        Primary acquisition date.
-    date_secondary
-        Secondary acquisition date.
-    polarization
-        The polarization.
-    pass_direction
-        Pass direction, ``"Ascending"`` or ``"Descending"``. Keyword-only.
-    """
-
-    @property
-    @override
-    def product_type(self) -> str:
-        """Get product type identifier."""
-        return "IFG"
 
 
 _LRW_LAYERS = frozenset({Layer.MEASUREMENT, Layer.QA_NUM, Layer.QA_CQM})

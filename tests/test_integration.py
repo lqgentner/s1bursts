@@ -30,7 +30,6 @@ from s1bursts import (
     CoherenceConfig,
     FileManager,
     GTCConfig,
-    InterferogramConfig,
     MGRSGeoBox,
     ResolutionWeighter,
     SearchQuery,
@@ -442,7 +441,9 @@ class TestSnapProcessing:
         definition of coherence — one band, bounded to [0, 1], on the standard
         grid.
         """
-        # The interferogram test's budget: this graph also subtracts topographic phase.
+        # A larger budget than the RTC tests above, and fewer threads. Carried over
+        # from the interferogram test, whose topographic-phase step ran out of heap
+        # at 6 GB across eight threads; it has not been measured for coherence.
         processor = BurstProcessor(
             file_manager,
             SNAPConfig(max_workers=1, max_ram_gb=8, threads_per_job=2),
@@ -484,79 +485,6 @@ class TestSnapProcessing:
         assert not (coh[valid] == 0).any()
         # Some alpine ground stays correlated over 12 days; noise would sit near zero.
         assert np.median(coh[valid]) > 0.1
-
-    @requires_cdse_credentials
-    @requires_snap
-    def test_gpt_creates_interferogram(
-        self,
-        file_manager: FileManager,
-        downloaded_pair: BurstPairCollection,
-    ) -> None:
-        """End-to-end GPT smoke test for the interferometric graph: two SLC zips -> IFG.
-
-        The interferogram has no independent reference to be validated against
-        the way RTC and coherence are, so what is asserted here is that the
-        graph runs to completion and that its product is shaped like a
-        geocoded complex interferogram.
-        """
-        # A larger budget than the RTC tests above, and fewer threads: the peak
-        # is InterferogramOp's topographic-phase step, which triangulates the
-        # DEM per tile, so concurrent tiles multiply it. 6 GB across the default
-        # eight threads runs out of Java heap there; 8 GB across two does not.
-        processor = BurstProcessor(
-            file_manager,
-            SNAPConfig(max_workers=1, max_ram_gb=8, threads_per_job=2),
-            show_progress=False,
-            continue_on_error=False,
-        )
-        config = InterferogramConfig()
-
-        summary = processor.create_interferograms(
-            downloaded_pair,
-            crs=pyproj.CRS("EPSG:32632"),
-            config=config,
-        )
-
-        assert summary.n_failed == 0, [str(item.error) for item in summary.failed_items]
-        product_path = file_manager.get_product_path(summary.products[0])
-        assert product_path.exists()
-
-        with rasterio.open(product_path) as src:
-            assert src.count == len(config.output_bands)
-            assert src.descriptions == tuple(config.output_bands)
-            assert src.crs.to_epsg() == 32632
-            # SNAP's GeoTIFF writer drops the NODATA tag; _finalize_product re-stamps it
-            assert src.nodata is not None
-            assert np.isnan(src.nodata)
-            # Single-look output on the standard grid: no Multilook step changes
-            # the posting, and pixel corners sit on multiples of the spacing.
-            spacing = config.grid_spacing
-            assert src.res == (spacing, spacing)
-            assert src.transform.c % spacing == pytest.approx(0.0)
-            assert src.transform.f % spacing == pytest.approx(0.0)
-
-            ifg_real, ifg_imag, intensity_primary, intensity_secondary = src.read()
-
-        valid = np.isfinite(ifg_real)
-        # A geocoded burst is a parallelogram in its bounding box, so a large
-        # share of the frame is legitimately NaN — but most of it is not.
-        assert valid.mean() > 0.1
-        # Real and imaginary parts are the two halves of one complex sample and
-        # are therefore valid over exactly the same pixels.
-        assert np.array_equal(valid, np.isfinite(ifg_imag))
-        # Interferometric phase, not a magnitude image: both components take
-        # either sign.
-        for band, name in ((ifg_real, "ifg_real"), (ifg_imag, "ifg_imag")):
-            assert (band[valid] > 0).any(), f"{name} has no positive samples"
-            assert (band[valid] < 0).any(), f"{name} has no negative samples"
-        # Both intensities are powers of the same coregistered samples, so they
-        # are nonnegative and valid over exactly the pixels the interferogram is.
-        for band, name in (
-            (intensity_primary, "intensity_primary"),
-            (intensity_secondary, "intensity_secondary"),
-        ):
-            assert np.array_equal(np.isfinite(band), valid), f"{name} has a different extent"
-            assert (band[valid] >= 0).all(), f"{name} has negative samples"
 
 
 # The MGRS cell over the Aletsch glacier below Konkordiaplatz, inside the

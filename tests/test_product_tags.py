@@ -22,14 +22,13 @@ from s1bursts.product import (
     CohPassComposite,
     GTCPassComposite,
     GTCProduct,
-    InterferogramProduct,
     Layer,
     RTCLRWComposite,
     RTCPassComposite,
     RTCProduct,
 )
 from s1bursts.product_tags import RasterMetadata
-from s1bursts.snap_graph import CoherenceConfig, GTCConfig, InterferogramConfig, RTCConfig
+from s1bursts.snap_graph import CoherenceConfig, GTCConfig, RTCConfig
 
 _UTM32 = CRS.from_epsg(32632)
 _START = Timestamp("2020-01-01")
@@ -123,19 +122,6 @@ def _coh_burst() -> CoherenceProduct:
     )
 
 
-def _ifg_burst() -> InterferogramProduct:
-    return InterferogramProduct(
-        burst_id=30346,
-        sub_swath="IW1",
-        crs=_UTM32,
-        date_primary=Timestamp("2020-02-05"),
-        date_secondary=Timestamp("2020-02-17"),
-        polarization="VV",
-        pass_direction="Ascending",
-        _rel_orbit_number=15,
-    )
-
-
 def _lrw(**kwargs: Any) -> dict[str, str]:
     defaults: dict[str, Any] = {
         "aggregation": "median",
@@ -165,7 +151,6 @@ def _every_builder() -> dict[str, dict[str, str]]:
         "rtc_burst": product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags,
         "gtc_burst": product_tags.backscatter_metadata(_gtc_burst(), GTCConfig()).tags,
         "coh_burst": product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()).tags,
-        "ifg_burst": product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig()).tags,
     }
 
 
@@ -594,7 +579,6 @@ class TestBurstProducts:
         for metadata in (
             product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()),
             product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()),
-            product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig()),
         ):
             assert metadata.tags["RELATIVE_ORBIT_NUMBER"] == "15"
 
@@ -616,8 +600,8 @@ class TestBurstProducts:
         assert str(config.dem) not in tags.values()
 
     def test_an_unnamed_external_dem_is_unknown(self) -> None:
-        config = InterferogramConfig(dem="/data/dem/glo30_ellipsoid.tif")
-        tags = product_tags.interferogram_metadata(_ifg_burst(), config).tags
+        config = CoherenceConfig(dem="/data/dem/glo30_ellipsoid.tif")
+        tags = product_tags.coherence_metadata(_coh_burst(), config).tags
         assert tags["DEM"] == product_tags.UNKNOWN
 
     def test_a_composite_inherits_the_dem(self) -> None:
@@ -632,22 +616,10 @@ class TestBurstProducts:
         assert tags["DATE_PRIMARY"] == "2020-02-05"
         assert tags["DATE_SECONDARY"] == "2020-02-17"
 
-    @pytest.mark.parametrize(
-        ("build", "config"),
-        [
-            (product_tags.coherence_metadata, CoherenceConfig()),
-            (product_tags.interferogram_metadata, InterferogramConfig()),
-        ],
-    )
-    def test_baseline_tag_matches_the_rounded_baseline_in_the_filename(
-        self,
-        build: Any,
-        config: Any,
-    ) -> None:
+    def test_baseline_tag_matches_the_rounded_baseline_in_the_filename(self) -> None:
         # Previously truncated the timestamp difference, so a secondary acquired a
         # fraction of a second earlier in the day was tagged 11 days under a COH12 name.
-        cls = CoherenceProduct if config.__class__ is CoherenceConfig else InterferogramProduct
-        product = cls(
+        product = CoherenceProduct(
             burst_id=30346,
             sub_swath="IW1",
             crs=_UTM32,
@@ -658,14 +630,8 @@ class TestBurstProducts:
             _rel_orbit_number=15,
         )
         assert product.baseline_days == 12
-        assert build(product, config).tags["TEMPORAL_BASELINE_DAYS"] == "12"
-
-    def test_interferogram_marks_only_the_intensities_as_power(self) -> None:
-        metadata = product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig())
-        names = ["ifg_real", "ifg_imag", "intensity_primary", "intensity_secondary"]
-        assert metadata.band_names == names
-        assert metadata.units == ["", "", "linear power", "linear power"]
-        assert [tags["LAYER_NAME"] for tags in metadata.band_tags] == names
+        tags = product_tags.coherence_metadata(product, CoherenceConfig()).tags
+        assert tags["TEMPORAL_BASELINE_DAYS"] == "12"
 
     def test_every_per_burst_band_carries_its_name_as_layer_name(self) -> None:
         """One name per band: the description and the LAYER_NAME tag agree."""
@@ -676,14 +642,6 @@ class TestBurstProducts:
         ):
             assert [tags["LAYER_NAME"] for tags in metadata.band_tags] == metadata.band_names
 
-    def test_interferogram_records_the_phase_removals(self) -> None:
-        tags = product_tags.interferogram_metadata(
-            _ifg_burst(),
-            InterferogramConfig(subtract_topographic_phase=False),
-        ).tags
-        assert tags["FLAT_EARTH_PHASE_REMOVED"] == "true"
-        assert tags["TOPOGRAPHIC_PHASE_REMOVED"] == "false"
-
 
 class TestBurstDispatch:
     @pytest.mark.parametrize(
@@ -692,7 +650,6 @@ class TestBurstDispatch:
             (_rtc_burst(), RTCConfig(), "RTC"),
             (_gtc_burst(), GTCConfig(), "GTC"),
             (_coh_burst(), CoherenceConfig(), "COH"),
-            (_ifg_burst(), InterferogramConfig(), "IFG"),
         ],
     )
     def test_dispatches_on_the_config(
@@ -742,7 +699,6 @@ class TestRasterMetadata:
             ).tags,
             product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags,
             product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()).tags,
-            product_tags.interferogram_metadata(_ifg_burst(), InterferogramConfig()).tags,
         ):
             assert all(isinstance(v, str) for v in tags.values())
             assert all(isinstance(k, str) for k in tags)
@@ -792,7 +748,6 @@ class TestProvenance:
         for product, config in (
             (_rtc_burst(), RTCConfig()),
             (_coh_burst(), CoherenceConfig()),
-            (_ifg_burst(), InterferogramConfig()),
         ):
             tags = product_tags.burst_metadata(product, config, snap_version=(13, 0, 0)).tags
             assert tags["PROCESSING_SOFTWARE_VERSION"] == "13.0.0"

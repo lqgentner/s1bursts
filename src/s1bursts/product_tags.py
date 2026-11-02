@@ -54,7 +54,6 @@ from s1bursts.product import (
     CohPassComposite,
     GTCPassComposite,
     GTCProduct,
-    InterferogramProduct,
     Layer,
     RTCLRWComposite,
     RTCPassComposite,
@@ -66,7 +65,6 @@ from s1bursts.snap_graph import (
     CoherenceConfig,
     GeocodingConfig,
     GTCConfig,
-    InterferogramConfig,
     RTCConfig,
 )
 
@@ -899,52 +897,9 @@ def coherence_metadata(
     )
 
 
-def interferogram_metadata(
-    product: InterferogramProduct,
-    config: InterferogramConfig,
-    *,
-    snap_version: tuple[int, ...] | None = None,
-) -> RasterMetadata:
-    """Metadata for a per-burst interferogram product.
-
-    Parameters
-    ----------
-    product
-        The product being written.
-    config
-        Configuration the graph was built from.
-    snap_version
-        Version of the SNAP installation that ran the graph, from
-        ``s1bursts.snap_client.snap_version``. Written as ``N/A`` when unknown.
-
-    Returns
-    -------
-    RasterMetadata
-        Tags, band descriptions and units for the product.
-    """
-    tags = {
-        **_burst(product, config=config, snap_version=snap_version),
-        "MEASUREMENT_TYPE": "Interferogram",
-        "POLARIZATION": product.polarization,
-        "DATE_PRIMARY": _date(product.date_primary),
-        "DATE_SECONDARY": _date(product.date_secondary),
-        "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
-        "FLAT_EARTH_PHASE_REMOVED": str(config.subtract_flat_earth_phase).lower(),
-        "TOPOGRAPHIC_PHASE_REMOVED": str(config.subtract_topographic_phase).lower(),
-    }
-    # The two intensities are power; the complex parts are not a power quantity
-    # on their own, so they get no unit and no conversion equation.
-    return RasterMetadata(
-        tags=tags,
-        band_names=list(config.output_bands),
-        units=["", "", _LINEAR_POWER_UNIT, _LINEAR_POWER_UNIT],
-        band_tags=[{"LAYER_NAME": name} for name in config.output_bands],
-    )
-
-
 def burst_metadata(
-    product: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct,
-    config: BackscatterConfig | CoherenceConfig | InterferogramConfig,
+    product: RTCProduct | GTCProduct | CoherenceProduct,
+    config: BackscatterConfig | CoherenceConfig,
     *,
     snap_version: tuple[int, ...] | None = None,
 ) -> RasterMetadata:
@@ -975,8 +930,6 @@ def burst_metadata(
             return backscatter_metadata(product, config, snap_version=snap_version)
         case CoherenceProduct(), CoherenceConfig():
             return coherence_metadata(product, config, snap_version=snap_version)
-        case InterferogramProduct(), InterferogramConfig():
-            return interferogram_metadata(product, config, snap_version=snap_version)
         case _:
             msg = (
                 f"cannot build metadata for {type(product).__name__} from {type(config).__name__}."
@@ -994,14 +947,12 @@ _BURST_SETTING_KEYS = (
     "MULTILOOK_AZIMUTH",
     "COHERENCE_WINDOW_RANGE",
     "COHERENCE_WINDOW_AZIMUTH",
-    "FLAT_EARTH_PHASE_REMOVED",
-    "TOPOGRAPHIC_PHASE_REMOVED",
 )
 
 
 def _burst_settings(
-    product: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct,
-    config: BackscatterConfig | CoherenceConfig | InterferogramConfig,
+    product: RTCProduct | GTCProduct | CoherenceProduct,
+    config: BackscatterConfig | CoherenceConfig,
 ) -> dict[str, str | None]:
     """Return the setting tags a per-burst product made with ``config`` carries, None if absent.
 
@@ -1039,7 +990,6 @@ __all__ = [
     "coherence_metadata",
     "coherence_statistics",
     "gtc_pass_metadata",
-    "interferogram_metadata",
     "qa_metadata",
     "rtc_lrw_metadata",
     "rtc_pass_metadata",

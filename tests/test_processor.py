@@ -28,9 +28,9 @@ from s1bursts.errors import (
 )
 from s1bursts.filemanager import FileManager
 from s1bursts.processor import BurstProcessor
-from s1bursts.product import CoherenceProduct, InterferogramProduct, RTCProduct
+from s1bursts.product import CoherenceProduct, RTCProduct
 from s1bursts.snap_client import SNAPConfig
-from s1bursts.snap_graph import CoherenceConfig, GTCConfig, InterferogramConfig, RTCConfig
+from s1bursts.snap_graph import CoherenceConfig, GTCConfig, RTCConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationSummary
 from tests.gated_pool import Gate
 
@@ -377,21 +377,9 @@ class TestDispatch:
         cast("MagicMock", processor.snap_client).create_coherence.assert_called_once()
         assert summary.products == ["coh"]
 
-    def test_create_interferograms(self, processor: BurstProcessor) -> None:
-        pair = _pair()
-        cast("MagicMock", processor.snap_client).create_interferogram.return_value = OkResult(
-            source=pair,
-            result="ifg",
-        )
-
-        summary = processor.create_interferograms([pair], crs="EPSG:32632")
-
-        cast("MagicMock", processor.snap_client).create_interferogram.assert_called_once()
-        assert summary.products == ["ifg"]
-
     @pytest.mark.parametrize(
         "method",
-        ["create_backscatter", "create_coherences", "create_interferograms"],
+        ["create_backscatter", "create_coherences"],
     )
     @pytest.mark.parametrize(
         "crs",
@@ -414,7 +402,7 @@ class TestDispatch:
 
     @pytest.mark.parametrize(
         "method",
-        ["create_backscatter", "create_coherences", "create_interferograms"],
+        ["create_backscatter", "create_coherences"],
     )
     def test_crs_is_checked_even_without_items(
         self,
@@ -446,8 +434,8 @@ class TestDispatch:
 
 def _write_product(
     path: Path | UPath,
-    product: RTCProduct | CoherenceProduct | InterferogramProduct,
-    config: RTCConfig | CoherenceConfig | InterferogramConfig,
+    product: RTCProduct | CoherenceProduct,
+    config: RTCConfig | CoherenceConfig,
     *,
     snap_version: tuple[int, ...] | None = None,
     tagged: bool = True,
@@ -646,32 +634,13 @@ class TestSkipSettings:
         exists.assert_not_called()
         assert summary.n_processed == 1
 
-    @pytest.mark.parametrize(
-        ("method", "client_method", "product_cls", "graph_config"),
-        [
-            ("create_coherences", "create_coherence", CoherenceProduct, CoherenceConfig()),
-            (
-                "create_interferograms",
-                "create_interferogram",
-                InterferogramProduct,
-                InterferogramConfig(),
-            ),
-        ],
-    )
-    def test_existing_pair_products_are_checked_up_front(
-        self,
-        real: BurstProcessor,
-        method: str,
-        client_method: str,
-        product_cls: type[CoherenceProduct | InterferogramProduct],
-        graph_config: CoherenceConfig | InterferogramConfig,
-    ) -> None:
+    def test_existing_coherence_products_are_checked_up_front(self, real: BurstProcessor) -> None:
         pair = _pair()
-        product = product_cls.from_burst_pair(pair, self.CRS)
-        _write_product(real.manager.get_product_path(product), product, graph_config)
+        product = CoherenceProduct.from_burst_pair(pair, self.CRS)
+        _write_product(real.manager.get_product_path(product), product, CoherenceConfig())
 
-        with patch.object(real.snap_client, client_method) as create:
-            summary = getattr(real, method)([pair], crs=self.CRS, config=graph_config)
+        with patch.object(real.snap_client, "create_coherence") as create:
+            summary = real.create_coherences([pair], crs=self.CRS, config=CoherenceConfig())
 
         create.assert_not_called()
         assert summary.products == [product]
