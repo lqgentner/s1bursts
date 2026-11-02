@@ -496,7 +496,10 @@ class CDSEBurstClient:
             The burst's CDSE product ID.
         save_path
             Full destination path (including filename) for the downloaded file.
-            Can be local or a remote UPath (e.g. S3).
+            Can be local or a remote UPath (e.g. S3). A remote file is first
+            downloaded whole to the system temp directory and uploaded only
+            once complete, so it needs local space for the burst (about
+            100 to 200 MB).
         progress
             Whether to display download progress.
 

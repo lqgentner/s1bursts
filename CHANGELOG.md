@@ -545,6 +545,24 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   first line of the message, with a count and a few example items each, so an
   outage prints one row such as `2318 × BurstDownloadError: 503 …` instead
   of one per burst.
+- **Breaking:** requires freezebase 0.11 (`freezebase[s3]>=0.11,<0.12`), whose
+  downloads to S3 no longer commit a partial file when interrupted (see
+  Fixed). An OData download into a remote `slc_dir` therefore needs local
+  space for the whole burst, about 100–200 MB per `BurstCatalog.download()`
+  worker, in the system temp directory, as an extraction from S3 already did.
+- **Breaking:** a `rasterio_profile` passed to `ResolutionWeighter` applies the
+  COG options `num_threads`, `bigtiff`, `statistics`, `nbits`, `sparse_ok` and
+  `geotiff_version` to composites instead of ignoring them, and the options
+  that would reproject them, such as `target_srs` or `res`, raise `ValueError`
+  when the composite is written instead of being ignored. Composites are
+  always written on the cell's grid.
+
+  ```python
+  # before: target_srs was silently ignored
+  ResolutionWeighter(fm, rasterio_profile={"target_srs": "EPSG:4326"})
+  # after: raises ValueError; drop the option
+  ResolutionWeighter(fm, rasterio_profile={})
+  ```
 
 ### Fixed
 
@@ -659,6 +677,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   downloaded again, since otherwise every download skips it. It names the
   SLC's location in `slc_dir`, also for a remote `slc_dir`, whose SLCs SNAP
   reads from a temporary copy.
+- An OData download into a remote `slc_dir`, such as S3, that is interrupted
+  partway no longer leaves a truncated SLC at its final path, which later
+  downloads skipped as finished. The burst is downloaded whole to the system
+  temp directory and uploaded only once complete, and an SLC already at that
+  path is kept.
 
 ## [0.7.0] - 2026-10-26
 
