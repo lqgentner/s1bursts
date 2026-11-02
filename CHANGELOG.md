@@ -266,13 +266,12 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   argument, which `from_burst()` and `from_burst_pair()` take from the burst
   and `FileManager` reads back from the file name. So `compose_*_by_pass`
   never needs the burst-ID map, also for products found on disk, and
-  `find_rtc_products()`, `find_gtc_products()`, `find_coherence_products()`
-  and `find_interferogram_products()` take a `pass_direction` filter. The
+  `FileManager.find()` filters these four types on `pass_direction`. The
   pass direction is part of a product's equality, and anything but
   `"Ascending"` or `"Descending"` raises `ValueError`, in a product and in a
-  filter. A burst found with
-  `find_slc_bursts()` carries no pass direction, since SLC file names do not
-  record it, so creating its products now needs the burst-ID map.
+  filter. A burst found with `FileManager.find(Burst)` carries no pass
+  direction, since SLC file names do not record it, so creating its products
+  now needs the burst-ID map.
 
   ```python
   # before
@@ -281,10 +280,10 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   RTCProduct(30346, "IW1", crs, date, "VV", pass_direction="Ascending")
   ```
 
-  Files written by earlier versions are not found under the new names; those
-  four `find_*` methods warn once per `FileManager` when `prod_dir` still
-  holds some. To rename an archive of IW products, look up each burst's pass
-  direction in the burst-ID map:
+  Files written by earlier versions are not found under the new names;
+  `FileManager.find()` warns once per `FileManager`, when it looks for one of
+  those four types, if `prod_dir` still holds some. To rename an archive of
+  IW products, look up each burst's pass direction in the burst-ID map:
 
   ```python
   import re
@@ -315,13 +314,13 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   - `FileManager.get_product_path()` and `product_exists()` take a `layer`,
     the measurement by default, to locate a QA layer's file. A layer's value,
     such as `"QA-NUM"`, works too.
-  - The `find_*_qa()` methods are removed. The composite finders return one
-    composite per identity, holding the layers whose files they found. That
+  - The `find_*_qa()` methods are removed. `FileManager.find()` returns one
+    composite per identity, holding the layers whose files it found. That
     includes a composite whose measurement file is missing and only QA layers
     are on disk; keep the complete ones with
     `[c for c in found if Layer.MEASUREMENT in c.layers]`.
-  - The `pass_direction` of a pass composite and of the pass-composite
-    finders must be `"Ascending"` or `"Descending"`; anything else raises
+  - The `pass_direction` of a pass composite, and a `pass_direction`
+    filter, must be `"Ascending"` or `"Descending"`; anything else raises
     `ValueError`, where a finder used to return `[]`.
   - `product_tags.qa_metadata()` takes the composite and the layer instead of
     a QA product.
@@ -339,7 +338,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   comp = weighter.compose_rtc_lrw(rtc, cell, write_qa=True)
   fm.get_product_path(comp, Layer.QA_CQM)
   comp = weighter.compose_rtc_by_pass(rtc, cell, write_qa=True)["Ascending"]
-  [c for c in fm.find_rtc_lrw_products(mgrs_code="32TMS03") if Layer.QA_CQM in c.layers]
+  [c for c in fm.find(RTCLRWComposite, mgrs_code="32TMS03") if Layer.QA_CQM in c.layers]
   ```
 - **Breaking:** compositing failures that belong to the cell's data are
   `CompositeError`s, so a loop over cells can tell them from a wrong call.
@@ -392,6 +391,54 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.
+- **Breaking:** `FileManager` finds products with one method,
+  `find(product_type, *, time_range=None, **filters)`, instead of a
+  `find_*` method per type. The filters, like `time_range`, are keyword-only,
+  where the old methods also took them by position, as in
+  `find_rtc_lrw_products("32TMS03")` or `find_slc_bursts(66, 30346)`: name
+  each one, as in `find(RTCLRWComposite, mgrs_code="32TMS03")` or
+  `find(Burst, rel_orbit_number=66, burst_id=30346)`. Each type is filtered on
+  the fields its file name records, typed `Polarization`, `SubSwath` and
+  `PassDirection` as in `SearchQuery`, and `time_range` takes a `TimeRange`,
+  which none of the old methods could filter on. A filter the type does not
+  have, or a value no file name holds, such as `polarization="vv"`,
+  `sub_swath="IW4"` or a non-UTM `crs`, raises `ValueError` where the old
+  methods returned `[]`; a `time_range` that is not a `TimeRange` raises
+  `TypeError`. `None` still means no filter.
+
+  | Removed method | Replacement | Filters |
+  | --- | --- | --- |
+  | `find_slc_bursts(...)` | `find(Burst, ...)` | `rel_orbit_number`, `burst_id`, `sub_swath`, `polarization` |
+  | `find_rtc_products(...)` | `find(RTCProduct, ...)` | those of `Burst`, `crs`, `pass_direction` |
+  | `find_gtc_products(...)` | `find(GTCProduct, ...)` | as `RTCProduct` |
+  | `find_coherence_products(...)` | `find(CoherenceProduct, ...)` | as `RTCProduct`, `baseline_days` |
+  | `find_interferogram_products(...)` | `find(InterferogramProduct, ...)` | as `CoherenceProduct` |
+  | `find_rtc_lrw_products(...)` | `find(RTCLRWComposite, ...)` | `mgrs_code`, `polarization` |
+  | `find_coh_lrw_products(...)` | `find(CohLRWComposite, ...)` | `mgrs_code`, `polarization`, `baseline_days` |
+  | `find_rtc_pass_composites(...)` | `find(RTCPassComposite, ...)` | `mgrs_code`, `polarization`, `pass_direction` |
+  | `find_gtc_pass_composites(...)` | `find(GTCPassComposite, ...)` | as `RTCPassComposite` |
+  | `find_coh_pass_composites(...)` | `find(CohPassComposite, ...)` | as `RTCPassComposite`, `baseline_days` |
+
+  `time_range` keeps SLC bursts, RTC and GTC products acquired on one of its
+  days, coherence and interferogram products whose primary acquisition is,
+  as `BurstPairCollection.starting_within()` does, and composites whose
+  whole period, `start_date` through `end_date`, lies within it.
+
+  ```python
+  # before
+  rtc = [p for p in fm.find_rtc_products(burst_id=30346, polarization="VV") if p.date in window]
+  bursts = fm.find_slc_bursts(burst_id=30346)
+  coh = fm.find_coherence_products(baseline_days=12, pass_direction="Ascending")
+  lrw = fm.find_coh_lrw_products(mgrs_code="32TMT64", baseline_days=12)
+  # after
+  from s1bursts.burst import Burst
+  from s1bursts.product import CoherenceProduct, CohLRWComposite, RTCProduct
+
+  rtc = fm.find(RTCProduct, burst_id=30346, polarization="VV", time_range=window)
+  bursts = fm.find(Burst, burst_id=30346)
+  coh = fm.find(CoherenceProduct, baseline_days=12, pass_direction="Ascending")
+  lrw = fm.find(CohLRWComposite, mgrs_code="32TMT64", baseline_days=12)
+  ```
 - `pyarrow>=17` is a direct dependency, to recognise a corrupt burst-ID map.
   freezebase already required it, so nothing new is installed.
 - The default `SNAP_MAX_RAM_GB` is 8 GB instead of 4 GB to leave more heap for
@@ -494,7 +541,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   kept, and a rerun without overwrite skips them.`
 - `BurstProcessor` summaries list their results in input order whatever
   `max_workers` is, instead of in the order the threads finished.
-- Products found with `FileManager.find_*_products()` keep the relative orbit
+- Products found with `FileManager.find()` keep the relative orbit
   recorded in their file name, so the LRW composites no longer need the
   burst-ID map for them.
 - Comparing or hashing per-burst products no longer looks up the relative orbit,

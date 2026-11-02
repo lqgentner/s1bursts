@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, Protocol, runtime_checkable
 
-from s1bursts.time_range import TimeRange
+from s1bursts.time_range import TimeRange, _check_time_range
 
 type Polarization = Literal["VV", "VH", "HH", "HV"]
 type Mode = Literal["IW", "EW"]
@@ -87,7 +87,7 @@ class SearchQuery:
         platform_serial_id: PlatformSerialID | None = None,
         rel_orbit_number: int | None = None,
     ) -> None:
-        self.time_range = self._validate_time_range(time_range)
+        self.time_range = _check_time_range(time_range)
         self.intersects = self._validate_geometry(intersects)
         self.burst_id = self._validate_int_range(burst_id, "burst_id", minimum=1)
         self.abs_burst_id = self._validate_int_range(abs_burst_id, "abs_burst_id", minimum=1)
@@ -130,18 +130,6 @@ class SearchQuery:
             msg = "`intersects` must be a Geometry that implements `wkt`."
             raise ValueError(msg)
         return geometry
-
-    @staticmethod
-    def _validate_time_range(time_range: TimeRange | None) -> TimeRange | None:
-        """Validate that the time window is a ``TimeRange``."""
-        if time_range is not None and not isinstance(time_range, TimeRange):
-            msg = (
-                f"time_range must be a TimeRange, received `{type(time_range).__name__}`. "
-                "Its days are inclusive: TimeRange('2022-01-01', '2022-12-31') keeps "
-                "every acquisition on 31 December."
-            )
-            raise TypeError(msg)
-        return time_range
 
     @staticmethod
     def _validate_int_range(

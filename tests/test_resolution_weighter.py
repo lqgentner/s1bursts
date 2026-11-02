@@ -952,7 +952,7 @@ class TestComposeReturns:
         assert composite.layers == set(Layer)
         assert fm.get_product_path(composite, Layer.QA_NUM).exists()
         assert fm.get_product_path(composite, Layer.QA_CQM).exists()
-        assert fm.find_rtc_lrw_products() == [composite]
+        assert fm.find(RTCLRWComposite) == [composite]
 
     def test_rtc_pass_without_qa_returns_dict_of_composites(self, tmp_path: Path) -> None:
         """``write_qa=False`` returns a composite per direction holding its measurement."""

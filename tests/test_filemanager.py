@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 import warnings
 
+import numpy as np
 import pandas as pd
 from pyproj import CRS
 import pytest
@@ -14,8 +15,10 @@ import pytest
 if TYPE_CHECKING:
     from typing import ClassVar
 
-from s1bursts.filemanager import _PARSERS, FileManager
+from s1bursts.burst import Burst
+from s1bursts.filemanager import _NAME_FORMATS, FileManager, _parse_name
 from s1bursts.product import (
+    BackscatterProduct,
     BaseProduct,
     CoherenceProduct,
     CohLRWComposite,
@@ -29,12 +32,19 @@ from s1bursts.product import (
     RTCPassComposite,
     RTCProduct,
 )
+from s1bursts.time_range import TimeRange
 
 # ---------------------------------------------------------------------------
 # Test data
 # ---------------------------------------------------------------------------
 
 _CRS_32N = CRS.from_epsg(32632)
+
+
+def _find_unchecked(fm: FileManager, cls: type[Any], **filters: Any) -> list[Any]:
+    """Call ``fm.find`` with a type or filters its overloads would reject."""
+    return fm.find(cls, **filters)
+
 
 _PARSE_CASES = [
     pytest.param(
@@ -322,47 +332,32 @@ class TestFromDict:
 
 
 class TestParseFilename:
-    """Tests for filename parsing via the ``_PARSERS`` registry."""
-
-    @pytest.fixture
-    def fm(self, tmp_path: Path) -> FileManager:
-        """FileManager backed by a temporary directory."""
-        return FileManager(tmp_path)
+    """Tests for filename parsing via the ``_NAME_FORMATS`` registry."""
 
     @pytest.mark.parametrize(("cls", "filename", "expected"), _PARSE_CASES)
     def test_parse_returns_correct_fields(
         self,
-        fm: FileManager,
         cls: type[BaseProduct],
         filename: str,
         expected: dict[str, Any],
     ) -> None:
         """Each expected field value must appear in the parsed result."""
-        prefix_re, spec, prefix_captures = _PARSERS[cls]
-        result = fm._parse_filename(prefix_re, spec, filename, prefix_captures)
+        result = _parse_name(_NAME_FORMATS[cls], filename)
         assert result is not None, f"Failed to parse {filename!r} for {cls.__name__}"
         for key, value in expected.items():
             assert result[key] == value, f"Field {key!r}: got {result[key]!r}, expected {value!r}"
 
-    def test_name_without_pass_direction_returns_none(self, fm: FileManager) -> None:
+    def test_name_without_pass_direction_returns_none(self) -> None:
         """A per-burst name in the scheme without the pass direction is not parsed."""
-        prefix_re, spec, prefix_captures = _PARSERS[RTCProduct]
-        result = fm._parse_filename(
-            prefix_re,
-            spec,
-            "S1_RTC_015_030343_IW1_VH_20150709_32N.tif",
-            prefix_captures,
+        result = _parse_name(
+            _NAME_FORMATS[RTCProduct], "S1_RTC_015_030343_IW1_VH_20150709_32N.tif"
         )
         assert result is None
 
-    def test_wrong_type_returns_none(self, fm: FileManager) -> None:
+    def test_wrong_type_returns_none(self) -> None:
         """An RTC filename does not parse under the CoherenceProduct spec."""
-        prefix_re, spec, prefix_captures = _PARSERS[CoherenceProduct]
-        result = fm._parse_filename(
-            prefix_re,
-            spec,
-            "S1_RTC_015A_030343_IW1_VH_20150709_32N.tif",
-            prefix_captures,
+        result = _parse_name(
+            _NAME_FORMATS[CoherenceProduct], "S1_RTC_015A_030343_IW1_VH_20150709_32N.tif"
         )
         assert result is None
 
@@ -388,8 +383,7 @@ class TestRoundTrip:
         filename: str,
     ) -> None:
         """Parsing then reconstructing a path reproduces the original filename."""
-        prefix_re, spec, prefix_captures = _PARSERS[cls]
-        parsed = fm._parse_filename(prefix_re, spec, filename, prefix_captures)
+        parsed = _parse_name(_NAME_FORMATS[cls], filename)
         assert parsed is not None, f"Failed to parse {filename!r}"
         product = cls.from_dict(parsed)
         [layer] = product.layers if isinstance(product, MGRSTileProduct) else [Layer.MEASUREMENT]
@@ -440,14 +434,9 @@ class TestCompositeLayers:
     def test_an_unknown_pass_direction_filter_is_refused(
         self, fm: FileManager, direction: str
     ) -> None:
-        for find in (
-            fm.find_rtc_pass_composites,
-            fm.find_gtc_pass_composites,
-            fm.find_coh_pass_composites,
-        ):
-            with pytest.raises(ValueError, match="must be 'Ascending' or 'Descending'"):
-                # pyrefly: ignore [bad-argument-type]
-                find(pass_direction=direction)
+        for cls in (RTCPassComposite, GTCPassComposite, CohPassComposite):
+            with pytest.raises(ValueError, match="must be one of Ascending, Descending"):
+                _find_unchecked(fm, cls, pass_direction=direction)
 
     def test_the_path_does_not_depend_on_the_layers_held(self, fm: FileManager) -> None:
         with_qa = RTCLRWComposite(
@@ -502,16 +491,15 @@ class TestCompositeLayers:
         with pytest.raises(ValueError, match="Unknown product type"):
             fm.get_product_path(_UnknownBurst())
 
-    def test_a_quality_map_name_does_not_parse_as_a_pass_composite(self, fm: FileManager) -> None:
-        prefix_re, spec, prefix_captures = _PARSERS[RTCPassComposite]
+    def test_a_quality_map_name_does_not_parse_as_a_pass_composite(self) -> None:
         name = "S1_RTC_COMP_A_QA-CQM_32TMS03_VH_20150706_20151001.tif"
-        assert fm._parse_filename(prefix_re, spec, name, prefix_captures) is None
+        assert _parse_name(_NAME_FORMATS[RTCPassComposite], name) is None
 
     def test_find_returns_one_composite_holding_every_layer(self, fm: FileManager) -> None:
         for layer in Layer:
             fm.get_product_path(self._COMPOSITE, layer).touch()
 
-        [found] = fm.find_rtc_lrw_products(mgrs_code="32TMS03", polarization="VH")
+        [found] = fm.find(RTCLRWComposite, mgrs_code="32TMS03", polarization="VH")
 
         assert found.layers == set(Layer)
         assert found == RTCLRWComposite(
@@ -532,7 +520,7 @@ class TestCompositeLayers:
         )
         fm.get_product_path(other, Layer.QA_NUM).touch()
 
-        found = fm.find_rtc_lrw_products()
+        found = fm.find(RTCLRWComposite)
 
         assert [(p.mgrs_code, p.layers) for p in found] == [
             ("32TMS03", {Layer.MEASUREMENT}),
@@ -549,17 +537,16 @@ class TestCompositeLayers:
         )
         fm.get_product_path(coherence, Layer.QA_CQM).touch()
 
-        assert fm.find_rtc_lrw_products() == []
-        assert fm.find_coh_pass_composites() == []
-        [found] = fm.find_coh_lrw_products(baseline_days=12)
+        assert fm.find(RTCLRWComposite) == []
+        assert fm.find(CohPassComposite) == []
+        [found] = fm.find(CohLRWComposite, baseline_days=12)
         assert found.layers == {Layer.QA_CQM}
 
-    def test_tightened_pol_still_parses_composites(self, fm: FileManager) -> None:
+    def test_tightened_pol_still_parses_composites(self) -> None:
         """The tightened polarization pattern still parses VV/VH composites."""
         for pol in ("VV", "VH", "HH", "HV"):
             filename = f"S1_RTC_LRW_32TMS03_{pol}_20150706_20151001.tif"
-            prefix_re, spec, prefix_captures = _PARSERS[RTCLRWComposite]
-            parsed = fm._parse_filename(prefix_re, spec, filename, prefix_captures)
+            parsed = _parse_name(_NAME_FORMATS[RTCLRWComposite], filename)
             assert parsed is not None, f"Failed to parse polarization {pol}"
             assert parsed["polarization"] == pol
 
@@ -570,7 +557,7 @@ class TestCompositeLayers:
 
 
 class TestFindRTCLRWProducts:
-    """Tests for ``FileManager.find_rtc_lrw_products``."""
+    """Tests for ``FileManager.find(RTCLRWComposite)``."""
 
     _FILENAMES: ClassVar[list[str]] = [
         "S1_RTC_LRW_32TMS03_VH_20150706_20151001.tif",
@@ -588,31 +575,31 @@ class TestFindRTCLRWProducts:
 
     def test_find_all(self, fm: FileManager) -> None:
         """No filters returns all products."""
-        results = fm.find_rtc_lrw_products()
+        results = fm.find(RTCLRWComposite)
         assert len(results) == 3
         assert all(isinstance(p, RTCLRWComposite) for p in results)
 
     def test_filter_by_mgrs_code(self, fm: FileManager) -> None:
         """mgrs_code filter restricts results to that tile."""
-        results = fm.find_rtc_lrw_products(mgrs_code="32TMS03")
+        results = fm.find(RTCLRWComposite, mgrs_code="32TMS03")
         assert len(results) == 2
         assert all(p.mgrs_code == "32TMS03" for p in results)
 
     def test_filter_by_polarization(self, fm: FileManager) -> None:
         """Polarization filter restricts results to that polarization."""
-        results = fm.find_rtc_lrw_products(polarization="VH")
+        results = fm.find(RTCLRWComposite, polarization="VH")
         assert len(results) == 2
         assert all(p.polarization == "VH" for p in results)
 
     def test_returns_sorted(self, fm: FileManager) -> None:
         """Results are sorted alphabetically by filename."""
-        results = fm.find_rtc_lrw_products()
+        results = fm.find(RTCLRWComposite)
         names = [fm.get_product_path(p).name for p in results]
         assert names == sorted(names)
 
     def test_empty_directory(self, tmp_path: Path) -> None:
         """An empty directory returns an empty list."""
-        assert FileManager(tmp_path).find_rtc_lrw_products() == []
+        assert FileManager(tmp_path).find(RTCLRWComposite) == []
 
 
 # ---------------------------------------------------------------------------
@@ -621,7 +608,7 @@ class TestFindRTCLRWProducts:
 
 
 class TestFindCohLRWProducts:
-    """Tests for ``FileManager.find_coh_lrw_products``."""
+    """Tests for ``FileManager.find(CohLRWComposite)``."""
 
     _FILENAMES: ClassVar[list[str]] = [
         "S1_COH12_LRW_32TMS03_VH_20150706_20150919.tif",
@@ -639,19 +626,19 @@ class TestFindCohLRWProducts:
 
     def test_find_all(self, fm: FileManager) -> None:
         """No filters returns all products."""
-        results = fm.find_coh_lrw_products()
+        results = fm.find(CohLRWComposite)
         assert len(results) == 3
         assert all(isinstance(p, CohLRWComposite) for p in results)
 
     def test_filter_by_baseline_days(self, fm: FileManager) -> None:
         """baseline_days filter restricts results to that baseline."""
-        results = fm.find_coh_lrw_products(baseline_days=12)
+        results = fm.find(CohLRWComposite, baseline_days=12)
         assert len(results) == 2
         assert all(p.baseline_days == 12 for p in results)
 
     def test_baseline_days_is_int(self, fm: FileManager) -> None:
         """baseline_days must be parsed as int, not str."""
-        results = fm.find_coh_lrw_products()
+        results = fm.find(CohLRWComposite)
         assert all(isinstance(p.baseline_days, int) for p in results)
 
 
@@ -661,7 +648,7 @@ class TestFindCohLRWProducts:
 
 
 class TestFindRTCPassComposites:
-    """Tests for ``FileManager.find_rtc_pass_composites``."""
+    """Tests for ``FileManager.find(RTCPassComposite)``."""
 
     _FILENAMES: ClassVar[list[str]] = [
         "S1_RTC_COMP_A_32TMS03_VH_20150706_20151001.tif",
@@ -679,25 +666,25 @@ class TestFindRTCPassComposites:
 
     def test_find_all(self, fm: FileManager) -> None:
         """No filters returns all products."""
-        results = fm.find_rtc_pass_composites()
+        results = fm.find(RTCPassComposite)
         assert len(results) == 3
         assert all(isinstance(p, RTCPassComposite) for p in results)
 
     def test_filter_ascending(self, fm: FileManager) -> None:
         """Ascending filter returns only ascending-pass products."""
-        results = fm.find_rtc_pass_composites(pass_direction="Ascending")
+        results = fm.find(RTCPassComposite, pass_direction="Ascending")
         assert len(results) == 2
         assert all(p.pass_direction == "Ascending" for p in results)
 
     def test_filter_descending(self, fm: FileManager) -> None:
         """Descending filter returns only descending-pass products."""
-        results = fm.find_rtc_pass_composites(pass_direction="Descending")
+        results = fm.find(RTCPassComposite, pass_direction="Descending")
         assert len(results) == 1
         assert results[0].pass_direction == "Descending"
 
     def test_pass_direction_is_full_string(self, fm: FileManager) -> None:
         """pass_direction must be the full word, not the single-letter code."""
-        results = fm.find_rtc_pass_composites()
+        results = fm.find(RTCPassComposite)
         assert all(p.pass_direction in {"Ascending", "Descending"} for p in results)
 
 
@@ -707,7 +694,7 @@ class TestFindRTCPassComposites:
 
 
 class TestFindCohPassComposites:
-    """Tests for ``FileManager.find_coh_pass_composites``."""
+    """Tests for ``FileManager.find(CohPassComposite)``."""
 
     _FILENAMES: ClassVar[list[str]] = [
         "S1_COH12_COMP_A_32TMS03_VH_20150706_20150919.tif",
@@ -725,13 +712,13 @@ class TestFindCohPassComposites:
 
     def test_find_all(self, fm: FileManager) -> None:
         """No filters returns all products."""
-        results = fm.find_coh_pass_composites()
+        results = fm.find(CohPassComposite)
         assert len(results) == 3
         assert all(isinstance(p, CohPassComposite) for p in results)
 
     def test_filter_baseline_and_direction(self, fm: FileManager) -> None:
         """Combining baseline_days and pass_direction returns exactly one match."""
-        results = fm.find_coh_pass_composites(baseline_days=12, pass_direction="Ascending")
+        results = fm.find(CohPassComposite, baseline_days=12, pass_direction="Ascending")
         assert len(results) == 1
         assert results[0].baseline_days == 12
         assert results[0].pass_direction == "Ascending"
@@ -749,14 +736,14 @@ def test_gtc_pass_composite_path_round_trip(tmp_path: Path) -> None:
     path = fm.get_product_path(product)
     assert path == fm.comp_dir / "S1_GTC_COMP_A_32TMS25_VV_20190101_20190131.tif"
     path.touch()
-    assert fm.find_gtc_pass_composites(mgrs_code="32TMS25") == [product]
-    assert fm.find_gtc_pass_composites(pass_direction="Descending") == []
-    assert fm.find_rtc_pass_composites() == []
+    assert fm.find(GTCPassComposite, mgrs_code="32TMS25") == [product]
+    assert fm.find(GTCPassComposite, pass_direction="Descending") == []
+    assert fm.find(RTCPassComposite) == []
 
     qa_path = fm.get_product_path(product, Layer.QA_NUM)
     assert qa_path.name == "S1_GTC_COMP_A_QA-NUM_32TMS25_VV_20190101_20190131.tif"
     qa_path.touch()
-    [found] = fm.find_gtc_pass_composites(pass_direction="Ascending")
+    [found] = fm.find(GTCPassComposite, pass_direction="Ascending")
     assert found.layers == {Layer.MEASUREMENT, Layer.QA_NUM}
 
 
@@ -827,7 +814,7 @@ class TestFindKeepsFootprint:
                 side_effect=AssertionError("must not resolve the burst map"),
             ),
         ):
-            [found] = fm.find_rtc_products()
+            [found] = fm.find(RTCProduct)
             assert found.rel_orbit_number == 66
             assert found.pass_direction == "Descending"
         assert found == product
@@ -857,43 +844,37 @@ class TestFindPerBurstByPassDirection:
         return fm
 
     def test_rtc_by_pass_direction(self, fm: FileManager) -> None:
-        ascending = fm.find_rtc_products(pass_direction="Ascending")
-        descending = fm.find_rtc_products(pass_direction="Descending")
+        ascending = fm.find(RTCProduct, pass_direction="Ascending")
+        descending = fm.find(RTCProduct, pass_direction="Descending")
 
         assert [p.burst_id for p in ascending] == [30343, 30344]
         assert {p.pass_direction for p in ascending} == {"Ascending"}
         assert [p.rel_orbit_number for p in descending] == [66]
 
     def test_orbit_and_pass_direction_together(self, fm: FileManager) -> None:
-        assert fm.find_rtc_products(rel_orbit_number=15, pass_direction="Descending") == []
-        [found] = fm.find_rtc_products(rel_orbit_number=66, pass_direction="Descending")
+        assert fm.find(RTCProduct, rel_orbit_number=15, pass_direction="Descending") == []
+        [found] = fm.find(RTCProduct, rel_orbit_number=66, pass_direction="Descending")
         assert found.pass_direction == "Descending"
 
     def test_orbit_alone_matches_either_direction(self, fm: FileManager) -> None:
-        assert len(fm.find_rtc_products(rel_orbit_number=15)) == 2
+        assert len(fm.find(RTCProduct, rel_orbit_number=15)) == 2
 
     @pytest.mark.parametrize("direction", ["ascending", "A"])
     def test_an_unknown_pass_direction_filter_is_refused(
         self, fm: FileManager, direction: str
     ) -> None:
         # Previously returned [] without a hint.
-        for find in (
-            fm.find_rtc_products,
-            fm.find_gtc_products,
-            fm.find_coherence_products,
-            fm.find_interferogram_products,
-        ):
-            with pytest.raises(ValueError, match="must be 'Ascending' or 'Descending'"):
-                # pyrefly: ignore [bad-argument-type]
-                find(pass_direction=direction)
+        for cls in (RTCProduct, GTCProduct, CoherenceProduct, InterferogramProduct):
+            with pytest.raises(ValueError, match="must be one of Ascending, Descending"):
+                _find_unchecked(fm, cls, pass_direction=direction)
 
     def test_other_per_burst_products(self, fm: FileManager) -> None:
-        [gtc] = fm.find_gtc_products(pass_direction="Descending")
-        [coh] = fm.find_coherence_products(pass_direction="Ascending", baseline_days=12)
-        [ifg] = fm.find_interferogram_products(pass_direction="Descending")
+        [gtc] = fm.find(GTCProduct, pass_direction="Descending")
+        [coh] = fm.find(CoherenceProduct, pass_direction="Ascending", baseline_days=12)
+        [ifg] = fm.find(InterferogramProduct, pass_direction="Descending")
 
         assert (gtc.rel_orbit_number, coh.rel_orbit_number, ifg.rel_orbit_number) == (66, 15, 66)
-        assert len(fm.find_rtc_products()) == 3
+        assert len(fm.find(RTCProduct)) == 3
 
 
 class TestLegacyProductNames:
@@ -905,14 +886,14 @@ class TestLegacyProductNames:
         (fm.prod_dir / "S1_RTC_066A_030346_IW1_VV_20220112_32N.tif").touch()
 
         with pytest.warns(UserWarning, match="named without their pass direction") as record:
-            found = fm.find_rtc_products()
+            found = fm.find(RTCProduct)
         assert len(record) == 1
         assert [p.date for p in found] == [pd.Timestamp("20220112")]
 
         # A second search on the same FileManager stays quiet.
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            fm.find_coherence_products()
+            fm.find(CoherenceProduct)
 
     def test_current_names_do_not_warn(self, tmp_path: Path) -> None:
         fm = FileManager(tmp_path)
@@ -921,4 +902,139 @@ class TestLegacyProductNames:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            assert len(fm.find_coherence_products()) == 1
+            assert len(fm.find(CoherenceProduct)) == 1
+
+    def test_only_per_burst_searches_warn(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        (fm.prod_dir / "S1_RTC_066_030346_IW1_VV_20220105_32N.tif").touch()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fm.find(RTCLRWComposite)
+            fm.find(Burst)
+        with pytest.warns(UserWarning, match="named without their pass direction"):
+            fm.find(GTCProduct)
+
+
+class TestFind:
+    """``FileManager.find`` filters on the fields a type's file names record."""
+
+    _PRODUCTS: ClassVar[list[str]] = [
+        "S1_RTC_066A_030346_IW1_VV_20220105_32N.tif",
+        "S1_RTC_066A_030346_IW1_VV_20220117_32N.tif",
+        "S1_RTC_066A_030346_IW1_VV_20220129_32N.tif",
+        "S1_COH12_066A_030346_IW1_VV_20220105_20220117_32N.tif",
+        "S1_COH12_066A_030346_IW1_VV_20220117_20220129_32N.tif",
+    ]
+    _COMPOSITES: ClassVar[list[str]] = [
+        "S1_RTC_LRW_32TMS03_VV_20220101_20220131.tif",
+        "S1_RTC_LRW_QA-NUM_32TMS03_VV_20220101_20220131.tif",
+        "S1_RTC_LRW_32TMS03_VV_20220115_20220215.tif",
+        "S1_RTC_LRW_32TMS03_VV_20220201_20220228.tif",
+    ]
+
+    @pytest.fixture
+    def fm(self, tmp_path: Path) -> FileManager:
+        """FileManager with stub per-burst products, composites and SLCs."""
+        fm = FileManager(tmp_path)
+        for name in self._PRODUCTS:
+            (fm.prod_dir / name).touch()
+        for name in self._COMPOSITES:
+            (fm.comp_dir / name).touch()
+        (fm.slc_dir / "S1_SLC_066_030346_IW1_VV_20220105.zip").touch()
+        (fm.slc_dir / "S1_SLC_066_030346_IW1_VV_20220117.zip").touch()
+        return fm
+
+    def test_time_range_keeps_the_acquisitions_on_its_days(self, fm: FileManager) -> None:
+        found = fm.find(RTCProduct, time_range=TimeRange("2022-01-05", "2022-01-17"))
+
+        assert [p.date for p in found] == [pd.Timestamp("20220105"), pd.Timestamp("20220117")]
+
+    def test_time_range_dates_a_pair_by_its_primary(self, fm: FileManager) -> None:
+        [found] = fm.find(CoherenceProduct, time_range=TimeRange("2022-01-10", "2022-01-20"))
+
+        # The secondary acquisition may fall after the window.
+        assert found.date_primary == pd.Timestamp("20220117")
+        assert found.date_secondary == pd.Timestamp("20220129")
+
+    def test_time_range_keeps_composites_whose_period_it_holds(self, fm: FileManager) -> None:
+        january = fm.find(RTCLRWComposite, time_range=TimeRange("2022-01-01", "2022-01-31"))
+        winter = fm.find(RTCLRWComposite, time_range=TimeRange("2022-01-01", "2022-02-28"))
+
+        assert [(c.start_date, c.layers) for c in january] == [
+            (pd.Timestamp("20220101"), {Layer.MEASUREMENT, Layer.QA_NUM})
+        ]
+        assert len(winter) == 3
+
+    def test_time_range_filters_slc_bursts(self, fm: FileManager) -> None:
+        [burst] = fm.find(Burst, burst_id=30346, time_range=TimeRange("2022-01-10", "2022-01-31"))
+
+        assert burst.date == pd.Timestamp("20220117")
+        assert burst.rel_orbit_number == 66
+
+    def test_time_range_must_be_a_time_range(self, fm: FileManager) -> None:
+        with pytest.raises(TypeError, match="time_range must be a TimeRange"):
+            _find_unchecked(fm, RTCProduct, time_range=("2022-01-01", "2022-12-31"))
+
+    def test_a_name_only_the_glob_matches_is_skipped(self, fm: FileManager) -> None:
+        (fm.comp_dir / "S1_RTC_LRW_QA-XYZ_32TMS03_VV_20220101_20220131.tif").touch()
+        (fm.prod_dir / "S1_RTC_066A_030346_IW9_VV_20220105_32N.tif").touch()
+
+        assert len(fm.find(RTCLRWComposite)) == 3
+        assert len(fm.find(RTCProduct)) == 3
+
+    def test_a_none_filter_matches_every_value(self, fm: FileManager) -> None:
+        assert fm.find(RTCProduct, polarization=None, burst_id=None) == fm.find(RTCProduct)
+
+    def test_an_unknown_filter_names_the_accepted_ones(self, fm: FileManager) -> None:
+        with pytest.raises(ValueError, match="cannot be filtered on date, mgrs_code; its filters"):
+            _find_unchecked(fm, RTCProduct, mgrs_code="32TMS03", date="2022-01-05")
+        with pytest.raises(ValueError, match="RTCLRWComposite cannot be filtered on burst_id"):
+            _find_unchecked(fm, RTCLRWComposite, burst_id=30346)
+        with pytest.raises(ValueError, match="Burst cannot be filtered on pass_direction"):
+            _find_unchecked(fm, Burst, pass_direction="Ascending")
+
+    @pytest.mark.parametrize(
+        ("cls", "filters", "reason"),
+        [
+            pytest.param(RTCProduct, {"rel_orbit_number": 0}, "must be 1-175", id="orbit-low"),
+            pytest.param(RTCProduct, {"rel_orbit_number": 176}, "must be 1-175", id="orbit-high"),
+            pytest.param(RTCProduct, {"rel_orbit_number": "66"}, "an integer", id="orbit-str"),
+            pytest.param(RTCProduct, {"burst_id": True}, "an integer", id="burst-bool"),
+            pytest.param(RTCProduct, {"burst_id": 0}, "at least 1", id="burst-zero"),
+            pytest.param(RTCProduct, {"burst_id": 10**6}, "hold no '1000000'", id="burst-wide"),
+            pytest.param(RTCProduct, {"sub_swath": "IW4"}, "one of IW1", id="swath"),
+            pytest.param(RTCProduct, {"polarization": "vv"}, "one of VV", id="polarization"),
+            pytest.param(RTCProduct, {"crs": 4326}, "WGS 84 / UTM zone", id="crs-geographic"),
+            pytest.param(RTCProduct, {"crs": "not a crs"}, "Invalid crs filter", id="crs-garbage"),
+            pytest.param(CoherenceProduct, {"baseline_days": 100}, "hold no '100'", id="baseline"),
+            pytest.param(RTCLRWComposite, {"mgrs_code": "32tms03"}, "upper case", id="mgrs-case"),
+            pytest.param(RTCLRWComposite, {"mgrs_code": "ZZZ"}, "Malformed MGRS", id="mgrs-bad"),
+            pytest.param(RTCLRWComposite, {"mgrs_code": 32}, "a string", id="mgrs-type"),
+        ],
+    )
+    def test_a_value_no_file_name_holds_is_refused(
+        self, fm: FileManager, cls: type[BaseProduct], filters: dict[str, Any], reason: str
+    ) -> None:
+        with pytest.raises(ValueError, match=reason):
+            _find_unchecked(fm, cls, **filters)
+
+    def test_numpy_integers_are_accepted(self, fm: FileManager) -> None:
+        # Such as the values of a data frame column; typed int, so unchecked here.
+        assert len(_find_unchecked(fm, RTCProduct, burst_id=np.int64(30346))) == 3
+
+    def test_an_unknown_product_type_is_refused(self, fm: FileManager) -> None:
+        with pytest.raises(ValueError, match="Unknown product type 'BaseProduct'"):
+            _find_unchecked(fm, BaseProduct)
+        # An abstract base names no file; the overloads reject it statically too.
+        with pytest.raises(ValueError, match="Unknown product type 'BackscatterProduct'"):
+            _find_unchecked(fm, BackscatterProduct)
+
+    def test_every_filter_is_a_checked_field_of_the_name(self) -> None:
+        for cls, name_format in _NAME_FORMATS.items():
+            fields = {f.name: f for f in name_format.fields}
+            for name in name_format.filters:
+                assert name in fields, f"{cls.__name__} filters on {name}, not in its name"
+                assert fields[name].check is not None, f"{cls.__name__}.{name} is unchecked"
+            for date in name_format.dates:
+                assert date in fields, f"{cls.__name__} dates by {date}, not in its name"

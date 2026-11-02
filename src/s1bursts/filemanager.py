@@ -3,16 +3,30 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
+from functools import cache
 import logging
+from numbers import Integral
 from operator import attrgetter, itemgetter
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, Self
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    NamedTuple,
+    Protocol,
+    Self,
+    TypedDict,
+    Unpack,
+    cast,
+    overload,
+)
 import warnings
 
+from freezebase.mgrs import mgrs_to_crs
 from freezebase.raster import get_utm_zone_string, utm_zone_to_crs
 import pandas as pd
+from pyproj.exceptions import CRSError
 
 from s1bursts.burst import Burst
 from s1bursts.product import (
@@ -20,7 +34,6 @@ from s1bursts.product import (
     CoherenceProduct,
     CohLRWComposite,
     CohPassComposite,
-    CRSInput,
     GTCPassComposite,
     GTCProduct,
     InterferogramProduct,
@@ -29,15 +42,24 @@ from s1bursts.product import (
     RTCLRWComposite,
     RTCPassComposite,
     RTCProduct,
-    _check_pass_direction,
+    _utm_zone_crs,
 )
+from s1bursts.query import (
+    _MAX_REL_ORBIT_NUMBER,
+    _PASS_DIRECTIONS,
+    _POLARIZATIONS,
+    _SUB_SWATHS,
+)
+from s1bursts.time_range import _check_time_range
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from upath import UPath
 
-    from s1bursts.query import PassDirection
+    from s1bursts.product import CRSInput
+    from s1bursts.query import PassDirection, Polarization, SubSwath
+    from s1bursts.time_range import TimeRange
 
 
 class _Parseable(Protocol):
@@ -83,13 +105,58 @@ class FieldSpec(NamedTuple):
     group: str = ""  # override regex group name (defaults to name)
     wildcard: str = "*"  # glob for this segment when its value is not given
     sep: str = "_"  # joins this segment to the one before it
+    check: Callable[[Any], object] | None = None  # rejects a filter value no name holds
+
+
+def _one_of(allowed: tuple[str, ...]) -> Callable[[Any], object]:
+    """Return a filter check that accepts only the values in ``allowed``."""
+
+    def check(value: Any) -> object:
+        if value not in allowed:
+            msg = f"must be one of {', '.join(allowed)}."
+            raise ValueError(msg)
+        return value
+
+    return check
+
+
+def _int_from(minimum: int, maximum: int | None = None) -> Callable[[Any], object]:
+    """Return a filter check that accepts only integers in an inclusive range."""
+
+    def check(value: Any) -> object:
+        # bool is an int, but True is no orbit or burst.
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            msg = "must be an integer."
+            raise TypeError(msg)
+        number = int(value)
+        if number < minimum or (maximum is not None and number > maximum):
+            bound = f"{minimum}-{maximum}" if maximum is not None else f"at least {minimum}"
+            msg = f"must be {bound}."
+            raise ValueError(msg)
+        return value
+
+    return check
+
+
+def _check_mgrs_code(value: Any) -> object:
+    """Accept an upper-case MGRS reference, the form composite file names hold."""
+    if not isinstance(value, str):
+        msg = "must be a string."
+        raise TypeError(msg)
+    mgrs_to_crs(value)
+    if value != value.upper():
+        msg = "must be upper case, as in composite file names."
+        raise ValueError(msg)
+    return value
 
 
 # Maps pass direction letter to full string
 _PASS_DIRECTION = {"A": "Ascending", "D": "Descending"}
 
 # Shared field specs
-_ORBIT = FieldSpec("rel_orbit_number", "{:03d}".format, r"\d{3}", int)
+_ORBIT = FieldSpec(
+    "rel_orbit_number", "{:03d}".format, r"\d{3}", int, check=_int_from(1, _MAX_REL_ORBIT_NUMBER)
+)
 # Per-burst products append the pass direction to the orbit, "066A", keeping the
 # track in one token. Fixed-width wildcards, so that filtering on one half of the
 # token cannot match across the separators of a neighbouring one.
@@ -101,86 +168,249 @@ _PASS = FieldSpec(
     _PASS_DIRECTION.__getitem__,
     wildcard="?",
     sep="",
+    check=_one_of(_PASS_DIRECTIONS),
 )
-_BURST = FieldSpec("burst_id", "{:06d}".format, r"\d{6}", int)
-_SWATH = FieldSpec("sub_swath", str, r"IW[1-3]|EW[1-5]", str)
-_POL = FieldSpec("polarization", str, r"[A-Z]{2}", str)
+# A pass composite names its direction as a token of its own, "S1_RTC_COMP_A".
+_COMPOSITE_PASS = _PASS._replace(sep="_")
+_BASELINE = FieldSpec(
+    "baseline_days", "{:02d}".format, r"\d{2}", int, wildcard="??", sep="", check=_int_from(1)
+)
+_BURST = FieldSpec("burst_id", "{:06d}".format, r"\d{6}", int, check=_int_from(1))
+_SWATH = FieldSpec("sub_swath", str, r"IW[1-3]|EW[1-5]", str, check=_one_of(_SUB_SWATHS))
+_POL = FieldSpec("polarization", str, r"[A-Z]{2}", str, check=_one_of(_POLARIZATIONS))
 _DATE = FieldSpec("date", "{:%Y%m%d}".format, r"\d{8}", pd.Timestamp)
 _DATE_P = FieldSpec("date_primary", "{:%Y%m%d}".format, r"\d{8}", pd.Timestamp)
 _DATE_S = FieldSpec("date_secondary", "{:%Y%m%d}".format, r"\d{8}", pd.Timestamp)
-_UTM = FieldSpec("crs", get_utm_zone_string, r"\d{2}[NS]", utm_zone_to_crs, "utm_zone")
-_MGRS = FieldSpec("mgrs_code", str, r"[A-Z0-9]+", str)
+_UTM = FieldSpec(
+    "crs", get_utm_zone_string, r"\d{2}[NS]", utm_zone_to_crs, "utm_zone", check=_utm_zone_crs
+)
+_MGRS = FieldSpec("mgrs_code", str, r"[A-Z0-9]+", str, check=_check_mgrs_code)
 _SDATE = FieldSpec("start_date", "{:%Y%m%d}".format, r"\d{8}", pd.Timestamp)
 _EDATE = FieldSpec("end_date", "{:%Y%m%d}".format, r"\d{8}", pd.Timestamp)
 
-# Per-product-type field lists
-_SLC_SPEC = [_ORBIT, _BURST, _SWATH, _POL, _DATE]
-_BACKSCATTER_SPEC = [_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE, _UTM]
-_COREGISTERED_SPEC = [_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE_P, _DATE_S, _UTM]
-_MGRS_BASE_SPEC = [_MGRS, _POL, _SDATE, _EDATE]
-
-# A composite's QA layer adds its token after the type prefix; the measurement adds none.
-_LRW_LAYER_RE = r"(?:_(?P<layer>QA-NUM|QA-CQM))?"
-_UNWEIGHTED_LAYER_RE = r"(?:_(?P<layer>QA-NUM))?"
 _MEASUREMENT_ONLY = frozenset({Layer.MEASUREMENT})
 
 
-def _layers_from_token(token: str | None) -> frozenset[Layer]:
+def _layer_token(layer: Layer) -> str:
+    """Return the token a layer adds to a composite file name; the measurement adds none."""
+    return "" if layer is Layer.MEASUREMENT else f"_{layer.value}"
+
+
+def _layers_from_token(token: str) -> frozenset[Layer]:
     """Return the layer that a composite file name's QA token, or its absence, stands for."""
-    return frozenset({Layer(token)}) if token else _MEASUREMENT_ONLY
+    return frozenset({Layer(token.removeprefix("_"))}) if token else _MEASUREMENT_ONLY
 
 
-_LAYER_CAPTURE: tuple[str, str, Callable[[str], Any]] = ("layer", "layers", _layers_from_token)
+# Built from one layer, parsed into the ``layers`` a found composite holds. The
+# glob wildcard takes any token, so one listing finds every layer.
+_LRW_LAYER = FieldSpec("layers", _layer_token, r"(?:_QA-NUM|_QA-CQM)?", _layers_from_token, sep="")
+_PASS_LAYER = _LRW_LAYER._replace(pattern=r"(?:_QA-NUM)?")
 
-# Maps each metadata class to its parse arguments: (prefix_re, spec, prefix_captures).
-_PARSERS: dict[
-    type[_Parseable],
-    tuple[str, list[FieldSpec], list[tuple[str, str, Callable[[str], Any]]] | None],
-] = {
-    Burst: ("S1_SLC", _SLC_SPEC, None),
-    RTCProduct: ("S1_RTC", _BACKSCATTER_SPEC, None),
-    GTCProduct: ("S1_GTC", _BACKSCATTER_SPEC, None),
-    CoherenceProduct: (r"S1_COH\d{2}", _COREGISTERED_SPEC, None),
-    InterferogramProduct: (r"S1_IFG\d{2}_CMPLX", _COREGISTERED_SPEC, None),
-    RTCLRWComposite: (rf"S1_RTC_LRW{_LRW_LAYER_RE}", _MGRS_BASE_SPEC, [_LAYER_CAPTURE]),
-    CohLRWComposite: (
-        rf"S1_COH(?P<baseline_days>\d{{2}})_LRW{_LRW_LAYER_RE}",
-        _MGRS_BASE_SPEC,
-        [("baseline_days", "baseline_days", int), _LAYER_CAPTURE],
+# Per-product-type field lists
+_SLC_FIELDS = (_ORBIT, _BURST, _SWATH, _POL, _DATE)
+_BACKSCATTER_FIELDS = (_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE, _UTM)
+_COREGISTERED_FIELDS = (_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE_P, _DATE_S, _UTM)
+_MGRS_FIELDS = (_MGRS, _POL, _SDATE, _EDATE)
+
+
+# The filters of each product type. Total=False: every filter is optional, and
+# None is the same as leaving it out.
+class _SLCFilters(TypedDict, total=False):
+    """Filters of SLC bursts."""
+
+    rel_orbit_number: int | None
+    burst_id: int | None
+    sub_swath: SubSwath | None
+    polarization: Polarization | None
+
+
+class _BurstProductFilters(_SLCFilters, total=False):
+    """Filters of RTC and GTC products."""
+
+    crs: CRSInput | None
+    pass_direction: PassDirection | None
+
+
+class _PairProductFilters(_BurstProductFilters, total=False):
+    """Filters of coherence and interferogram products."""
+
+    baseline_days: int | None
+
+
+class _CompositeFilters(TypedDict, total=False):
+    """Filters of RTC LRW composites."""
+
+    mgrs_code: str | None
+    polarization: Polarization | None
+
+
+class _CohCompositeFilters(_CompositeFilters, total=False):
+    """Filters of coherence LRW composites."""
+
+    baseline_days: int | None
+
+
+class _PassCompositeFilters(_CompositeFilters, total=False):
+    """Filters of RTC and GTC pass composites."""
+
+    pass_direction: PassDirection | None
+
+
+class _CohPassCompositeFilters(_PassCompositeFilters, total=False):
+    """Filters of coherence pass composites."""
+
+    baseline_days: int | None
+
+
+class _NameFormat(NamedTuple):
+    """How one product type is named, filed and found."""
+
+    segments: tuple[str | FieldSpec, ...]  # literal text and fields, in name order
+    filters: frozenset[str]  # the fields ``find()`` filters on
+    directory: str  # the FileManager attribute of its directory
+    dates: tuple[str, ...]  # the dates that must fall in a ``time_range``
+    suffix: str = ".tif"
+
+    @property
+    def fields(self) -> list[FieldSpec]:
+        """The fields of the name, without its literal text."""
+        return [segment for segment in self.segments if isinstance(segment, FieldSpec)]
+
+
+_SLC = frozenset(_SLCFilters.__optional_keys__)
+_PER_BURST = frozenset(_BurstProductFilters.__optional_keys__)
+_PAIR = frozenset(_PairProductFilters.__optional_keys__)
+_COMPOSITE = frozenset(_CompositeFilters.__optional_keys__)
+_COH_COMPOSITE = frozenset(_CohCompositeFilters.__optional_keys__)
+_PASS_COMPOSITE = frozenset(_PassCompositeFilters.__optional_keys__)
+_COH_PASS_COMPOSITE = frozenset(_CohPassCompositeFilters.__optional_keys__)
+# A coherence product is dated by its primary acquisition, as in the composites
+# and ``BurstPairCollection.starting_within()``; a composite by its whole period.
+_BURST_DATE = ("date",)
+_PAIR_DATE = ("date_primary",)
+_PERIOD = ("start_date", "end_date")
+
+# Every type FileManager names and finds.
+_NAME_FORMATS: dict[type, _NameFormat] = {
+    Burst: _NameFormat(("S1_SLC", *_SLC_FIELDS), _SLC, "slc_dir", _BURST_DATE, ".zip"),
+    RTCProduct: _NameFormat(("S1_RTC", *_BACKSCATTER_FIELDS), _PER_BURST, "prod_dir", _BURST_DATE),
+    GTCProduct: _NameFormat(("S1_GTC", *_BACKSCATTER_FIELDS), _PER_BURST, "prod_dir", _BURST_DATE),
+    CoherenceProduct: _NameFormat(
+        ("S1_COH", _BASELINE, *_COREGISTERED_FIELDS), _PAIR, "prod_dir", _PAIR_DATE
     ),
-    RTCPassComposite: (
-        rf"S1_RTC_COMP_(?P<orbit_letter>[AD]){_UNWEIGHTED_LAYER_RE}",
-        _MGRS_BASE_SPEC,
-        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__), _LAYER_CAPTURE],
+    InterferogramProduct: _NameFormat(
+        ("S1_IFG", _BASELINE, "_CMPLX", *_COREGISTERED_FIELDS), _PAIR, "prod_dir", _PAIR_DATE
     ),
-    GTCPassComposite: (
-        rf"S1_GTC_COMP_(?P<orbit_letter>[AD]){_UNWEIGHTED_LAYER_RE}",
-        _MGRS_BASE_SPEC,
-        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__), _LAYER_CAPTURE],
+    RTCLRWComposite: _NameFormat(
+        ("S1_RTC_LRW", _LRW_LAYER, *_MGRS_FIELDS), _COMPOSITE, "comp_dir", _PERIOD
     ),
-    CohPassComposite: (
-        rf"S1_COH(?P<baseline_days>\d{{2}})_COMP_(?P<orbit_letter>[AD]){_UNWEIGHTED_LAYER_RE}",
-        _MGRS_BASE_SPEC,
-        [
-            ("baseline_days", "baseline_days", int),
-            ("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__),
-            _LAYER_CAPTURE,
-        ],
+    CohLRWComposite: _NameFormat(
+        ("S1_COH", _BASELINE, "_LRW", _LRW_LAYER, *_MGRS_FIELDS),
+        _COH_COMPOSITE,
+        "comp_dir",
+        _PERIOD,
+    ),
+    RTCPassComposite: _NameFormat(
+        ("S1_RTC_COMP", _COMPOSITE_PASS, _PASS_LAYER, *_MGRS_FIELDS),
+        _PASS_COMPOSITE,
+        "comp_dir",
+        _PERIOD,
+    ),
+    GTCPassComposite: _NameFormat(
+        ("S1_GTC_COMP", _COMPOSITE_PASS, _PASS_LAYER, *_MGRS_FIELDS),
+        _PASS_COMPOSITE,
+        "comp_dir",
+        _PERIOD,
+    ),
+    CohPassComposite: _NameFormat(
+        ("S1_COH", _BASELINE, "_COMP", _COMPOSITE_PASS, _PASS_LAYER, *_MGRS_FIELDS),
+        _COH_PASS_COMPOSITE,
+        "comp_dir",
+        _PERIOD,
     ),
 }
 
 
-def _checked_pass_direction(value: PassDirection | None) -> PassDirection | None:
-    """Return a ``pass_direction`` filter after rejecting a value no file name holds."""
-    if value is not None:
-        _check_pass_direction(value)
-    return value
+def _name_format(cls: type) -> _NameFormat:
+    """Return the name format of a type or of its nearest registered base."""
+    for klass in cls.__mro__:
+        if (name_format := _NAME_FORMATS.get(klass)) is not None:
+            return name_format
+    known = ", ".join(sorted(klass.__name__ for klass in _NAME_FORMATS))
+    msg = f"Unknown product type '{cls.__name__}'; FileManager names {known}."
+    raise ValueError(msg)
 
 
-def _pass_letter(value: PassDirection | None) -> str:
-    """Return the composite file name letter of a pass direction, or a wildcard for any."""
-    checked = _checked_pass_direction(value)
-    return checked[0] if checked is not None else "?"
+def _build_name(name_format: _NameFormat, values: dict[str, Any]) -> str:
+    """Build a file name, or a glob pattern with wildcards for the values not given."""
+    name = ""
+    for segment in name_format.segments:
+        if isinstance(segment, str):
+            name += segment
+        else:
+            value = values.get(segment.name)
+            name += segment.sep + (
+                segment.to_str(value) if value is not None else segment.wildcard
+            )
+    return name + name_format.suffix
+
+
+@cache
+def _name_regex(name_format: _NameFormat) -> re.Pattern[str]:
+    """Return the regex a file name of the format fully matches."""
+    regex = "".join(
+        re.escape(segment)
+        if isinstance(segment, str)
+        else f"{re.escape(segment.sep)}(?P<{segment.group or segment.name}>{segment.pattern})"
+        for segment in name_format.segments
+    )
+    return re.compile(regex + re.escape(name_format.suffix))
+
+
+def _parse_name(name_format: _NameFormat, filename: str) -> dict[str, Any] | None:
+    """Parse a file name into field values, or ``None`` if it is not of the format."""
+    match = _name_regex(name_format).fullmatch(filename)
+    if match is None:
+        return None
+    return {f.name: f.from_str(match[f.group or f.name]) for f in name_format.fields}
+
+
+def _filter_values(cls: type, name_format: _NameFormat, filters: dict[str, Any]) -> dict[str, Any]:
+    """Return the given filters after rejecting a name or value no file name holds."""
+    if unknown := sorted(filters.keys() - name_format.filters):
+        accepted = ", ".join(sorted(name_format.filters))
+        msg = (
+            f"{cls.__name__} cannot be filtered on {', '.join(unknown)}; "
+            f"its filters are {accepted} and time_range."
+        )
+        raise ValueError(msg)
+    fields = {f.name: f for f in name_format.fields}
+    values: dict[str, Any] = {}
+    for name, value in filters.items():
+        if value is None:
+            continue
+        spec = fields[name]
+        try:
+            if spec.check is not None:
+                spec.check(value)
+            segment = spec.to_str(value)
+        except (TypeError, ValueError, CRSError) as err:
+            msg = f"Invalid {name} filter {value!r}: {err}"
+            raise ValueError(msg) from err
+        # The check bounds the value; the name's width bounds it too.
+        if not re.fullmatch(spec.pattern, segment):
+            msg = f"Invalid {name} filter {value!r}: file names hold no {segment!r}."
+            raise ValueError(msg)
+        values[name] = value
+    return values
+
+
+def _merge_layers[C: MGRSTileProduct](found: list[C]) -> list[C]:
+    """Merge the composites found per layer file into one per identity."""
+    layers: defaultdict[C, set[Layer]] = defaultdict(set)
+    for product in found:
+        layers[replace(product, layers=_MEASUREMENT_ONLY)] |= product.layers
+    return [replace(product, layers=frozenset(held)) for product, held in layers.items()]
 
 
 # A per-burst product named before the pass direction joined the relative orbit.
@@ -247,8 +477,6 @@ class FileManager:
         for directory in [self.slc_dir, self.prod_dir, self.comp_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
-    # ============ SLC Operations ============
-
     def get_slc_path(self, burst: Burst) -> Path | UPath:
         """Generate the file path for an SLC burst.
 
@@ -262,28 +490,97 @@ class FileManager:
         Path
             Expected path to the SLC zip file.
         """
-        return self.slc_dir / self._build_pattern(
-            "S1_SLC",
-            _SLC_SPEC,
-            suffix=".zip",
-            rel_orbit_number=burst.rel_orbit_number,
-            burst_id=burst.burst_id,
-            sub_swath=burst.sub_swath,
-            polarization=burst.polarization,
-            date=burst.date,
-        )
+        return self._path(burst, Layer.MEASUREMENT)
 
-    def find_slc_bursts(
+    @overload
+    def find(
         self,
-        rel_orbit_number: int | None = None,
-        burst_id: int | None = None,
-        sub_swath: str | None = None,
-        polarization: str | None = None,
-    ) -> list[Burst]:
-        """Find SLC bursts matching criteria.
+        product_type: type[Burst],
+        *,
+        time_range: TimeRange | None = None,
+        **filters: Unpack[_SLCFilters],
+    ) -> list[Burst]: ...
+    @overload
+    def find[B: (RTCProduct, GTCProduct)](
+        self,
+        product_type: type[B],
+        *,
+        time_range: TimeRange | None = None,
+        **filters: Unpack[_BurstProductFilters],
+    ) -> list[B]: ...
+    @overload
+    def find[P: (CoherenceProduct, InterferogramProduct)](
+        self,
+        product_type: type[P],
+        *,
+        time_range: TimeRange | None = None,
+        **filters: Unpack[_PairProductFilters],
+    ) -> list[P]: ...
+    @overload
+    def find(
+        self,
+        product_type: type[RTCLRWComposite],
+        *,
+        time_range: TimeRange | None = None,
+        **filters: Unpack[_CompositeFilters],
+    ) -> list[RTCLRWComposite]: ...
+    @overload
+    def find(
+        self,
+        product_type: type[CohLRWComposite],
+        *,
+        time_range: TimeRange | None = None,
+        **filters: Unpack[_CohCompositeFilters],
+    ) -> list[CohLRWComposite]: ...
+    @overload
+    def find(
+        self,
+        product_type: type[RTCPassComposite],
+        *,
+        time_range: TimeRange | None = None,
+        **filters: Unpack[_PassCompositeFilters],
+    ) -> list[RTCPassComposite]: ...
+    @overload
+    def find(
+        self,
+        product_type: type[GTCPassComposite],
+        *,
+        time_range: TimeRange | None = None,
+        **filters: Unpack[_PassCompositeFilters],
+    ) -> list[GTCPassComposite]: ...
+    @overload
+    def find(
+        self,
+        product_type: type[CohPassComposite],
+        *,
+        time_range: TimeRange | None = None,
+        **filters: Unpack[_CohPassCompositeFilters],
+    ) -> list[CohPassComposite]: ...
+    def find[T: _Parseable](
+        self,
+        product_type: type[T],
+        *,
+        time_range: TimeRange | None = None,
+        **filters: Any,
+    ) -> list[T]:
+        """Find the products of one type on disk, optionally filtered.
 
-        Note: Date filtering is not supported. Use list comprehension on results
-        if date filtering is needed.
+        Each product type is filtered on the fields its file name records;
+        a filter left out, or ``None``, matches every value:
+
+        - ``Burst`` (SLC): ``rel_orbit_number``, ``burst_id``, ``sub_swath``,
+          ``polarization``.
+        - ``RTCProduct``, ``GTCProduct``: those of ``Burst``, plus ``crs`` and
+          ``pass_direction``.
+        - ``CoherenceProduct``, ``InterferogramProduct``: those of
+          ``RTCProduct``, plus ``baseline_days``.
+        - ``RTCLRWComposite``: ``mgrs_code``, ``polarization``.
+        - ``CohLRWComposite``: ``mgrs_code``, ``polarization``,
+          ``baseline_days``.
+        - ``RTCPassComposite``, ``GTCPassComposite``: ``mgrs_code``,
+          ``polarization``, ``pass_direction``.
+        - ``CohPassComposite``: ``mgrs_code``, ``polarization``,
+          ``pass_direction``, ``baseline_days``.
 
         SLC file names record the relative orbit but neither the footprint nor
         the pass direction. A burst found here takes its ``geometry`` and
@@ -293,30 +590,71 @@ class FileManager:
 
         Parameters
         ----------
-        rel_orbit_number
-            Filter by relative orbit number.
-        burst_id
-            Filter by burst ID.
-        sub_swath
-            Filter by sub-swath.
-        polarization
-            Filter by polarization.
+        product_type
+            The type of product to find, such as ``RTCProduct``, or ``Burst``
+            for SLC bursts.
+        time_range
+            Keep only the products acquired on a day of this window: by
+            ``date`` for SLC bursts, RTC and GTC products, by ``date_primary``
+            for coherence and interferogram products, as
+            ``BurstPairCollection.starting_within()`` selects pairs. A
+            composite is kept when its whole period, ``start_date`` through
+            ``end_date``, lies in the window.
+        **filters
+            Field values to match, from the list above: ``rel_orbit_number``
+            (1-175), ``burst_id`` and ``baseline_days`` are integers,
+            ``sub_swath`` a ``SubSwath`` such as ``"IW1"``, ``polarization``
+            a ``Polarization`` such as ``"VV"``, ``pass_direction``
+            ``"Ascending"`` or ``"Descending"``, ``crs`` a WGS 84 / UTM zone
+            as a CRS object, authority string or EPSG code, and
+            ``mgrs_code`` an upper-case MGRS reference such as ``"32TMT64"``.
 
         Returns
         -------
-        list[Burst]
-            List of matching SLC bursts.
+        list
+            The products found, sorted by file name. A composite is returned
+            once per identity, holding the layers whose files were found, so
+            it may lack its measurement when only QA layers are on disk.
+
+        Raises
+        ------
+        ValueError
+            If ``product_type`` is not a type FileManager names, or a filter
+            is not one of the type's or has a value no file name holds.
+        TypeError
+            If ``time_range`` is not a ``TimeRange``.
+
+        Warns
+        -----
+        UserWarning
+            Once per ``FileManager``, when finding per-burst products, if
+            ``prod_dir`` holds products named without their pass direction,
+            which are not found.
         """
-        pattern = self._build_pattern(
-            "S1_SLC",
-            _SLC_SPEC,
-            suffix=".zip",
-            rel_orbit_number=rel_orbit_number,
-            burst_id=burst_id,
-            sub_swath=sub_swath,
-            polarization=polarization,
-        )
-        return self._find_products(self.slc_dir, pattern, Burst, suffix=".zip")
+        name_format = _name_format(product_type)
+        time_range = _check_time_range(time_range)
+        values = _filter_values(product_type, name_format, filters)
+        if name_format.directory == "prod_dir":
+            self._warn_on_legacy_names()
+
+        directory: Path | UPath = getattr(self, name_format.directory)
+        paths: list[Path | UPath] = list(directory.glob(_build_name(name_format, values)))
+        found: list[T] = []
+        for path in sorted(paths, key=attrgetter("name")):
+            parsed = _parse_name(name_format, path.name)
+            if parsed is None:
+                continue
+            product = product_type.from_dict(parsed)
+            if time_range is None or all(
+                getattr(product, date) in time_range for date in name_format.dates
+            ):
+                found.append(product)
+        if not issubclass(product_type, MGRSTileProduct):
+            return found
+        # Only an MGRSTileProduct type reaches this, so T is one.
+        composites = cast("list[MGRSTileProduct]", found)
+        merged = sorted(_merge_layers(composites), key=lambda c: self.get_product_path(c).name)
+        return cast("list[T]", merged)
 
     def _warn_on_legacy_names(self) -> None:
         """Warn once if ``prod_dir`` holds products named without their pass direction."""
@@ -330,532 +668,20 @@ class FileManager:
         if any(_LEGACY_PRODUCT_NAME.fullmatch(path.name) for path in candidates):
             msg = (
                 f"{self.prod_dir} holds per-burst products named without their pass "
-                "direction, which the find_* methods no longer find. Rename them with "
+                "direction, which FileManager.find() does not find. Rename them with "
                 f"the recipe in the changelog entry on the pass direction: {_CHANGELOG_URL}"
             )
             warnings.warn(msg, stacklevel=3)
 
-    # ============ Generic Build/Parse Engine ============
-
-    def _build_pattern(
-        self,
-        prefix: str,
-        spec: list[FieldSpec],
-        *,
-        suffix: str = ".tif",
-        **values: Any,
-    ) -> str:
-        """Build a glob pattern from a prefix and field spec, with wildcards for missing values."""
-        pattern = prefix
-        for f in spec:
-            v = values.get(f.name)
-            pattern += f.sep + (f.to_str(v) if v is not None else f.wildcard)
-        return pattern + suffix
-
-    def _parse_filename(
-        self,
-        prefix_re: str,
-        spec: list[FieldSpec],
-        filename: str,
-        prefix_captures: list[tuple[str, str, Callable[[str], Any]]] | None = None,
-        *,
-        suffix: str = ".tif",
-    ) -> dict[str, Any] | None:
-        """Parse a filename into field values, or ``None`` if it does not match the spec."""
-        groups = "".join(f"{f.sep}(?P<{f.group or f.name}>{f.pattern})" for f in spec)
-        match = re.fullmatch(rf"{prefix_re}{groups}{re.escape(suffix)}", filename)
-        if not match:
-            return None
-        result = {f.name: f.from_str(match.group(f.group or f.name)) for f in spec}
-        if prefix_captures:
-            for group_name, field_name, converter in prefix_captures:
-                result[field_name] = converter(match.group(group_name))
-        return result
-
-    def _find_products[T: _Parseable](
-        self,
-        directory: Path | UPath,
-        pattern: str,
-        cls: type[T],
-        *,
-        suffix: str = ".tif",
-    ) -> list[T]:
-        """Glob a directory, parse matching filenames, and instantiate products."""
-        prefix_re, spec, prefix_captures = _PARSERS[cls]
-        matches: list[Path | UPath] = list(directory.glob(pattern))
-        files = sorted(matches, key=attrgetter("name"))
-        return [
-            cls.from_dict(m)
-            for f in files
-            if (m := self._parse_filename(prefix_re, spec, f.name, prefix_captures, suffix=suffix))
-            is not None
-        ]
-
-    # ============ RTC Product Operations ============
-
-    def _get_rtc_path(self, product: RTCProduct) -> Path | UPath:
-        """Generate the file path for an RTC backscatter product."""
-        return self.prod_dir / self._build_pattern("S1_RTC", _BACKSCATTER_SPEC, **asdict(product))
-
-    def find_rtc_products(
-        self,
-        rel_orbit_number: int | None = None,
-        burst_id: int | None = None,
-        sub_swath: str | None = None,
-        polarization: str | None = None,
-        crs: CRSInput | None = None,
-        pass_direction: PassDirection | None = None,
-    ) -> list[RTCProduct]:
-        """Find RTC backscatter products matching criteria.
-
-        Note: Date filtering is not supported. Use list comprehension on results
-        if date filtering is needed.
-
-        Parameters
-        ----------
-        rel_orbit_number
-            Filter by relative orbit number.
-        burst_id
-            Filter by burst ID.
-        sub_swath
-            Filter by sub-swath.
-        polarization
-            Filter by polarization.
-        crs
-            Filter by coordinate reference system (UTM zone).
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-
-        Returns
-        -------
-        list[RTCProduct]
-            List of matching RTC products.
-
-        Raises
-        ------
-        ValueError
-            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
-
-        Warns
-        -----
-        UserWarning
-            Once per ``FileManager``, if ``prod_dir`` holds products named
-            without their pass direction, which are not found.
-        """
-        self._warn_on_legacy_names()
-        pattern = self._build_pattern(
-            "S1_RTC",
-            _BACKSCATTER_SPEC,
-            rel_orbit_number=rel_orbit_number,
-            burst_id=burst_id,
-            sub_swath=sub_swath,
-            polarization=polarization,
-            crs=crs,
-            pass_direction=_checked_pass_direction(pass_direction),
-        )
-        return self._find_products(self.prod_dir, pattern, RTCProduct)
-
-    # ============ GTC Product Operations ============
-
-    def _get_gtc_path(self, product: GTCProduct) -> Path | UPath:
-        """Generate the file path for a GTC backscatter product."""
-        return self.prod_dir / self._build_pattern("S1_GTC", _BACKSCATTER_SPEC, **asdict(product))
-
-    def find_gtc_products(
-        self,
-        rel_orbit_number: int | None = None,
-        burst_id: int | None = None,
-        sub_swath: str | None = None,
-        polarization: str | None = None,
-        crs: CRSInput | None = None,
-        pass_direction: PassDirection | None = None,
-    ) -> list[GTCProduct]:
-        """Find GTC backscatter products matching criteria.
-
-        Note: Date filtering is not supported. Use list comprehension on results
-        if date filtering is needed.
-
-        Parameters
-        ----------
-        rel_orbit_number
-            Filter by relative orbit number.
-        burst_id
-            Filter by burst ID.
-        sub_swath
-            Filter by sub-swath.
-        polarization
-            Filter by polarization.
-        crs
-            Filter by coordinate reference system (UTM zone).
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-
-        Returns
-        -------
-        list[GTCProduct]
-            List of matching GTC products.
-
-        Raises
-        ------
-        ValueError
-            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
-
-        Warns
-        -----
-        UserWarning
-            Once per ``FileManager``, if ``prod_dir`` holds products named
-            without their pass direction, which are not found.
-        """
-        self._warn_on_legacy_names()
-        pattern = self._build_pattern(
-            "S1_GTC",
-            _BACKSCATTER_SPEC,
-            rel_orbit_number=rel_orbit_number,
-            burst_id=burst_id,
-            sub_swath=sub_swath,
-            polarization=polarization,
-            crs=crs,
-            pass_direction=_checked_pass_direction(pass_direction),
-        )
-        return self._find_products(self.prod_dir, pattern, GTCProduct)
-
-    # ============ Coherence Product Operations ============
-
-    def _get_coherence_path(self, product: CoherenceProduct) -> Path | UPath:
-        """Generate the file path for a coherence product."""
-        prefix = f"S1_COH{product.baseline_days:02d}"
-        return self.prod_dir / self._build_pattern(prefix, _COREGISTERED_SPEC, **asdict(product))
-
-    def find_coherence_products(
-        self,
-        rel_orbit_number: int | None = None,
-        burst_id: int | None = None,
-        sub_swath: str | None = None,
-        polarization: str | None = None,
-        baseline_days: int | None = None,
-        crs: CRSInput | None = None,
-        pass_direction: PassDirection | None = None,
-    ) -> list[CoherenceProduct]:
-        """Find coherence products matching criteria.
-
-        Note: Date filtering is not supported. Use list comprehension on results
-        if date filtering is needed.
-
-        Parameters
-        ----------
-        rel_orbit_number
-            Filter by relative orbit number.
-        burst_id
-            Filter by burst ID.
-        sub_swath
-            Filter by sub-swath.
-        polarization
-            Filter by polarization.
-        baseline_days
-            Filter by temporal baseline.
-        crs
-            Filter by coordinate reference system (UTM zone).
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-
-        Returns
-        -------
-        list[CoherenceProduct]
-            List of matching coherence products.
-
-        Raises
-        ------
-        ValueError
-            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
-
-        Warns
-        -----
-        UserWarning
-            Once per ``FileManager``, if ``prod_dir`` holds products named
-            without their pass direction, which are not found.
-        """
-        self._warn_on_legacy_names()
-        bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_COH{bd}",
-            _COREGISTERED_SPEC,
-            rel_orbit_number=rel_orbit_number,
-            burst_id=burst_id,
-            sub_swath=sub_swath,
-            polarization=polarization,
-            crs=crs,
-            pass_direction=_checked_pass_direction(pass_direction),
-        )
-        return self._find_products(self.prod_dir, pattern, CoherenceProduct)
-
-    # ============ Interferogram Product Operations ============
-
-    def _get_interferogram_path(self, product: InterferogramProduct) -> Path | UPath:
-        """Generate the file path for an interferogram product."""
-        prefix = f"S1_IFG{product.baseline_days:02d}_CMPLX"
-        return self.prod_dir / self._build_pattern(prefix, _COREGISTERED_SPEC, **asdict(product))
-
-    def find_interferogram_products(
-        self,
-        rel_orbit_number: int | None = None,
-        burst_id: int | None = None,
-        sub_swath: str | None = None,
-        polarization: str | None = None,
-        baseline_days: int | None = None,
-        crs: CRSInput | None = None,
-        pass_direction: PassDirection | None = None,
-    ) -> list[InterferogramProduct]:
-        """Find interferogram products matching criteria.
-
-        Note: Date filtering is not supported. Use list comprehension on results
-        if date filtering is needed.
-
-        Parameters
-        ----------
-        rel_orbit_number
-            Filter by relative orbit number.
-        burst_id
-            Filter by burst ID.
-        sub_swath
-            Filter by sub-swath.
-        polarization
-            Filter by polarization.
-        baseline_days
-            Filter by temporal baseline.
-        crs
-            Filter by coordinate reference system (UTM zone).
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-
-        Returns
-        -------
-        list[InterferogramProduct]
-            List of matching interferogram products.
-
-        Raises
-        ------
-        ValueError
-            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
-
-        Warns
-        -----
-        UserWarning
-            Once per ``FileManager``, if ``prod_dir`` holds products named
-            without their pass direction, which are not found.
-        """
-        self._warn_on_legacy_names()
-        bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_IFG{bd}_CMPLX",
-            _COREGISTERED_SPEC,
-            rel_orbit_number=rel_orbit_number,
-            burst_id=burst_id,
-            sub_swath=sub_swath,
-            polarization=polarization,
-            crs=crs,
-            pass_direction=_checked_pass_direction(pass_direction),
-        )
-        return self._find_products(self.prod_dir, pattern, InterferogramProduct)
-
-    # ============ Composite Operations ============
-
-    @staticmethod
-    def _composite_prefix(product: MGRSTileProduct) -> str:
-        """Return the file name prefix of a composite's measurement."""
-        match product:
-            case RTCLRWComposite():
-                return "S1_RTC_LRW"
-            case CohLRWComposite():
-                return f"S1_COH{product.baseline_days:02d}_LRW"
-            case RTCPassComposite():
-                return f"S1_RTC_COMP_{product.pass_direction[0]}"
-            case GTCPassComposite():
-                return f"S1_GTC_COMP_{product.pass_direction[0]}"
-            case CohPassComposite():
-                return f"S1_COH{product.baseline_days:02d}_COMP_{product.pass_direction[0]}"
-            case _:
-                msg = f"Unknown product type '{type(product)}'."
-                raise ValueError(msg)
-
-    def _get_composite_path(self, product: MGRSTileProduct, layer: Layer) -> Path | UPath:
-        """Generate the file path of one layer of a composite."""
-        prefix = self._composite_prefix(product)
-        if layer not in product.supported_layers:
-            msg = f"{type(product).__name__} has no layer {layer.name}."
-            raise ValueError(msg)
-        if layer is not Layer.MEASUREMENT:
-            prefix += f"_{layer.value}"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
-
-    def _find_composites[C: MGRSTileProduct](
-        self,
-        prefix: str,
-        cls: type[C],
-        **values: Any,
-    ) -> list[C]:
-        """Find the files of every layer of a composite type, one product per identity."""
-        # The trailing wildcard takes the QA token, so one listing finds every layer.
-        pattern = self._build_pattern(f"{prefix}*", _MGRS_BASE_SPEC, **values)
-        layers: defaultdict[C, set[Layer]] = defaultdict(set)
-        for found in self._find_products(self.comp_dir, pattern, cls):
-            layers[replace(found, layers=_MEASUREMENT_ONLY)] |= found.layers
-        products = [replace(product, layers=frozenset(held)) for product, held in layers.items()]
-        return sorted(products, key=lambda product: self.get_product_path(product).name)
-
-    def find_rtc_lrw_products(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-    ) -> list[RTCLRWComposite]:
-        """Find RTC LRW intensity composites matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-
-        Returns
-        -------
-        list[RTCLRWComposite]
-            One composite per identity, holding the layers found on disk.
-        """
-        return self._find_composites(
-            "S1_RTC_LRW", RTCLRWComposite, mgrs_code=mgrs_code, polarization=polarization
-        )
-
-    def find_coh_lrw_products(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-        baseline_days: int | None = None,
-    ) -> list[CohLRWComposite]:
-        """Find coherence LRW composites matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-        baseline_days
-            Filter by temporal baseline in days.
-
-        Returns
-        -------
-        list[CohLRWComposite]
-            One composite per identity, holding the layers found on disk.
-        """
-        bd = f"{baseline_days:02d}" if baseline_days is not None else "??"
-        return self._find_composites(
-            f"S1_COH{bd}_LRW", CohLRWComposite, mgrs_code=mgrs_code, polarization=polarization
-        )
-
-    def find_rtc_pass_composites(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-        pass_direction: PassDirection | None = None,
-    ) -> list[RTCPassComposite]:
-        """Find RTC pass composites matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-
-        Returns
-        -------
-        list[RTCPassComposite]
-            One composite per identity, holding the layers found on disk.
-
-        Raises
-        ------
-        ValueError
-            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
-        """
-        od = _pass_letter(pass_direction)
-        return self._find_composites(
-            f"S1_RTC_COMP_{od}", RTCPassComposite, mgrs_code=mgrs_code, polarization=polarization
-        )
-
-    def find_gtc_pass_composites(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-        pass_direction: PassDirection | None = None,
-    ) -> list[GTCPassComposite]:
-        """Find GTC pass composites matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-
-        Returns
-        -------
-        list[GTCPassComposite]
-            One composite per identity, holding the layers found on disk.
-
-        Raises
-        ------
-        ValueError
-            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
-        """
-        od = _pass_letter(pass_direction)
-        return self._find_composites(
-            f"S1_GTC_COMP_{od}", GTCPassComposite, mgrs_code=mgrs_code, polarization=polarization
-        )
-
-    def find_coh_pass_composites(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-        pass_direction: PassDirection | None = None,
-        baseline_days: int | None = None,
-    ) -> list[CohPassComposite]:
-        """Find coherence pass composites matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-        baseline_days
-            Filter by temporal baseline in days.
-
-        Returns
-        -------
-        list[CohPassComposite]
-            One composite per identity, holding the layers found on disk.
-
-        Raises
-        ------
-        ValueError
-            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
-        """
-        bd = f"{baseline_days:02d}" if baseline_days is not None else "??"
-        od = _pass_letter(pass_direction)
-        return self._find_composites(
-            f"S1_COH{bd}_COMP_{od}",
-            CohPassComposite,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
-        )
-
-    # ============ Generic Product Path Getter ============
+    def _path(self, product: object, layer: Layer) -> Path | UPath:
+        """Return the path of one layer's file of a product or SLC burst."""
+        name_format = _name_format(type(product))
+        values = {
+            f.name: getattr(product, f.name) for f in name_format.fields if f.name != "layers"
+        }
+        name = _build_name(name_format, {**values, "layers": layer})
+        directory: Path | UPath = getattr(self, name_format.directory)
+        return directory / name
 
     def get_product_path(
         self,
@@ -886,23 +712,13 @@ class FileManager:
             If the product type is unknown, or it has no layer ``layer``.
         """
         layer = Layer(layer)
-        if isinstance(product, MGRSTileProduct):
-            return self._get_composite_path(product, layer)
-        if layer is not Layer.MEASUREMENT:
+        supported = (
+            product.supported_layers if isinstance(product, MGRSTileProduct) else _MEASUREMENT_ONLY
+        )
+        if layer not in supported:
             msg = f"{type(product).__name__} has no layer {layer.name}."
             raise ValueError(msg)
-        match product:
-            case RTCProduct():
-                return self._get_rtc_path(product)
-            case GTCProduct():
-                return self._get_gtc_path(product)
-            case CoherenceProduct():
-                return self._get_coherence_path(product)
-            case InterferogramProduct():
-                return self._get_interferogram_path(product)
-            case _:
-                msg = f"Unknown product type '{type(product)}'."
-                raise ValueError(msg)
+        return self._path(product, layer)
 
     def product_exists(self, product: BaseProduct, layer: Layer | str = Layer.MEASUREMENT) -> bool:
         """Check if a product's file exists (works for both local and S3).
