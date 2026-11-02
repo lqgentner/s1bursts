@@ -207,7 +207,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
     retrying a transient one, a catalog that cannot be reached, and a body
     that is not valid JSON, which raised `requests.HTTPError`,
     `requests.ConnectionError` and `requests.JSONDecodeError` before; a
-    response without a `value` list or a burst without a recognisable
+    response without a `value` list or a burst without a recognizable
     footprint raised `KeyError` or `ValueError`. The new
     `CatalogError.status_code` is the HTTP status of an error response. The
     message quotes the catalog's own explanation, such as
@@ -602,7 +602,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Fixed
 
-- **Breaking:** `SearchQuery(intersects=...)` rejects an empty geometry and
+- `SearchQuery(intersects=...)` rejects an empty geometry and
   one whose `crs` is not WGS 84 with `ValueError`. An empty geometry was
   dropped, so the search ran without a spatial filter, and an `odc.geo`
   geometry in another CRS, such as an MGRS cell's UTM extent, was sent as if
@@ -614,7 +614,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   # after
   SearchQuery(intersects=cell.extent.to_crs("EPSG:4326"))
   ```
-- **Breaking:** `BurstCatalog` rejects an unknown `endpoint` or
+- `BurstCatalog` rejects an unknown `endpoint` or
   `default_endpoint` with `ValueError` before any burst is downloaded. It was
   raised from the first download thread, with a note claiming bursts had
   finished, and not at all when every SLC already existed, so a catalog
@@ -626,11 +626,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   # after: ValueError at once; pass "odata" or "s3"
   BurstCatalog(fm, default_endpoint="s3")
   ```
-- An S3 download whose catalogue lookup returns a malformed response fails
+- An S3 download whose catalog lookup returns a malformed response fails
   that burst with `BurstDownloadError`, so the OData endpoint is still tried
   and the batch continues. It raised `KeyError` or `AttributeError`, which
   stopped the whole download, and a response without a `value` list was
-  taken for a product missing from the catalogue.
+  taken for a product missing from the catalog.
 - **Breaking:** `QA-CQM` of `median` (previously the default) and quantile
   composites overstated the local resolution, on an Alpine tile by a median
   factor of 1.7 and up to 4. It was $1 / \operatorname{wquantile}_q(A;\, W)$ and is now
