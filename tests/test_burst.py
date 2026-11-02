@@ -25,10 +25,9 @@ from s1bursts.burst import (
     BurstCollection,
     BurstPair,
     BurstPairCollection,
-    utm_zone_of,
 )
 from s1bursts.cdse import CDSEResponse
-from s1bursts.errors import BurstNotInMapError
+from s1bursts.errors import BurstError, BurstNotInMapError, NoUTMZoneError
 from s1bursts.product import CoherenceProduct
 from s1bursts.time_range import TimeRange
 
@@ -1195,7 +1194,7 @@ class TestFindPairsBaselineNaming:
             assert pair.baseline_days == 12
 
 
-class TestUtmZoneOf:
+class TestUtmZone:
     @pytest.mark.parametrize(
         ("footprint", "epsg"),
         [
@@ -1224,16 +1223,20 @@ class TestUtmZoneOf:
         footprint: Polygon | MultiPolygon,
         epsg: int,
     ) -> None:
-        assert utm_zone_of(make_burst(geometry=footprint)) == CRS.from_epsg(epsg)
+        assert make_burst(geometry=footprint).utm_zone == CRS.from_epsg(epsg)
 
     def test_centre_outside_the_utm_zones_raises(self) -> None:
-        with pytest.raises(ValueError, match="No UTM zone covers"):
-            utm_zone_of(make_burst(geometry=box(10.0, 84.5, 11.0, 85.5)))
+        with pytest.raises(NoUTMZoneError, match="No UTM zone covers") as excinfo:
+            _ = make_burst(geometry=box(10.0, 84.5, 11.0, 85.5)).utm_zone
+
+        # Recorded per item by a batch, and still a ValueError for callers.
+        assert isinstance(excinfo.value, BurstError)
+        assert isinstance(excinfo.value, ValueError)
 
     def test_burst_pair_takes_the_zone_of_its_footprint(self) -> None:
         pair = BurstPair(make_burst("2022-01-01"), make_burst("2022-01-13"))
 
-        assert utm_zone_of(pair) == CRS.from_epsg(32632)
+        assert pair.utm_zone == CRS.from_epsg(32632)
 
-    def test_is_exported_from_the_package(self) -> None:
-        assert s1bursts.utm_zone_of is utm_zone_of
+    def test_replaces_the_module_function(self) -> None:
+        assert not hasattr(s1bursts, "utm_zone_of")

@@ -318,6 +318,16 @@ class BurstDownloadError(BurstError):
     """Downloading or extracting a single burst failed."""
 
 
+class NoUTMZoneError(BurstError, ValueError):
+    """A burst's footprint lies outside the UTM zones, so ``crs="auto"`` has none for it.
+
+    Raised by ``Burst.utm_zone`` and ``BurstPair.utm_zone`` for a footprint
+    centre north of 84 degrees or south of 80 degrees. With ``crs="auto"`` it
+    belongs to that burst alone, so ``BurstProcessor.create_*`` and
+    ``SNAPClient.create_*`` record it for the item rather than stopping.
+    """
+
+
 class SnapProcessingError(BurstError):
     """Processing a single burst or burst pair with SNAP failed.
 

@@ -5,11 +5,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, get_args, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, Self, get_args, override
 
 from freezebase.mgrs import mgrs_to_crs
 from pandas import Timestamp
 from pyproj import CRS
+from pyproj.exceptions import CRSError
 
 from s1bursts.burst import _FOOTPRINT_ALIASES, BurstFootprintMixin
 from s1bursts.query import PassDirection
@@ -33,22 +34,50 @@ type CRSInput = CRSLike | str | int
 
 
 # WGS 84 / UTM zones 1-60, north (EPSG:326xx) and south (EPSG:327xx).
+# The ``crs`` that processes each burst, or pair, in the UTM zone of its footprint.
+_AUTO_CRS = "auto"
+
 _UTM_NORTH_EPSG = range(32601, 32661)
 _UTM_SOUTH_EPSG = range(32701, 32761)
 
 
 def _utm_zone_crs(crs: CRSInput) -> CRS:
     """Parse ``crs`` and require a WGS 84 / UTM zone, the one CRS product file names hold."""
-    parsed = CRS.from_user_input(crs)
+    try:
+        parsed = CRS.from_user_input(crs)
+    except CRSError as err:
+        raise ValueError(_not_a_utm_zone(crs, repr(crs))) from err
     epsg = parsed.to_epsg()
     if epsg in _UTM_NORTH_EPSG or epsg in _UTM_SOUTH_EPSG:
         return parsed
+    raise ValueError(_not_a_utm_zone(crs, f"'{parsed.name}'"))
+
+
+def _not_a_utm_zone(crs: CRSInput, received: str) -> str:
+    """Return the message for a ``crs`` that is not a WGS 84 / UTM zone."""
     msg = (
         f"`crs` must be a WGS 84 / UTM zone, north or south (EPSG:326xx or 327xx), "
-        f"received '{parsed.name}'. Product file names record the UTM zone. Pass the "
-        "target cell's `crs`, or `utm_zone_of(burst)` for a single burst."
+        f"received {received}. Product file names record the UTM zone. Pass the "
+        'target cell\'s `crs` for products meant for a composite, or `"auto"` to '
+        "process each burst in the zone of its footprint."
     )
-    raise ValueError(msg)
+    if isinstance(crs, str) and crs.strip().lower() == _AUTO_CRS:
+        msg += ' "auto" is matched exactly, in lower case and without spaces.'
+    return msg
+
+
+def _check_output_crs(crs: CRSInput) -> CRS | str:
+    """Return ``"auto"`` as is, or ``crs`` parsed as a WGS 84 / UTM zone."""
+    if isinstance(crs, str) and crs == _AUTO_CRS:
+        return _AUTO_CRS
+    return _utm_zone_crs(crs)
+
+
+def _output_crs(crs: CRSInput, source: Burst | BurstPair) -> CRS:
+    """Return the UTM zone to geocode ``source`` in: its own zone for ``"auto"``."""
+    if isinstance(crs, str) and crs == _AUTO_CRS:
+        return source.utm_zone
+    return _utm_zone_crs(crs)
 
 
 _PASS_DIRECTIONS: tuple[str, ...] = get_args(PassDirection.__value__)
@@ -218,7 +247,7 @@ class BackscatterProduct(GeocodedBurst):
         """Whether the product has been radiometrically terrain corrected."""
 
     @classmethod
-    def from_burst(cls, burst: Burst, crs: CRSInput) -> Self:
+    def from_burst(cls, burst: Burst, crs: CRSInput | Literal["auto"]) -> Self:
         """Create BackscatterProduct from Burst.
 
         Parameters
@@ -228,7 +257,9 @@ class BackscatterProduct(GeocodedBurst):
         crs
             The coordinate reference system, a WGS 84 / UTM zone, north or
             south, which product file names record. Given as a CRS object, an
-            authority string such as ``"EPSG:32632"`` or an EPSG code.
+            authority string such as ``"EPSG:32632"`` or an EPSG code, or
+            ``"auto"`` for the zone of the burst's footprint,
+            ``Burst.utm_zone``.
 
         Returns
         -------
@@ -239,16 +270,20 @@ class BackscatterProduct(GeocodedBurst):
         ------
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone.
+        NoUTMZoneError
+            If ``crs`` is ``"auto"`` and the footprint's centre lies outside
+            the UTM zones.
         BurstMapUnavailableError
-            If the burst carries no relative orbit number or pass direction and
-            the burst map has not been downloaded.
+            If the burst carries no relative orbit number or pass direction,
+            or for ``"auto"`` no footprint, and the burst map has not been
+            downloaded.
         """
         return cls(
             burst_id=burst.burst_id,
             sub_swath=burst.sub_swath,
             polarization=burst.polarization,
             date=burst.date,
-            crs=_utm_zone_crs(crs),
+            crs=_output_crs(crs, burst),
             pass_direction=burst.pass_direction,
             _rel_orbit_number=burst.rel_orbit_number,
         )
@@ -362,7 +397,7 @@ class CoregisteredProduct(GeocodedBurst, ABC):
         return abs((self.date_secondary - self.date_primary).round("D").days)
 
     @classmethod
-    def from_burst_pair(cls, pair: BurstPair, crs: CRSInput) -> Self:
+    def from_burst_pair(cls, pair: BurstPair, crs: CRSInput | Literal["auto"]) -> Self:
         """Create CoregisteredProduct from BurstPair.
 
         Parameters
@@ -372,7 +407,9 @@ class CoregisteredProduct(GeocodedBurst, ABC):
         crs
             The coordinate reference system, a WGS 84 / UTM zone, north or
             south, which product file names record. Given as a CRS object, an
-            authority string such as ``"EPSG:32632"`` or an EPSG code.
+            authority string such as ``"EPSG:32632"`` or an EPSG code, or
+            ``"auto"`` for the zone of the pair's footprint,
+            ``BurstPair.utm_zone``.
 
         Returns
         -------
@@ -383,9 +420,13 @@ class CoregisteredProduct(GeocodedBurst, ABC):
         ------
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone.
+        NoUTMZoneError
+            If ``crs`` is ``"auto"`` and the footprint's centre lies outside
+            the UTM zones.
         BurstMapUnavailableError
-            If the burst carries no relative orbit number or pass direction and
-            the burst map has not been downloaded.
+            If the burst carries no relative orbit number or pass direction,
+            or for ``"auto"`` no footprint, and the burst map has not been
+            downloaded.
         """
         return cls(
             burst_id=pair.primary.burst_id,
@@ -393,7 +434,7 @@ class CoregisteredProduct(GeocodedBurst, ABC):
             date_primary=pair.primary.date,
             date_secondary=pair.secondary.date,
             polarization=pair.primary.polarization,
-            crs=_utm_zone_crs(crs),
+            crs=_output_crs(crs, pair),
             pass_direction=pair.pass_direction,
             _rel_orbit_number=pair.rel_orbit_number,
         )

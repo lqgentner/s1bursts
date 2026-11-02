@@ -41,7 +41,6 @@ practical.
 
 ```python
 import pandas as pd
-import pyproj
 from s1bursts import BurstCatalog, BurstProcessor, FileManager, SearchQuery, TimeRange
 
 fm = FileManager(base_dir="data")
@@ -61,12 +60,12 @@ bursts = catalog.search(
 )
 pairs = bursts.find_pairs(baseline=pd.Timedelta(days=12))
 
-# Download and process. Products are geocoded to a WGS 84 / UTM zone, here
-# the one of the burst; utm_zone_of(bursts[0]) would give the same.
+# Download and process. Products are geocoded to a WGS 84 / UTM zone;
+# "auto" takes each burst's own, bursts[0].utm_zone (EPSG:32632 here).
+# Products meant for a composite take the cell's zone instead, crs=cell.crs.
 catalog.download(bursts, max_workers=3).raise_on_failure()
-crs = pyproj.CRS("EPSG:32632")
-processor.create_backscatter(bursts, crs=crs)  # RTC; GTC with config=GTCConfig()
-processor.create_coherences(pairs, crs=crs)
+processor.create_backscatter(bursts, crs="auto")  # RTC; GTC with config=GTCConfig()
+processor.create_coherences(pairs, crs="auto")
 ```
 
 ## API layout
@@ -76,7 +75,7 @@ processor.create_coherences(pairs, crs=crs)
 configs they take (`SearchQuery`, `TimeRange`, `SNAPConfig`, `RTCConfig`,
 `GTCConfig`, `CoherenceConfig`, `InterferogramConfig` and their bases
 `BackscatterConfig` and `GeocodingConfig`), plus
-`download_burst_map`, `prepare_dem_for_snap` and `utm_zone_of`.
+`download_burst_map` and `prepare_dem_for_snap`.
 
 What a pipeline *produces* is returned by those services and imported from the
 module it belongs to:

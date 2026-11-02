@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import errno
 import logging
 import os
@@ -19,6 +20,7 @@ import pytest
 import rasterio
 import rasterio.errors
 import rasterio.transform
+import shapely
 from upath import UPath
 
 from s1bursts import product_tags
@@ -27,6 +29,7 @@ from s1bursts.config import SNAPSettings
 from s1bursts.errors import (
     BurstMapUnavailableError,
     ConfigurationError,
+    NoUTMZoneError,
     ProductSettingsMismatchError,
     SnapProcessingError,
 )
@@ -881,6 +884,71 @@ class TestRejectsNonUtmCrs:
 
         with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
             client.create_interferogram(pair, crs=4326, config=InterferogramConfig())
+
+
+class TestAutoCrs:
+    """``crs="auto"`` geocodes each burst or pair in the UTM zone of its footprint."""
+
+    @staticmethod
+    def _burst_at(longitude: float, date: str = "2022-01-01") -> Burst:
+        return replace(
+            _make_burst(date),
+            _geometry=shapely.box(longitude, 46.0, longitude + 1.0, 47.0),
+        )
+
+    def test_backscatter_takes_the_zone_of_the_burst(self, client: SNAPClient) -> None:
+        with (
+            patch.object(client, "_run_gpt") as mock_gpt,
+            patch.object(client, "_finalize_product"),
+        ):
+            result = client.create_backscatter(
+                self._burst_at(16.0), crs="auto", config=RTCConfig()
+            )
+
+        assert isinstance(result, OkResult)
+        assert result.result.crs == CRS.from_epsg(32633)
+        assert mock_gpt.call_args.kwargs["process_params"]["crs"] == "EPSG:32633"
+
+    def test_a_pair_takes_the_zone_of_its_footprint(self, client: SNAPClient) -> None:
+        pair = BurstPair(self._burst_at(4.0), self._burst_at(4.0, "2022-01-13"))
+
+        with patch.object(client, "_run_gpt"), patch.object(client, "_finalize_product"):
+            coherence = client.create_coherence(pair, crs="auto", config=CoherenceConfig())
+            interferogram = client.create_interferogram(
+                pair, crs="auto", config=InterferogramConfig()
+            )
+
+        assert isinstance(coherence, OkResult)
+        assert isinstance(interferogram, OkResult)
+        assert coherence.result.crs == interferogram.result.crs == CRS.from_epsg(32631)
+
+    def test_a_footprint_outside_the_utm_zones_fails_that_item(self, client: SNAPClient) -> None:
+        polar = replace(_make_burst("2022-01-01"), _geometry=shapely.box(10.0, 84.5, 11.0, 85.5))
+        pair = BurstPair(polar, replace(polar, date=Timestamp("2022-01-13")))
+
+        with patch.object(client, "_run_gpt") as mock_gpt:
+            results = [
+                client.create_backscatter(polar, crs="auto", config=GTCConfig()),
+                client.create_backscatter(polar, crs="auto", config=RTCConfig()),
+                client.create_coherence(pair, crs="auto", config=CoherenceConfig()),
+                client.create_interferogram(pair, crs="auto", config=InterferogramConfig()),
+            ]
+
+        # Previously raised, stopping a batch over every other burst.
+        for result in results:
+            assert isinstance(result, ErrorResult)
+            assert isinstance(result.error, NoUTMZoneError)
+        mock_gpt.assert_not_called()
+
+    def test_a_missing_burst_map_raises(self, client: SNAPClient) -> None:
+        with (
+            patch(
+                "s1bursts.burst.create_s1_geometry_lut",
+                side_effect=BurstMapUnavailableError("not downloaded"),
+            ),
+            pytest.raises(BurstMapUnavailableError),
+        ):
+            client.create_backscatter(_make_burst("2022-01-01"), crs="auto", config=GTCConfig())
 
 
 def _write_tagged(

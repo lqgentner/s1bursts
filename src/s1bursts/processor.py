@@ -5,28 +5,28 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import logging
 import time
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 from freezebase.progress import create_progress
 
-from s1bursts.errors import ProductSettingsMismatchError
+from s1bursts.errors import NoUTMZoneError, ProductSettingsMismatchError
 from s1bursts.product import (
     CoherenceProduct,
     GTCProduct,
     InterferogramProduct,
     RTCProduct,
-    _utm_zone_crs,
+    _check_output_crs,
 )
 from s1bursts.product_tags import _software_version
 from s1bursts.settings_check import _skip_existing, _warn_other_snap, _warn_unchecked
-from s1bursts.snap_client import SNAPClient, SNAPConfig
+from s1bursts.snap_client import SNAPClient, SNAPConfig, _item_failure
 from s1bursts.snap_graph import (
     CoherenceConfig,
     GTCConfig,
     InterferogramConfig,
     RTCConfig,
 )
-from s1bursts.summary import ErrorResult, OkResult, OperationResult, OperationSummary
+from s1bursts.summary import ErrorResult, OperationResult, OperationSummary
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -83,7 +83,7 @@ class BurstProcessor:
     def create_backscatter(
         self,
         bursts: Iterable[Burst],
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: GTCConfig,
         overwrite: bool = False,
@@ -93,7 +93,7 @@ class BurstProcessor:
     def create_backscatter(
         self,
         bursts: Iterable[Burst],
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: RTCConfig | None = None,
         overwrite: bool = False,
@@ -102,7 +102,7 @@ class BurstProcessor:
     def create_backscatter(
         self,
         bursts: Iterable[Burst],
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: RTCConfig | GTCConfig | None = None,
         overwrite: bool = False,
@@ -124,8 +124,12 @@ class BurstProcessor:
             The coordinate reference system of the geocoded output, a WGS 84 /
             UTM zone, north or south, which product file names record. Given as
             a CRS object, an authority string such as ``"EPSG:32632"`` or an
-            EPSG code. For composites, pass the target cell's ``crs``; for
-            single bursts, ``utm_zone_of(burst)`` gives the zone of a burst.
+            EPSG code, or ``"auto"`` to process each burst in the UTM zone
+            that holds its footprint (``utm_zone``). Use ``"auto"`` for
+            bursts processed on their own, such as a time series, and the
+            target cell's ``crs`` for products meant for a composite: an input
+            in another zone than the cell raises ``InconsistentInputsError``
+            when composited.
         config
             Graph-shape configuration, ``RTCConfig`` or ``GTCConfig``; defaults
             to ``RTCConfig()`` (Copernicus 30m DEM, multilook ``(5, 1)``).
@@ -145,8 +149,12 @@ class BurstProcessor:
         TypeError
             If ``config`` is neither an ``RTCConfig`` nor a ``GTCConfig``.
         ValueError
-            If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
-            processed.
+            If ``crs`` is not a WGS 84 / UTM zone, raised before any item is
+            processed. Under ``"auto"``, a footprint outside the UTM zones
+            fails its item alone, recorded as a ``NoUTMZoneError``.
+        BurstMapUnavailableError
+            With ``"auto"``, if an item carries no footprint and the burst
+            map has not been downloaded, which every such item would meet.
         OSError, SnapProcessingError or RasterWriteError
             If the disk is full, over quota or read-only, which would fail
             every remaining item alike: an ``OSError`` saying so, or an error
@@ -171,7 +179,7 @@ class BurstProcessor:
             skipped result records why.
         """
         # Checked once, so an invalid CRS fails before any burst is processed.
-        utm_crs = _utm_zone_crs(crs)
+        utm_crs = _check_output_crs(crs)
         client = self.snap_client
         if config is None or isinstance(config, RTCConfig):
             rtc_config = config or RTCConfig()
@@ -207,7 +215,7 @@ class BurstProcessor:
     def create_coherences(
         self,
         pairs: Iterable[BurstPair],
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: CoherenceConfig | None = None,
         overwrite: bool = False,
@@ -223,8 +231,12 @@ class BurstProcessor:
             The coordinate reference system of the geocoded output, a WGS 84 /
             UTM zone, north or south, which product file names record. Given as
             a CRS object, an authority string such as ``"EPSG:32632"`` or an
-            EPSG code. For composites, pass the target cell's ``crs``; for
-            single bursts, ``utm_zone_of(burst)`` gives the zone of a burst.
+            EPSG code, or ``"auto"`` to process each pair in the UTM zone
+            that holds its footprint (``utm_zone``). Use ``"auto"`` for
+            pairs processed on their own, such as a time series, and the
+            target cell's ``crs`` for products meant for a composite: an input
+            in another zone than the cell raises ``InconsistentInputsError``
+            when composited.
         config
             Graph-shape configuration; defaults to ``CoherenceConfig()``
             (25x5 window, Copernicus 30m DEM).
@@ -241,8 +253,12 @@ class BurstProcessor:
         Raises
         ------
         ValueError
-            If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
-            processed.
+            If ``crs`` is not a WGS 84 / UTM zone, raised before any item is
+            processed. Under ``"auto"``, a footprint outside the UTM zones
+            fails its item alone, recorded as a ``NoUTMZoneError``.
+        BurstMapUnavailableError
+            With ``"auto"``, if an item carries no footprint and the burst
+            map has not been downloaded, which every such item would meet.
         OSError, SnapProcessingError or RasterWriteError
             If the disk is full, over quota or read-only, which would fail
             every remaining item alike: an ``OSError`` saying so, or an error
@@ -267,7 +283,7 @@ class BurstProcessor:
             skipped result records why.
         """
         cfg = config or CoherenceConfig()
-        utm_crs = _utm_zone_crs(crs)
+        utm_crs = _check_output_crs(crs)
         client = self.snap_client
         summary = self._run(
             pairs,
@@ -283,7 +299,7 @@ class BurstProcessor:
     def create_interferograms(
         self,
         pairs: Iterable[BurstPair],
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: InterferogramConfig | None = None,
         overwrite: bool = False,
@@ -299,8 +315,12 @@ class BurstProcessor:
             The coordinate reference system of the geocoded output, a WGS 84 /
             UTM zone, north or south, which product file names record. Given as
             a CRS object, an authority string such as ``"EPSG:32632"`` or an
-            EPSG code. For composites, pass the target cell's ``crs``; for
-            single bursts, ``utm_zone_of(burst)`` gives the zone of a burst.
+            EPSG code, or ``"auto"`` to process each pair in the UTM zone
+            that holds its footprint (``utm_zone``). Use ``"auto"`` for
+            pairs processed on their own, such as a time series, and the
+            target cell's ``crs`` for products meant for a composite: an input
+            in another zone than the cell raises ``InconsistentInputsError``
+            when composited.
         config
             Graph-shape configuration; defaults to ``InterferogramConfig()``.
         overwrite
@@ -316,8 +336,12 @@ class BurstProcessor:
         Raises
         ------
         ValueError
-            If ``crs`` is not a WGS 84 / UTM zone. Raised before any item is
-            processed.
+            If ``crs`` is not a WGS 84 / UTM zone, raised before any item is
+            processed. Under ``"auto"``, a footprint outside the UTM zones
+            fails its item alone, recorded as a ``NoUTMZoneError``.
+        BurstMapUnavailableError
+            With ``"auto"``, if an item carries no footprint and the burst
+            map has not been downloaded, which every such item would meet.
         OSError, SnapProcessingError or RasterWriteError
             If the disk is full, over quota or read-only, which would fail
             every remaining item alike: an ``OSError`` saying so, or an error
@@ -342,7 +366,7 @@ class BurstProcessor:
             skipped result records why.
         """
         cfg = config or InterferogramConfig()
-        utm_crs = _utm_zone_crs(crs)
+        utm_crs = _check_output_crs(crs)
         client = self.snap_client
         summary = self._run(
             pairs,
@@ -372,7 +396,7 @@ class BurstProcessor:
         items = list(items)
         existing = [None] * len(items) if overwrite else self._existing(items, product_of, config)
 
-        def process(entry: tuple[I, OkResult[P] | None]) -> OperationResult[P]:
+        def process(entry: tuple[I, OperationResult[P] | None]) -> OperationResult[P]:
             item, skipped = entry
             return skipped if skipped is not None else create(item)
 
@@ -388,20 +412,28 @@ class BurstProcessor:
         items: list[I],
         product_of: Callable[[I], P],
         config: RTCConfig | GTCConfig | CoherenceConfig | InterferogramConfig,
-    ) -> list[OkResult[P] | None]:
+    ) -> list[OperationResult[P] | None]:
         """Return each item's skipped result if its product exists, before any item runs.
+
+        An item without a UTM zone under ``crs="auto"`` gets its failure
+        instead, so it is recorded without being handed to the client.
 
         Raises on the first product whose settings differ or that cannot be
         read, so a batch with changed settings writes nothing.
         """
         snap_version = self.config.resolved_snap_version
 
-        def check(item: I) -> OkResult[P] | None:
+        def check(item: I) -> OperationResult[P] | None:
+            try:
+                product = product_of(item)
+            except NoUTMZoneError as err:
+                # Under "auto", this item alone has no zone; it fails without being run.
+                return _item_failure(item, err)
             # The batch warns once about these skips, so each is logged at DEBUG only.
             return _skip_existing(
                 self.manager,
                 item,
-                product_of(item),
+                product,
                 config,
                 snap_version=snap_version,
                 log_level=logging.DEBUG,
