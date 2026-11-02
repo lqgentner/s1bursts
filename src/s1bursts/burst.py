@@ -385,7 +385,7 @@ class Burst(BurstFootprintMixin):
         Public footprint keys (``rel_orbit_number``, ``pass_direction``,
         ``geometry``) are mapped onto the private override fields, so a burst
         reconstructed from a parsed SLC filename keeps its relative orbit number
-        instead of re-deriving it from the LUT.
+        and pass direction instead of re-deriving them from the LUT.
 
         Parameters
         ----------
@@ -578,7 +578,10 @@ def utm_zone_of(burst: Burst | BurstPair) -> CRS:
     bursts processed on their own. The zone depends only on the burst ID and
     sub-swath, so a time series of one burst stays in one zone. Do not use it for
     products meant for a composite: those take the target cell's zone,
-    ``crs=cell.crs``, which need not be the zone of every burst.
+    ``crs=cell.crs``, which need not be the zone of every burst. A burst found
+    on disk with ``FileManager.find(Burst)`` takes its footprint from the
+    burst-ID map, since file names record its pass direction but not its
+    footprint.
 
     Parameters
     ----------

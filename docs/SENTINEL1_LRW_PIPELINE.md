@@ -146,7 +146,7 @@ The coherence estimation window exists only in `CoherenceConfig` at graph-build 
 
 ### Bursts (`burst.py`, `query.py`, `catalog.py`)
 
-- `Burst`: one acquisition of one footprint, identified by `burst_id`, `sub_swath`, `polarization` and the calendar day of `date`. Relative orbit number, pass direction and footprint geometry are propagated from the CDSE response, the relative orbit also from an SLC filename; a burst that carries none falls back to the SAR-MPC burst-ID map, an opt-in download (`download_burst_map()`).
+- `Burst`: one acquisition of one footprint, identified by `burst_id`, `sub_swath`, `polarization` and the calendar day of `date`. Relative orbit number, pass direction and footprint geometry are propagated from the CDSE response, the relative orbit and pass direction also from an SLC filename; a burst that carries none falls back to the SAR-MPC burst-ID map, an opt-in download (`download_burst_map()`).
 - `BurstPair`: primary and secondary `Burst` of one footprint; `baseline_days` is the temporal baseline rounded to whole days.
 - `BurstCollection` / `BurstPairCollection`: GeoDataFrame-backed containers with deduplication, slicing, an HTML preview, and `find_pairs(baseline=..., max_delta=pd.Timedelta(hours=6))` (keyword-only; an integer `baseline` is days, and either may be a `pandas.Timedelta`, `datetime.timedelta` or `numpy.timedelta64`, which `max_delta` must be; `baseline` must be whole days and `max_delta` under 12 hours, so every pair is named by the requested baseline). Selections return a new collection of the same type: `BurstCollection.within(time_range)` and `BurstPairCollection.starting_within(time_range)` keep the acquisitions (pairs: the primary) on a day of a `TimeRange`; `intersecting(geometry)` keeps the footprints touching a shapely geometry in WGS 84, an `odc.geo` `Geometry` in any CRS, or a `GeoBox` such as an `MGRSGeoBox` (a projected area is tested in its own CRS, with the footprints projected into it, so polar and near-global areas keep their shape); `filter(**fields)` keeps the entries whose columns equal a value or any of an iterable of values. The columns of `.df` are the burst's public field names, `rel_orbit_number` and `pass_direction` among them.
 - `SearchQuery`: validated search parameters; `BurstCatalog.search(query)` turns it into OData filters and returns every match from one catalog request. A query matching more than one page (1000 bursts) raises `TooManyResultsError`; split it and combine the results with `+`.
@@ -178,7 +178,7 @@ Every filename is built and parsed by one engine: each product class registers i
 
 | Product | Pattern |
 |---|---|
-| SLC burst | `S1_SLC_{rel_orbit:03d}_{burst_id:06d}_{sub_swath}_{polarization}_{date:%Y%m%d}.zip` |
+| SLC burst | `S1_SLC_{rel_orbit:03d}{A/D}_{burst_id:06d}_{sub_swath}_{polarization}_{date:%Y%m%d}.zip` |
 | RTC | `S1_RTC_{rel_orbit:03d}{A/D}_{burst_id:06d}_{sub_swath}_{polarization}_{date:%Y%m%d}_{utm_zone}.tif` |
 | GTC | `S1_GTC_{rel_orbit:03d}{A/D}_{burst_id:06d}_{sub_swath}_{polarization}_{date:%Y%m%d}_{utm_zone}.tif` |
 | Coherence | `S1_COH{baseline_days:02d}_{rel_orbit:03d}{A/D}_{burst_id:06d}_{sub_swath}_{polarization}_{date1:%Y%m%d}_{date2:%Y%m%d}_{utm_zone}.tif` |
@@ -191,7 +191,7 @@ Every filename is built and parsed by one engine: each product class registers i
 | LRW QA layers | `S1_RTC_LRW_QA-{NUM,CQM}_…` and `S1_COH{bb}_LRW_QA-{NUM,CQM}_…` with the composite's fields |
 | Pass QA layers | `S1_RTC_COMP_{A/D}_QA-NUM_…`, `S1_GTC_COMP_{A/D}_QA-NUM_…` and `S1_COH{bb}_COMP_{A/D}_QA-NUM_…` |
 
-A per-burst product name carries its track as one token, the relative orbit followed by the pass direction (`066A`), so a product found on disk knows both without the burst-ID map. The SLC name has no pass direction, so a burst found with `find(Burst)` takes it from the map when its products are created.
+An SLC or per-burst product name carries its track as one token, the relative orbit followed by the pass direction (`066A`), so a burst or product found on disk knows both without the burst-ID map. No name records the footprint, so a burst found with `find(Burst)` takes its geometry, and with it `utm_zone_of`, from the map. `find()` warns once per `FileManager` and directory when `slc_dir` or `prod_dir` holds names without the pass direction, and so does `get_slc_path()` for `slc_dir`, so a download that would fetch an old-named SLC again says so.
 
 The SAFE folder inside an SLC zip keeps ESA's `S1{A,B}_SLC_{sensingTime}_{burst_id}_{sub_swath}_{polarization}_{datatake_id}.SAFE` name, which preserves the platform and datatake and is what SNAP reads. `Burst.date` is CDSE's `BeginningDateTime`, the annotation's `sensingTime`.
 

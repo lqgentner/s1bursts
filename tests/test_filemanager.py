@@ -898,11 +898,12 @@ class TestLegacyProductNames:
     def test_current_names_do_not_warn(self, tmp_path: Path) -> None:
         fm = FileManager(tmp_path)
         (fm.prod_dir / "S1_COH12_066A_030346_IW1_VV_20220105_20220117_32N.tif").touch()
-        (fm.slc_dir / "S1_SLC_066_030346_IW1_VV_20220105.zip").touch()
+        (fm.slc_dir / "S1_SLC_066A_030346_IW1_VV_20220105.zip").touch()
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             assert len(fm.find(CoherenceProduct)) == 1
+            assert len(fm.find(Burst)) == 1
 
     def test_only_per_burst_searches_warn(self, tmp_path: Path) -> None:
         fm = FileManager(tmp_path)
@@ -914,6 +915,57 @@ class TestLegacyProductNames:
             fm.find(Burst)
         with pytest.warns(UserWarning, match="named without their pass direction"):
             fm.find(GTCProduct)
+
+    def test_old_slc_names_warn_once_and_are_not_found(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        (fm.slc_dir / "S1_SLC_066_030346_IW1_VV_20220105.zip").touch()
+        (fm.slc_dir / "S1_SLC_066A_030346_IW1_VV_20220117.zip").touch()
+
+        with pytest.warns(UserWarning, match="SLC bursts named without") as record:
+            found = fm.find(Burst)
+        assert "downloads again" in str(record[0].message)
+        assert [burst.date for burst in found] == [pd.Timestamp("20220117")]
+
+        # Each directory is checked once; prod_dir has nothing old.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fm.find(Burst)
+            fm.find(RTCProduct)
+
+
+class TestSlcNames:
+    """SLC file names record the pass direction after the relative orbit."""
+
+    def test_the_path_records_the_pass_direction(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        burst = Burst(
+            burst_id=30346,
+            sub_swath="IW1",
+            polarization="VV",
+            date=pd.Timestamp("2022-01-05"),
+            _rel_orbit_number=66,
+            _pass_direction="Descending",
+        )
+
+        assert fm.get_slc_path(burst) == fm.slc_dir / "S1_SLC_066D_030346_IW1_VV_20220105.zip"
+
+    def test_a_found_burst_carries_its_pass_direction_without_the_burst_map(
+        self, tmp_path: Path
+    ) -> None:
+        fm = FileManager(tmp_path)
+        (fm.slc_dir / "S1_SLC_066A_030346_IW1_VV_20220105.zip").touch()
+        (fm.slc_dir / "S1_SLC_015D_030343_IW1_VV_20220105.zip").touch()
+
+        with patch(
+            "s1bursts.burst.create_s1_pass_direction_lut",
+            side_effect=AssertionError("must not resolve the burst map"),
+        ):
+            [descending] = fm.find(Burst, pass_direction="Descending")
+            assert descending.pass_direction == "Descending"
+            assert descending.rel_orbit_number == 15
+            assert fm.find(Burst, rel_orbit_number=66, pass_direction="Descending") == []
+            [ascending] = fm.find(Burst, rel_orbit_number=66)
+            assert ascending.pass_direction == "Ascending"
 
 
 class TestFind:
@@ -941,8 +993,8 @@ class TestFind:
             (fm.prod_dir / name).touch()
         for name in self._COMPOSITES:
             (fm.comp_dir / name).touch()
-        (fm.slc_dir / "S1_SLC_066_030346_IW1_VV_20220105.zip").touch()
-        (fm.slc_dir / "S1_SLC_066_030346_IW1_VV_20220117.zip").touch()
+        (fm.slc_dir / "S1_SLC_066A_030346_IW1_VV_20220105.zip").touch()
+        (fm.slc_dir / "S1_SLC_066A_030346_IW1_VV_20220117.zip").touch()
         return fm
 
     def test_time_range_keeps_the_acquisitions_on_its_days(self, fm: FileManager) -> None:
@@ -991,8 +1043,8 @@ class TestFind:
             _find_unchecked(fm, RTCProduct, mgrs_code="32TMS03", date="2022-01-05")
         with pytest.raises(ValueError, match="RTCLRWComposite cannot be filtered on burst_id"):
             _find_unchecked(fm, RTCLRWComposite, burst_id=30346)
-        with pytest.raises(ValueError, match="Burst cannot be filtered on pass_direction"):
-            _find_unchecked(fm, Burst, pass_direction="Ascending")
+        with pytest.raises(ValueError, match="Burst cannot be filtered on crs"):
+            _find_unchecked(fm, Burst, crs=32632)
 
     @pytest.mark.parametrize(
         ("cls", "filters", "reason"),

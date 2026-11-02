@@ -207,7 +207,7 @@ _LRW_LAYER = FieldSpec("layers", _layer_token, r"(?:_QA-NUM|_QA-CQM)?", _layers_
 _PASS_LAYER = _LRW_LAYER._replace(pattern=r"(?:_QA-NUM)?")
 
 # Per-product-type field lists
-_SLC_FIELDS = (_ORBIT, _BURST, _SWATH, _POL, _DATE)
+_SLC_FIELDS = (_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE)
 _BACKSCATTER_FIELDS = (_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE, _UTM)
 _COREGISTERED_FIELDS = (_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE_P, _DATE_S, _UTM)
 _MGRS_FIELDS = (_MGRS, _POL, _SDATE, _EDATE)
@@ -219,6 +219,7 @@ class _SLCFilters(TypedDict, total=False):
     """Filters of SLC bursts."""
 
     rel_orbit_number: int | None
+    pass_direction: PassDirection | None
     burst_id: int | None
     sub_swath: SubSwath | None
     polarization: Polarization | None
@@ -228,7 +229,6 @@ class _BurstProductFilters(_SLCFilters, total=False):
     """Filters of RTC and GTC products."""
 
     crs: CRSInput | None
-    pass_direction: PassDirection | None
 
 
 class _PairProductFilters(_BurstProductFilters, total=False):
@@ -413,10 +413,15 @@ def _merge_layers[C: MGRSTileProduct](found: list[C]) -> list[C]:
     return [replace(product, layers=frozenset(held)) for product, held in layers.items()]
 
 
-# A per-burst product named before the pass direction joined the relative orbit.
-_LEGACY_PRODUCT_NAME = re.compile(
-    r"S1_(?:RTC|GTC|COH\d{2}|IFG\d{2}_CMPLX)_\d{3}_\d{6}_(?:IW|EW)\d_.*\.tif"
-)
+# An SLC or per-burst product named before the pass direction joined the
+# relative orbit, by the directory that holds them.
+_LEGACY_NAMES = {
+    "slc_dir": (re.compile(r"S1_SLC_\d{3}_\d{6}_(?:IW|EW)\d_.*\.zip"), "SLC bursts"),
+    "prod_dir": (
+        re.compile(r"S1_(?:RTC|GTC|COH\d{2}|IFG\d{2}_CMPLX)_\d{3}_\d{6}_(?:IW|EW)\d_.*\.tif"),
+        "per-burst products",
+    ),
+}
 _CHANGELOG_URL = "https://github.com/lqgentner/s1bursts/blob/main/CHANGELOG.md"
 
 
@@ -471,7 +476,7 @@ class FileManager:
         self.prod_dir = _as_path(prod_dir) if prod_dir else self.base_dir / "s1-prod"
         self.comp_dir = _as_path(comp_dir) if comp_dir else self.base_dir / "s1-comp"
 
-        self._legacy_names_checked = False
+        self._legacy_names_checked: set[str] = set()
 
         # Create all directories (UPath.mkdir on S3 is a no-op)
         for directory in [self.slc_dir, self.prod_dir, self.comp_dir]:
@@ -489,7 +494,16 @@ class FileManager:
         -------
         Path
             Expected path to the SLC zip file.
+
+        Warns
+        -----
+        UserWarning
+            Once per ``FileManager``, if ``slc_dir`` holds SLC bursts named
+            without their pass direction, which ``BurstCatalog.download()``
+            downloads again under the new name.
         """
+        # Every SLC download and existence check resolves its path here.
+        self._warn_on_legacy_names("slc_dir")
         return self._path(burst, Layer.MEASUREMENT)
 
     @overload
@@ -568,10 +582,9 @@ class FileManager:
         Each product type is filtered on the fields its file name records;
         a filter left out, or ``None``, matches every value:
 
-        - ``Burst`` (SLC): ``rel_orbit_number``, ``burst_id``, ``sub_swath``,
-          ``polarization``.
-        - ``RTCProduct``, ``GTCProduct``: those of ``Burst``, plus ``crs`` and
-          ``pass_direction``.
+        - ``Burst`` (SLC): ``rel_orbit_number``, ``pass_direction``,
+          ``burst_id``, ``sub_swath``, ``polarization``.
+        - ``RTCProduct``, ``GTCProduct``: those of ``Burst``, plus ``crs``.
         - ``CoherenceProduct``, ``InterferogramProduct``: those of
           ``RTCProduct``, plus ``baseline_days``.
         - ``RTCLRWComposite``: ``mgrs_code``, ``polarization``.
@@ -582,11 +595,11 @@ class FileManager:
         - ``CohPassComposite``: ``mgrs_code``, ``polarization``,
           ``pass_direction``, ``baseline_days``.
 
-        SLC file names record the relative orbit but neither the footprint nor
-        the pass direction. A burst found here takes its ``geometry`` and
-        ``pass_direction``, and so the names of the products created from it,
-        from the burst-ID map, which is loaded once per process; see
-        ``s1bursts.burstmap.download_burst_map``.
+        SLC file names record the relative orbit and the pass direction, so
+        the products created from a burst found here are named without the
+        burst-ID map. They do not record the footprint: a burst found here
+        takes its ``geometry`` from the burst-ID map, which is loaded once per
+        process; see ``s1bursts.burstmap.download_burst_map``.
 
         Parameters
         ----------
@@ -627,15 +640,14 @@ class FileManager:
         Warns
         -----
         UserWarning
-            Once per ``FileManager``, when finding per-burst products, if
-            ``prod_dir`` holds products named without their pass direction,
-            which are not found.
+            Once per ``FileManager`` and directory, when finding SLC bursts or
+            per-burst products, if ``slc_dir`` or ``prod_dir`` holds files
+            named without their pass direction, which are not found.
         """
         name_format = _name_format(product_type)
         time_range = _check_time_range(time_range)
         values = _filter_values(product_type, name_format, filters)
-        if name_format.directory == "prod_dir":
-            self._warn_on_legacy_names()
+        self._warn_on_legacy_names(name_format.directory)
 
         directory: Path | UPath = getattr(self, name_format.directory)
         paths: list[Path | UPath] = list(directory.glob(_build_name(name_format, values)))
@@ -656,20 +668,22 @@ class FileManager:
         merged = sorted(_merge_layers(composites), key=lambda c: self.get_product_path(c).name)
         return cast("list[T]", merged)
 
-    def _warn_on_legacy_names(self) -> None:
-        """Warn once if ``prod_dir`` holds products named without their pass direction."""
-        if self._legacy_names_checked:
+    def _warn_on_legacy_names(self, directory_name: str) -> None:
+        """Warn once per directory if it holds files named without their pass direction."""
+        if directory_name not in _LEGACY_NAMES or directory_name in self._legacy_names_checked:
             return
-        self._legacy_names_checked = True
+        self._legacy_names_checked.add(directory_name)
+        legacy_name, kind = _LEGACY_NAMES[directory_name]
+        directory: Path | UPath = getattr(self, directory_name)
         # Only names without a letter after the orbit match this glob.
-        candidates = self.prod_dir.glob(
-            "S1_*_[0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_*.tif"
-        )
-        if any(_LEGACY_PRODUCT_NAME.fullmatch(path.name) for path in candidates):
+        candidates = directory.glob("S1_*_[0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_*")
+        if any(legacy_name.fullmatch(path.name) for path in candidates):
             msg = (
-                f"{self.prod_dir} holds per-burst products named without their pass "
-                "direction, which FileManager.find() does not find. Rename them with "
-                f"the recipe in the changelog entry on the pass direction: {_CHANGELOG_URL}"
+                f"{directory} holds {kind} named without their pass direction, which "
+                "FileManager.find() does not find"
+                + (" and BurstCatalog.download() downloads again" if kind == "SLC bursts" else "")
+                + ". Rename them with the recipe in the changelog entry on the pass "
+                f"direction: {_CHANGELOG_URL}"
             )
             warnings.warn(msg, stacklevel=3)
 

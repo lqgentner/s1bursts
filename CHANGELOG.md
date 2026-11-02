@@ -252,13 +252,16 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   # after
   processor.create_coherences(pairs, crs="EPSG:32632")  # or crs=utm_zone_of(pairs[0])
   ```
-- **Breaking:** the file names of RTC, GTC, coherence and interferogram
-  products record the pass direction, as `A` or `D` after the relative orbit,
-  and every product path moves. SLC and composite file names are unchanged.
+- **Breaking:** the file names of SLC bursts and of RTC, GTC, coherence and
+  interferogram products record the pass direction, as `A` or `D` after the
+  relative orbit, and every SLC and product path moves. Composite file names
+  are unchanged.
 
   ```text
-  before: S1_RTC_066_030346_IW1_VV_20220105_32N.tif
-  after:  S1_RTC_066A_030346_IW1_VV_20220105_32N.tif
+  before: S1_SLC_066_030346_IW1_VV_20220105.zip
+          S1_RTC_066_030346_IW1_VV_20220105_32N.tif
+  after:  S1_SLC_066A_030346_IW1_VV_20220105.zip
+          S1_RTC_066A_030346_IW1_VV_20220105_32N.tif
           S1_COH12_066A_030346_IW1_VV_20220105_20220117_32N.tif
   ```
 
@@ -266,12 +269,12 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   argument, which `from_burst()` and `from_burst_pair()` take from the burst
   and `FileManager` reads back from the file name. So `compose_*_by_pass`
   never needs the burst-ID map, also for products found on disk, and
-  `FileManager.find()` filters these four types on `pass_direction`. The
-  pass direction is part of a product's equality, and anything but
-  `"Ascending"` or `"Descending"` raises `ValueError`, in a product and in a
-  filter. A burst found with `FileManager.find(Burst)` carries no pass
-  direction, since SLC file names do not record it, so creating its products
-  now needs the burst-ID map.
+  `FileManager.find()` filters these four types and SLC bursts on
+  `pass_direction`. The pass direction is part of a product's equality, and
+  anything but `"Ascending"` or `"Descending"` raises `ValueError`, in a
+  product and in a filter. A burst found with `FileManager.find(Burst)`
+  carries the pass direction its file name records, so creating its products
+  needs no burst-ID map; its footprint still comes from the map.
 
   ```python
   # before
@@ -280,10 +283,14 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   RTCProduct(30346, "IW1", crs, date, "VV", pass_direction="Ascending")
   ```
 
-  Files written by earlier versions are not found under the new names;
-  `FileManager.find()` warns once per `FileManager`, when it looks for one of
-  those four types, if `prod_dir` still holds some. To rename an archive of
-  IW products, look up each burst's pass direction in the burst-ID map:
+  Files written by earlier versions are not found under the new names, and
+  `BurstCatalog.download()` downloads an SLC burst again unless its file is
+  renamed first. `FileManager` warns once per instance and directory if
+  `slc_dir` or `prod_dir` still holds some: when `find()` looks for SLC
+  bursts or one of those four types, and when `get_slc_path()` resolves an
+  SLC path, as every download does. To rename an archive of IW SLC
+  bursts and products, look up each burst's pass direction in the burst-ID
+  map:
 
   ```python
   import re
@@ -293,8 +300,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
   download_burst_map(mode="IW")
   directions = create_s1_pass_direction_lut(mode="IW")
-  old_name = re.compile(r"(S1_(?:RTC|GTC|COH\d{2}|IFG\d{2}_CMPLX)_\d{3})(_(\d{6})_(IW\d)_.*)")
-  for path in FileManager("data").prod_dir.glob("S1_*.tif"):
+  old_name = re.compile(r"(S1_(?:SLC|RTC|GTC|COH\d{2}|IFG\d{2}_CMPLX)_\d{3})(_(\d{6})_(IW\d)_.*)")
+  fm = FileManager("data")
+  for path in [*fm.slc_dir.glob("S1_SLC_*.zip"), *fm.prod_dir.glob("S1_*.tif")]:
       if match := old_name.fullmatch(path.name):
           letter = directions[(int(match[3]), match[4])][0]
           path.rename(path.with_name(f"{match[1]}{letter}{match[2]}"))
