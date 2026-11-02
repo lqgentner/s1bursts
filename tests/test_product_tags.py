@@ -479,6 +479,13 @@ class TestQaLayers:
         assert "CQM_SCALING" not in tags
         assert tags["QA_LAYER"] == "Composite Quality Map Image"
 
+    def test_cqm_is_described_as_the_weighted_mean_under_any_aggregation(self) -> None:
+        # Previously described as aggregated with the composite's statistic, which
+        # a median composite's CQM is not.
+        description = self._cqm(aggregation="median")["LAYER_DESCRIPTION"]
+        assert "weighted with the composite's weights" in description
+        assert "statistic" not in description
+
     def test_pass_qa_is_unweighted_and_counts_finite_values(self) -> None:
         tags = product_tags.qa_metadata(
             _rtc_pass(),
