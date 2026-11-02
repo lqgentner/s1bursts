@@ -26,46 +26,40 @@ os.chdir(root / "cache/docs")
 ## Process and compose
 
 The search covers January 2022 for every burst overlapping a small area around
-the mountain. The bursts are processed into RTC backscatter in the local UTM
-zone (EPSG:32759) at 20 m, the pixel size of the composite. Each 10 km grid
-square that the area touches is then composed; see
-[Compositing](compositing.qmd) for the methods used.
+the mountain. Each 10 km grid square that the area touches lies in UTM zone
+59 South (EPSG:32759), so the bursts are processed into RTC backscatter in that
+zone, `squares[0].crs`, at 20 m, the pixel size of the composite. Each square
+is then composed; see [Compositing](compositing.qmd) for the methods used.
 
 ```{python}
-from pathlib import Path
-
 from freezebase.mgrs import MGRSGrid
-from pyproj import CRS
 from shapely.geometry import box
-from s1bursts import BackscatterConfig, BurstDatabase, BurstProcessor, FileManager, ResolutionWeighter, SearchQuery, TimeRange
+from s1bursts import BurstCatalog, BurstProcessor, FileManager, ResolutionWeighter, RTCConfig, SearchQuery, TimeRange
+from s1bursts.product import Layer
 
-fm = FileManager(Path("data/mountain"))
-database = BurstDatabase(fm)
+fm = FileManager("data/mountain")
+catalog = BurstCatalog(fm)
 window = TimeRange("2022-01-01", "2022-01-31")
 aoi = box(170.12, -43.62, 170.16, -43.58)
-bursts = database.search(SearchQuery(time_range=window, intersects=aoi, polarization="VV"))
-print(f"{len(bursts)} acquisitions from {bursts.df._rel_orbit_number.nunique()} orbits")
+squares = list(MGRSGrid(aoi, resolution=20))
+bursts = catalog.search(SearchQuery(time_range=window, intersects=aoi, polarization="VV"))
+print(f"{len(bursts)} acquisitions from {bursts.df.rel_orbit_number.nunique()} orbits")
 ```
 
 ```{python}
 #| output: false
-database.download(bursts)
+catalog.download(bursts).raise_on_failure()
 processor = BurstProcessor(fm)
 rtc = processor.create_backscatter(
-    bursts, crs=CRS("EPSG:32759"), config=BackscatterConfig(grid_spacing=20),
-)
-```
-
-```{python}
-#| include: false
-assert not rtc.n_failed, rtc.failed_items
+    bursts, crs=squares[0].crs, config=RTCConfig(grid_spacing=20),
+).raise_on_failure()
 ```
 
 ```{python}
 weighter = ResolutionWeighter(fm)
 composites = [
     weighter.compose_rtc_lrw(rtc.products, square, write_qa=True, time_range=window)
-    for square in MGRSGrid(aoi, resolution=20)
+    for square in squares
 ]
 print(f"{len(composites)} grid squares composed")
 ```
@@ -85,9 +79,9 @@ from pyproj import Transformer
 from rasterio.merge import merge
 
 
-def mosaic(products):
+def mosaic(composites, layer):
     """Join the grid squares of one layer; return the data and its extent in km."""
-    data, transform = merge([fm.get_product_path(p) for p in products])
+    data, transform = merge([fm.get_product_path(c, layer) for c in composites])
     rows, cols = data.shape[1:]
     left, top = transform.c, transform.f
     extent = [left, left + transform.a * cols, top + transform.e * rows, top]
@@ -96,13 +90,13 @@ def mosaic(products):
 
 summit = Transformer.from_crs("EPSG:4326", "EPSG:32759", always_xy=True).transform(170.1418, -43.5950)
 layers = [
-    ([c for c, _ in composites], "Gamma-0 (dB)", "gray", (-25, 0)),
-    ([qa[0] for _, qa in composites], "Contributing acquisitions", "viridis", (0, len(bursts))),
-    ([qa[1] for _, qa in composites], "CQM (dB)", "viridis", (-10, 10)),
+    (Layer.MEASUREMENT, "Gamma-0 (dB)", "gray", (-25, 0)),
+    (Layer.QA_NUM, "Contributing acquisitions", "viridis", (0, len(bursts))),
+    (Layer.QA_CQM, "CQM (dB)", "viridis", (-10, 10)),
 ]
 fig, axes = plt.subplots(1, 3, figsize=(12, 4.2), sharey=True, layout="constrained")
-for ax, (products, label, cmap, limits) in zip(axes, layers):
-    data, extent = mosaic(products)
+for ax, (layer, label, cmap, limits) in zip(axes, layers):
+    data, extent = mosaic(composites, layer)
     if label.endswith("(dB)"):
         data = 10 * np.log10(data)
     else:

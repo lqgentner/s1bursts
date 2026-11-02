@@ -53,12 +53,13 @@ costs nothing.
 
 Pass the prepared file to the processing settings, together with a short name.
 The name is written into every product's metadata, so you can tell later which
-DEM was used:
+DEM was used. It also lets a rerun check that an existing product was made with
+the same DEM before skipping it; without a name, that check is left out:
 
 ```{.python}
-from s1bursts import BackscatterConfig
+from s1bursts import RTCConfig
 
-config = BackscatterConfig(
+config = RTCConfig(
     dem=prepared,
     dem_name="swissALTI3D 30 m",
     external_dem_apply_egm=False,

@@ -47,6 +47,7 @@ several processes in parallel:
 | `SNAP_MAX_RAM_GB` | Memory budget across those processes, in GB | 8 |
 | `SNAP_THREADS_PER_JOB` | Threads per SNAP process | CPU count divided by workers |
 | `SNAP_CACHE_RATIO` | Share of each process's memory used as tile cache | 0.7 |
+| `SNAP_TIMEOUT` | Seconds one SNAP process may run before it is stopped and its burst recorded as failed; `none` for no limit | 3600 |
 | `SNAP_AUXDATA_PATH` | Cache for orbit files and DEM tiles | `~/.snap/auxdata` |
 | `SNAP_DEM_CACHE` | Cache for [prepared external DEMs](external-dems.qmd) | `~/.s1bursts/dem` |
 

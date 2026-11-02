@@ -21,11 +21,12 @@ descriptions:
 | GTC backscatter | `beta0` | Linear power |
 | Coherence | `coherence` | 0 to 1, without units |
 | Interferogram | `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` | Uncalibrated |
-| Composite | Same quantity as its inputs | As the inputs, or decibels with `decibel=True` |
+| Composite | Same quantity as its inputs | As the inputs |
 | `QA-NUM` | `num_obs` | Number of contributing acquisitions |
-| `QA-CQM` | `cqm` | Composite quality, linear or decibels |
+| `QA-CQM` | `cqm` | Composite quality, without units |
 
-Backscatter is stored as linear power, not decibels. Convert with
+Backscatter is stored as linear power, not decibels, in products and
+composites alike. Convert with
 `10 * log10(value)` only after averaging, since the mean of decibels is not the
 decibel of the mean. The `scattering_area` band describes how much ground each
 pixel covers; [Local resolution weighting](resolution-weighting.qmd) explains
@@ -64,7 +65,18 @@ the specification.
 
 ## Filenames
 
-Filenames contain only what is needed to tell products apart, such as product
-type, orbit, footprint, polarization and date. Processing settings are not part
-of the name, which is why a product made with different settings is skipped
-rather than reprocessed. Record your settings alongside your results.
+Filenames contain only what is needed to tell products apart: product type,
+relative orbit and pass direction (`A` or `D`), footprint, polarization, date
+and UTM zone. The RTC product of the
+[Quickstart](quickstart.qmd), burst 30346 in sub-swath IW1 on ascending orbit
+15, is named `S1_RTC_015A_030346_IW1_VV_20220801_32N.tif`.
+A composite is named by its MGRS grid square, polarization and period instead,
+as in `S1_RTC_LRW_32TLS40_VV_20250801_20250831.tif`. A pass composite adds its
+pass direction, `A` or `D`, as in `S1_RTC_COMP_A_32TLS40_VV_20250801_20250831.tif`,
+and a coherence composite its baseline in days, as in
+`S1_COH12_LRW_32TLS40_VV_20250801_20250831.tif`. Each quality layer adds its
+name to the composite's, as in `S1_RTC_LRW_QA-NUM_32TLS40_VV_20250801_20250831.tif`.
+
+Processing settings are not part of the name. They are recorded in the tags
+instead, and a rerun compares them before it skips an existing file; see
+[Reprocessing and failures](processing.qmd#reprocessing-and-failures).

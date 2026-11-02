@@ -33,15 +33,12 @@ month of one burst footprint, then picks the first pair of acquisitions
 12 days apart:
 
 ```{python}
-from pathlib import Path
+from s1bursts import BurstCatalog, BurstProcessor, FileManager, SearchQuery, TimeRange
 
-from pyproj import CRS
-from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery, TimeRange
+fm = FileManager("data/quickstart")
+catalog = BurstCatalog(fm)
 
-fm = FileManager(Path("data/quickstart"))
-database = BurstDatabase(fm)
-
-bursts = database.search(SearchQuery(
+bursts = catalog.search(SearchQuery(
     time_range=TimeRange("2022-08-01", "2022-08-31"),
     burst_id=30346, sub_swath="IW1", polarization="VV",
 ))
@@ -51,25 +48,23 @@ pair = bursts.find_pairs(baseline=12)[:1]
 ## Download and process
 
 The download stores both acquisitions under `data/quickstart/s1-slc`.
-Processing then writes one GeoTIFF per product under `data/quickstart/s1-prod`,
-in the UTM zone of the glacier (EPSG:32632):
+Processing then writes one GeoTIFF per product under `data/quickstart/s1-prod`.
+With `crs="auto"`, each burst is projected in the UTM zone that holds it, here
+zone 32 North (EPSG:32632):
 
 ```{python}
 #| output: false
-database.download(pair)
+catalog.download(pair).raise_on_failure()
 
 processor = BurstProcessor(fm)
-crs = CRS("EPSG:32632")
-rtc = processor.create_backscatter(pair.unpair(), crs=crs)
-coherence = processor.create_coherences(pair, crs=crs)
+rtc = processor.create_backscatter(pair.unpair(), crs="auto").raise_on_failure()
+coherence = processor.create_coherences(pair, crs="auto").raise_on_failure()
 ```
 
-```{python}
-#| include: false
-assert not rtc.n_failed and not coherence.n_failed
-```
-
-Running the script again skips every file that already exists.
+A burst that fails does not stop the others. `raise_on_failure()` raises an
+error naming every failed burst, and otherwise returns the summary of the
+run. Running the script again skips every file that already exists, after
+checking that it was made with the same settings.
 
 ## Look at the result
 

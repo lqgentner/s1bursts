@@ -27,21 +27,18 @@ os.chdir(root / "cache/docs")
 
 The search covers a year of one burst footprint over the glacier. Keeping the
 first acquisition of each month leaves twelve, which are downloaded and
-processed into RTC backscatter at 20 m pixel size:
+processed into RTC backscatter at 20 m pixel size, in the burst's own UTM zone:
 
 ```{python}
-from pathlib import Path
-
-from pyproj import CRS
-from s1bursts import BackscatterConfig, BurstDatabase, BurstProcessor, FileManager, SearchQuery, TimeRange
+from s1bursts import BurstCatalog, BurstProcessor, FileManager, RTCConfig, SearchQuery, TimeRange
 from s1bursts.burst import BurstCollection
 
-fm = FileManager(Path("data/glacier"))
-database = BurstDatabase(fm)
-bursts = database.search(SearchQuery(
+fm = FileManager("data/glacier")
+catalog = BurstCatalog(fm)
+bursts = catalog.search(SearchQuery(
     time_range=TimeRange("2022-01-01", "2022-12-31"),
     burst_id=30346, sub_swath="IW1", polarization="VV",
-), max_items=200)
+))
 
 df = bursts.df.sort_values("date")
 monthly = BurstCollection(df.groupby(df.date.dt.month).head(1))
@@ -50,16 +47,11 @@ print(f"{len(bursts)} acquisitions in 2022, {len(monthly)} selected")
 
 ```{python}
 #| output: false
-database.download(monthly)
+catalog.download(monthly).raise_on_failure()
 processor = BurstProcessor(fm)
 rtc = processor.create_backscatter(
-    monthly, crs=CRS("EPSG:32632"), config=BackscatterConfig(grid_spacing=20),
-)
-```
-
-```{python}
-#| include: false
-assert not rtc.n_failed, rtc.failed_items
+    monthly, crs="auto", config=RTCConfig(grid_spacing=20),
+).raise_on_failure()
 ```
 
 ## Map the glacier

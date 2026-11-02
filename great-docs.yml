@@ -78,7 +78,7 @@ reference:
       contents:
         - query.SearchQuery
         - time_range.TimeRange
-        - database.BurstDatabase
+        - catalog.BurstCatalog
 
     - title: Burst data model
       desc: >-
@@ -103,10 +103,12 @@ reference:
         The shape of the generated SNAP graph, one config per product type.
         Every config carries the shared Terrain-Correction tail parameters.
       contents:
-        - snap_graph.GeocodingConfig
-        - snap_graph.BackscatterConfig
+        - snap_graph.RTCConfig
+        - snap_graph.GTCConfig
         - snap_graph.CoherenceConfig
         - snap_graph.InterferogramConfig
+        - snap_graph.BackscatterConfig
+        - snap_graph.GeocodingConfig
 
     - title: Storage
       desc: >-
@@ -132,19 +134,15 @@ reference:
 
     - title: Composite products
       desc: >-
-        MGRS tile composites and their quality-assurance layers.
+        MGRS grid-square composites. Each holds its measurement and,
+        optionally, its quality-assurance layers.
       contents:
         - product.RTCLRWComposite
         - product.CohLRWComposite
         - product.RTCPassComposite
         - product.CohPassComposite
         - product.GTCPassComposite
-        - product.RTCLRWQA
-        - product.CohLRWQA
-        - product.RTCPassQA
-        - product.CohPassQA
-        - product.GTCPassQA
-        - product.QaMetric
+        - product.Layer
 
     - title: Results and errors
       desc: >-
@@ -155,12 +153,23 @@ reference:
         - summary.OkResult
         - summary.ErrorResult
         - errors.S1BurstsError
+        - errors.OperationFailedError
         - errors.ConfigurationError
-        - errors.EmptyCompositeError
+        - errors.TransformationGridError
+        - errors.BurstMapUnavailableError
+        - errors.CatalogError
+        - errors.TooManyResultsError
+        - errors.BurstNotInMapError
+        - errors.ProductSettingsMismatchError
         - errors.BurstError
         - errors.BurstNotFoundError
         - errors.BurstDownloadError
+        - errors.NoUTMZoneError
         - errors.SnapProcessingError
+        - errors.CompositeError
+        - errors.EmptyCompositeError
+        - errors.InconsistentInputsError
+        - errors.CompositeInputError
 
     - title: Reference data and low-level access
       desc: >-

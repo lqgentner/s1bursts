@@ -46,15 +46,12 @@ With your CDSE credentials in the environment, download and process a pair of
 acquisitions over the Aletsch glacier:
 
 ```python
-from pathlib import Path
+from s1bursts import BurstCatalog, BurstProcessor, FileManager, SearchQuery, TimeRange
 
-from pyproj import CRS
-from s1bursts import BurstDatabase, BurstProcessor, FileManager, SearchQuery, TimeRange
+fm = FileManager("data/quickstart")
+catalog = BurstCatalog(fm)
 
-fm = FileManager(Path("data/quickstart"))
-database = BurstDatabase(fm)
-
-bursts = database.search(
+bursts = catalog.search(
     SearchQuery(
         time_range=TimeRange("2022-08-01", "2022-08-31"),
         burst_id=30346,
@@ -63,12 +60,12 @@ bursts = database.search(
     )
 )
 pair = bursts.find_pairs(baseline=12)[:1]
-database.download(pair)
+catalog.download(pair).raise_on_failure()
 
+# "auto" geocodes each burst in its own UTM zone, here EPSG:32632.
 processor = BurstProcessor(fm)
-crs = CRS("EPSG:32632")
-rtc = processor.create_backscatter(pair.unpair(), crs=crs)
-coherence = processor.create_coherences(pair, crs=crs)
+rtc = processor.create_backscatter(pair.unpair(), crs="auto").raise_on_failure()
+coherence = processor.create_coherences(pair, crs="auto").raise_on_failure()
 ```
 
 ## Documentation

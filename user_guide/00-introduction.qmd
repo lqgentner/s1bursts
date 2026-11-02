@@ -59,8 +59,8 @@ A typical workflow has four steps, each handled by one class:
 
 | Step | Class | Result |
 |---|---|---|
-| Search | `BurstDatabase.search()` | A `BurstCollection` of catalog records |
-| Download | `BurstDatabase.download()` | Single-burst files |
+| Search | `BurstCatalog.search()` | A `BurstCollection` of catalog records |
+| Download | `BurstCatalog.download()` | Single-burst files |
 | Process | `BurstProcessor` | GeoTIFFs of backscatter and coherence |
 | Composite | `ResolutionWeighter` | GeoTIFFs on 10 km MGRS grid squares |
 

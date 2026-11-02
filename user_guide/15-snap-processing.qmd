@@ -13,8 +13,8 @@ SNAP problems s1bursts corrects, and how the supported SNAP versions differ.
 
 Each product runs through a fixed chain of SNAP operators, called a processing
 graph. s1bursts builds the graph from the product's settings object, so the
-settings decide which steps run and with which parameters. The default
-backscatter graph has eight steps:
+settings decide which steps run and with which parameters. The RTC backscatter
+graph has eight steps:
 
 | Step | What it does | Setting |
 |---|---|---|
@@ -23,10 +23,11 @@ backscatter graph has eight steps:
 | `Calibration` | Converts the raw values to radar brightness | |
 | `TOPSAR-Deburst` | Joins the burst into one seamless image | |
 | `Multilook` | Averages neighbouring pixels to reduce noise and runtime | `multilook` |
-| `Terrain-Flattening` | Corrects brightness for the slope of the terrain | `flatten_terrain` |
+| `Terrain-Flattening` | Corrects brightness for the slope of the terrain | `RTCConfig` only |
 | `ReplaceZerosWithNoData` | Marks the empty border of the burst as missing ([why](#corrections-s1bursts-applies)) | `replace_zeros_with_nan` |
 | `Terrain-Correction` | Places every pixel on the map, using the DEM | `grid_spacing`, `dem` |
 
+The GTC graph of `GTCConfig` is the same without `Terrain-Flattening`.
 Coherence compares two acquisitions, so its graph differs. Both acquisitions
 get precise orbits, then `Back-Geocoding` aligns the second onto the first
 pixel by pixel, using the DEM. `Coherence` estimates the similarity of the two
@@ -50,9 +51,9 @@ Install it separately, since s1bursts does not depend on it:
 
 ```{.python}
 from mermaid import Mermaid
-from s1bursts import BackscatterConfig
+from s1bursts import RTCConfig
 
-config = BackscatterConfig(grid_spacing=20)
+config = RTCConfig(grid_spacing=20)
 Mermaid(config.to_mermaid())
 ```
 
@@ -63,9 +64,9 @@ Quarto instead. For the settings above, the graph looks like this:
 ```{python}
 #| echo: false
 #| output: asis
-from s1bursts import BackscatterConfig
+from s1bursts import RTCConfig
 
-config = BackscatterConfig(grid_spacing=20)
+config = RTCConfig(grid_spacing=20)
 print(f"```{{mermaid}}\n{config.to_mermaid().replace('flowchart LR', 'flowchart TD')}\n```")
 ```
 

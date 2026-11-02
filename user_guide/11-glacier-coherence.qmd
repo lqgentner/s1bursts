@@ -31,18 +31,15 @@ The search is the same as in the [backscatter tutorial](glacier-backscatter.qmd)
 first pair of each month leaves twelve, which are processed into coherence:
 
 ```{python}
-from pathlib import Path
-
-from pyproj import CRS
-from s1bursts import BurstDatabase, BurstProcessor, CoherenceConfig, FileManager, SearchQuery, TimeRange
+from s1bursts import BurstCatalog, BurstProcessor, CoherenceConfig, FileManager, SearchQuery, TimeRange
 from s1bursts.burst import BurstPairCollection
 
-fm = FileManager(Path("data/glacier"))
-database = BurstDatabase(fm)
-bursts = database.search(SearchQuery(
+fm = FileManager("data/glacier")
+catalog = BurstCatalog(fm)
+bursts = catalog.search(SearchQuery(
     time_range=TimeRange("2022-01-01", "2022-12-31"),
     burst_id=30346, sub_swath="IW1", polarization="VV",
-), max_items=200)
+))
 
 df = bursts.find_pairs(baseline=12).df.sort_values("date_1")
 monthly = BurstPairCollection(df.groupby(df.date_1.dt.month).head(1))
@@ -51,16 +48,11 @@ print(f"{len(monthly)} pairs selected")
 
 ```{python}
 #| output: false
-database.download(monthly)
+catalog.download(monthly).raise_on_failure()
 processor = BurstProcessor(fm)
 coherence = processor.create_coherences(
-    monthly, crs=CRS("EPSG:32632"), config=CoherenceConfig(grid_spacing=20),
-)
-```
-
-```{python}
-#| include: false
-assert not coherence.n_failed, coherence.failed_items
+    monthly, crs="auto", config=CoherenceConfig(grid_spacing=20),
+).raise_on_failure()
 ```
 
 ## Map coherence in winter and summer

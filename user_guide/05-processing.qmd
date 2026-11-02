@@ -18,34 +18,37 @@ The settings describe how to process and suit every burst alike. The projection
 depends on where the bursts are, so it is passed separately as `crs`:
 
 ```{.python}
-from pyproj import CRS
-from s1bursts import BackscatterConfig, BurstProcessor
+from s1bursts import BurstProcessor, RTCConfig
 
 processor = BurstProcessor(fm)
-rtc = processor.create_backscatter(
-    bursts, crs=CRS("EPSG:32632"), config=BackscatterConfig(grid_spacing=20),
-)
+rtc = processor.create_backscatter(bursts, crs="auto", config=RTCConfig(grid_spacing=20))
 ```
 
-For `crs`, the UTM zone of your study area is usually the right choice. Use the
-same projection for every product you want to compare or composite. If you plan
-to [composite](compositing.qmd), choose it before processing: composites accept
-only products in the UTM zone and pixel size of their grid square. Without
-`config`, the defaults apply, and they suit most uses.
+Products are always projected in a WGS 84 / UTM zone. `crs="auto"` takes each
+burst's own zone, its `utm_zone`, which suits bursts used on their own, such as
+a time series: the zone depends only on the footprint, so every date of a burst
+lands in the same one. To fix the zone instead, pass it as a string, an EPSG
+code or a `pyproj.CRS`, such as `crs="EPSG:32632"` for zone 32 North; any other
+projection raises a `ValueError` before the first burst is processed.
+
+If you plan to [composite](compositing.qmd), choose the zone before processing:
+a composite accepts only products in the UTM zone and pixel size of its grid
+square, so process them with `crs=square.crs`. Without `config`, the defaults
+apply, and they suit most uses.
 
 Each product has its own method and settings object:
 
 | Method | Input | Settings | Product |
 |---|---|---|---|
-| `create_backscatter()` | Bursts | `BackscatterConfig` | Backscatter of each acquisition |
+| `create_backscatter()` | Bursts | `RTCConfig` or `GTCConfig` | Backscatter of each acquisition |
 | `create_coherences()` | Pairs | `CoherenceConfig` | Coherence between two acquisitions |
 | `create_interferograms()` | Pairs | `InterferogramConfig` | Phase difference between two acquisitions |
 
 The settings objects share most fields. The one you are most likely to change
 is the pixel size, `grid_spacing`, which is 10 m by default; a smaller pixel
 size does not add detail beyond what the radar resolves. The
-[API reference](../reference/snap_graph.BackscatterConfig.qmd) lists every
-setting and its default.
+[API reference](../reference/snap_graph.RTCConfig.qmd) lists every setting and
+its default.
 
 [SNAP processing](snap-processing.qmd) explains the steps each graph runs and
 how to inspect the graph your settings produce.
@@ -63,15 +66,15 @@ differences in brightness come from the surface itself. The result is called
 gamma-0 (`gamma0`).
 
 Use RTC unless you have a reason not to; only RTC products can be composited
-with [resolution weighting](resolution-weighting.qmd). Set
-`flatten_terrain=False` for geometrically terrain-corrected (GTC) backscatter,
-called beta-0 (`beta0`), which places pixels correctly on the map but keeps the
-slope brightness:
+with [resolution weighting](resolution-weighting.qmd). The settings object
+selects the product: `RTCConfig`, the default, gives RTC, and `GTCConfig` gives
+geometrically terrain-corrected (GTC) backscatter, called beta-0 (`beta0`),
+which places pixels correctly on the map but keeps the slope brightness:
 
 ```{.python}
-gtc = processor.create_backscatter(
-    bursts, crs=crs, config=BackscatterConfig(flatten_terrain=False),
-)
+from s1bursts import GTCConfig
+
+gtc = processor.create_backscatter(bursts, crs="auto", config=GTCConfig())
 ```
 
 ## Coherence
@@ -83,7 +86,7 @@ example through snowfall, melt or vegetation growth. The pairs come from
 
 ```{.python}
 pairs = bursts.find_pairs(baseline=12)
-coherence = processor.create_coherences(pairs, crs=crs)
+coherence = processor.create_coherences(pairs, crs="auto")
 ```
 
 Coherence is estimated over a small window of neighbouring pixels, set by
@@ -115,13 +118,28 @@ A product whose file already exists is not processed again, so a script can be
 rerun after an interruption.
 
 ::: {.callout-warning}
-## Changed settings do not trigger reprocessing
+## Changed settings raise an error
 
-Filenames describe the burst and date, not the settings. Write each experiment
-to its own `FileManager` directory, or pass `overwrite=True`.
+Filenames describe the burst and date, not the settings, so an existing file is
+checked before it is skipped. If it was made with other settings, such as
+another `grid_spacing` or DEM, the call raises a `ProductSettingsMismatchError`
+naming each difference, before SNAP runs. Write each experiment to its own
+`FileManager` directory, or pass `overwrite=True` to replace the old products.
 :::
 
+A product made by another SNAP version is skipped without this check, and the
+call warns about it, since SNAP versions should not be mixed in one time
+series; see [SNAP versions](snap-processing.qmd#snap-versions).
+
 A failed burst does not stop the batch by default. Each call returns an
-`OperationSummary`; check its `failed_items` before using the results, since a
-time series with silent gaps can mislead. Pass `continue_on_error=False` to
-`BurstProcessor` to stop at the first failure instead.
+`OperationSummary`; check it before using the results, since a time series
+with silent gaps can mislead. `raise_on_failure()` raises an error listing
+every failed burst, and otherwise returns the summary, so its products are one
+step away:
+
+```{.python}
+rtc = processor.create_backscatter(bursts, crs="auto").raise_on_failure().products
+```
+
+Pass `continue_on_error=False` to `BurstProcessor` to stop at the first failure
+instead.
