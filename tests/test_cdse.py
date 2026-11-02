@@ -631,11 +631,11 @@ class TestFootprintParsing:
             response.to_geodataframe()
 
     @pytest.mark.parametrize("footprint", ["POINT (7 46)", None])
-    def test_an_unrecognised_footprint_raises_catalog_error(self, footprint: str | None) -> None:
+    def test_an_unrecognized_footprint_raises_catalog_error(self, footprint: str | None) -> None:
         # Previously a ValueError from casting NaN to int.
         value = make_response_value()
         value["Footprint"] = footprint
         response = CDSEResponse(context="$metadata#Bursts", value=[value], count=1)
 
-        with pytest.raises(CatalogError, match="unrecognised footprint"):
+        with pytest.raises(CatalogError, match="unrecognized footprint"):
             response.to_geodataframe()

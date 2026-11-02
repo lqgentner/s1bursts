@@ -383,13 +383,14 @@ class CDSEResponse:
             unparsed = extracted[0].isna()
             if unparsed.any():
                 footprint = df_results[_FOOTPRINT_COL][unparsed].iloc[0]
-                msg = f"The catalog returned an unrecognised footprint: {footprint!r:.200}"
+                msg = f"The catalog returned an unrecognized footprint: {footprint!r:.200}"
                 raise CatalogError(msg)
             epsg_codes = extracted[0].astype(int)
             if not (epsg_codes == EPSG_WGS84).all():
                 msg = f"Found unknown EPSG codes:\n{epsg_codes}"
                 raise CatalogError(msg)
-            geometry = gpd.GeoSeries.from_wkt(extracted[1], crs=EPSG_WGS84)
+            # pandas 2.3 cannot build a GeoSeries from a "string"-dtype column.
+            geometry = gpd.GeoSeries.from_wkt(extracted[1].to_numpy(dtype=object), crs=EPSG_WGS84)
 
         df_results = df_results.reindex(columns=_RESPONSE_COLS_KEEP)
         df_results[_DATE_COLS] = df_results[_DATE_COLS].apply(pd.to_datetime)
