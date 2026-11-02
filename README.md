@@ -143,9 +143,9 @@ orbit and pass direction in their file names, so the normal search → download
 
 These attributes are only looked up in the [SAR-MPC Sentinel-1 burst-ID
 map](https://sar-mpc.eu/sar-mpc-products/) for a burst that was **not** obtained
-from a search, such as a hand-constructed `Burst` or one found with
-`FileManager.find(Burst)`, whose SLC file name records the relative orbit
-but not the pass direction. Download it
+from a search, such as a hand-constructed `Burst`, and for the footprint of
+one found with `FileManager.find(Burst)`, whose SLC file name records the
+relative orbit and pass direction but not the footprint. Download it
 (~500 MB per acquisition mode) once when you need it:
 
 ```python

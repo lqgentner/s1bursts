@@ -192,7 +192,10 @@ class BurstCatalog:
             both of its bursts, and a burst listed more than once, for example
             one shared by two pairs, is downloaded once.
         overwrite
-            Whether to overwrite existing files.
+            Whether to overwrite existing files. SLC file names record the pass
+            direction, so a burst downloaded under an earlier name is
+            downloaded again; ``FileManager`` warns once when ``slc_dir``
+            holds such names.
         max_workers
             Number of parallel download threads.
         endpoint

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 import errno
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +27,7 @@ from s1bursts.errors import (
     ConfigurationError,
     TooManyResultsError,
 )
+from s1bursts.filemanager import FileManager
 from s1bursts.query import SearchQuery
 from s1bursts.summary import ErrorResult, OkResult, OperationResult
 from s1bursts.time_range import TimeRange
@@ -186,6 +189,30 @@ class TestDownloadDispatch:
         assert summary.n_processed == 0
         # No download happened, so no CDSEAuth may have been created
         assert catalog.client.auth is None
+
+    def test_an_slc_under_its_old_name_is_downloaded_again_with_a_warning(
+        self, tmp_path: Path
+    ) -> None:
+        file_manager = FileManager(tmp_path)
+        burst = replace(_make_burst(), _rel_orbit_number=66, _pass_direction="Ascending")
+        (file_manager.slc_dir / "S1_SLC_066_297227_IW3_VV_20160724.zip").touch()
+        catalog = BurstCatalog(file_manager=file_manager)
+
+        bursts = [burst, replace(burst, date=Timestamp("2016-08-05"))]
+
+        with (
+            patch.object(
+                catalog,
+                "_download_single_burst",
+                return_value=OkResult(source=burst, result=burst),
+            ),
+            pytest.warns(UserWarning, match="downloads again") as record,
+        ):
+            summary = catalog.download(bursts)
+
+        # Previously downloaded again without a word.
+        assert summary.n_processed == 2
+        assert len(record) == 1
 
     def test_creates_auth_lazily_on_odata_download(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """OData downloads build a CDSEAuth on first use, guarded to run once."""
