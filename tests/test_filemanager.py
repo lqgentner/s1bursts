@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
+import warnings
 
 import pandas as pd
 from pyproj import CRS
@@ -42,31 +43,35 @@ _CRS_32N = CRS.from_epsg(32632)
 _PARSE_CASES = [
     pytest.param(
         RTCProduct,
-        "S1_RTC_015_030343_IW1_VH_20150709_32N.tif",
+        "S1_RTC_015A_030343_IW1_VH_20150709_32N.tif",
         {
             "burst_id": 30343,
             "sub_swath": "IW1",
             "polarization": "VH",
             "date": pd.Timestamp("20150709"),
             "crs": _CRS_32N,
+            "rel_orbit_number": 15,
+            "pass_direction": "Ascending",
         },
         id="rtc",
     ),
     pytest.param(
         GTCProduct,
-        "S1_GTC_015_030343_IW1_VH_20150709_32N.tif",
+        "S1_GTC_015D_030343_IW1_VH_20150709_32N.tif",
         {
             "burst_id": 30343,
             "sub_swath": "IW1",
             "polarization": "VH",
             "date": pd.Timestamp("20150709"),
             "crs": _CRS_32N,
+            "rel_orbit_number": 15,
+            "pass_direction": "Descending",
         },
         id="gtc",
     ),
     pytest.param(
         CoherenceProduct,
-        "S1_COH12_015_030345_IW1_VH_20150709_20150721_32N.tif",
+        "S1_COH12_015A_030345_IW1_VH_20150709_20150721_32N.tif",
         {
             "burst_id": 30345,
             "sub_swath": "IW1",
@@ -74,12 +79,14 @@ _PARSE_CASES = [
             "date_primary": pd.Timestamp("20150709"),
             "date_secondary": pd.Timestamp("20150721"),
             "crs": _CRS_32N,
+            "rel_orbit_number": 15,
+            "pass_direction": "Ascending",
         },
         id="coherence",
     ),
     pytest.param(
         InterferogramProduct,
-        "S1_IFG12_CMPLX_015_030345_IW1_VH_20150709_20150721_32N.tif",
+        "S1_IFG12_CMPLX_015D_030345_IW1_VH_20150709_20150721_32N.tif",
         {
             "burst_id": 30345,
             "sub_swath": "IW1",
@@ -87,6 +94,8 @@ _PARSE_CASES = [
             "date_primary": pd.Timestamp("20150709"),
             "date_secondary": pd.Timestamp("20150721"),
             "crs": _CRS_32N,
+            "rel_orbit_number": 15,
+            "pass_direction": "Descending",
         },
         id="interferogram",
     ),
@@ -203,6 +212,18 @@ _PARSE_CASES = [
 ]
 
 _ROUNDTRIP_CASES = [
+    pytest.param(RTCProduct, "S1_RTC_066A_030346_IW1_VV_20220105_32N.tif", id="rtc"),
+    pytest.param(GTCProduct, "S1_GTC_139D_030346_IW1_VV_20220105_32N.tif", id="gtc"),
+    pytest.param(
+        CoherenceProduct,
+        "S1_COH12_066A_030346_IW1_VV_20220105_20220117_32N.tif",
+        id="coherence",
+    ),
+    pytest.param(
+        InterferogramProduct,
+        "S1_IFG12_CMPLX_066D_030346_IW1_VV_20220105_20220117_32S.tif",
+        id="interferogram",
+    ),
     pytest.param(RTCLRWComposite, "S1_RTC_LRW_32TMS03_VH_20150706_20151001.tif", id="rtc-lrw"),
     pytest.param(CohLRWComposite, "S1_COH12_LRW_32TMS03_VH_20150706_20150919.tif", id="coh-lrw"),
     pytest.param(
@@ -324,13 +345,24 @@ class TestParseFilename:
         for key, value in expected.items():
             assert result[key] == value, f"Field {key!r}: got {result[key]!r}, expected {value!r}"
 
+    def test_name_without_pass_direction_returns_none(self, fm: FileManager) -> None:
+        """A per-burst name in the scheme without the pass direction is not parsed."""
+        prefix_re, spec, prefix_captures = _PARSERS[RTCProduct]
+        result = fm._parse_filename(
+            prefix_re,
+            spec,
+            "S1_RTC_015_030343_IW1_VH_20150709_32N.tif",
+            prefix_captures,
+        )
+        assert result is None
+
     def test_wrong_type_returns_none(self, fm: FileManager) -> None:
         """An RTC filename does not parse under the CoherenceProduct spec."""
         prefix_re, spec, prefix_captures = _PARSERS[CoherenceProduct]
         result = fm._parse_filename(
             prefix_re,
             spec,
-            "S1_RTC_015_030343_IW1_VH_20150709_32N.tif",
+            "S1_RTC_015A_030343_IW1_VH_20150709_32N.tif",
             prefix_captures,
         )
         assert result is None
@@ -695,14 +727,118 @@ class TestFindKeepsFootprint:
         # Previously dropped, so compositing found products needed the burst map.
         fm = FileManager(tmp_path)
         product = RTCProduct(
-            30343, "IW1", _CRS_32N, pd.Timestamp("20150709"), "VH", _rel_orbit_number=66
+            30343,
+            "IW1",
+            _CRS_32N,
+            pd.Timestamp("20150709"),
+            "VH",
+            pass_direction="Descending",
+            _rel_orbit_number=66,
         )
         fm.get_product_path(product).touch()
 
-        with patch(
-            "s1bursts.burst.create_s1_orbit_number_lut",
-            side_effect=AssertionError("must not resolve the burst map"),
+        with (
+            patch(
+                "s1bursts.burst.create_s1_orbit_number_lut",
+                side_effect=AssertionError("must not resolve the burst map"),
+            ),
+            patch(
+                "s1bursts.burst.create_s1_pass_direction_lut",
+                side_effect=AssertionError("must not resolve the burst map"),
+            ),
         ):
             [found] = fm.find_rtc_products()
             assert found.rel_orbit_number == 66
+            assert found.pass_direction == "Descending"
         assert found == product
+
+
+class TestFindPerBurstByPassDirection:
+    """Per-burst products can be filtered on the pass direction their names record."""
+
+    _FILENAMES: ClassVar[list[str]] = [
+        "S1_RTC_015A_030343_IW1_VH_20150709_32N.tif",
+        "S1_RTC_015A_030344_IW1_VH_20150709_32N.tif",
+        "S1_RTC_066D_030343_IW1_VH_20150709_32N.tif",
+        "S1_GTC_015A_030343_IW1_VH_20150709_32N.tif",
+        "S1_GTC_066D_030343_IW1_VH_20150709_32N.tif",
+        "S1_COH12_015A_030343_IW1_VH_20150709_20150721_32N.tif",
+        "S1_COH12_066D_030343_IW1_VH_20150709_20150721_32N.tif",
+        "S1_IFG12_CMPLX_015A_030343_IW1_VH_20150709_20150721_32N.tif",
+        "S1_IFG12_CMPLX_066D_030343_IW1_VH_20150709_20150721_32N.tif",
+    ]
+
+    @pytest.fixture
+    def fm(self, tmp_path: Path) -> FileManager:
+        """FileManager with stub .tif files in prod_dir."""
+        fm = FileManager(tmp_path)
+        for name in self._FILENAMES:
+            (fm.prod_dir / name).touch()
+        return fm
+
+    def test_rtc_by_pass_direction(self, fm: FileManager) -> None:
+        ascending = fm.find_rtc_products(pass_direction="Ascending")
+        descending = fm.find_rtc_products(pass_direction="Descending")
+
+        assert [p.burst_id for p in ascending] == [30343, 30344]
+        assert {p.pass_direction for p in ascending} == {"Ascending"}
+        assert [p.rel_orbit_number for p in descending] == [66]
+
+    def test_orbit_and_pass_direction_together(self, fm: FileManager) -> None:
+        assert fm.find_rtc_products(rel_orbit_number=15, pass_direction="Descending") == []
+        [found] = fm.find_rtc_products(rel_orbit_number=66, pass_direction="Descending")
+        assert found.pass_direction == "Descending"
+
+    def test_orbit_alone_matches_either_direction(self, fm: FileManager) -> None:
+        assert len(fm.find_rtc_products(rel_orbit_number=15)) == 2
+
+    @pytest.mark.parametrize("direction", ["ascending", "A"])
+    def test_an_unknown_pass_direction_filter_is_refused(
+        self, fm: FileManager, direction: str
+    ) -> None:
+        # Previously returned [] without a hint.
+        for find in (
+            fm.find_rtc_products,
+            fm.find_gtc_products,
+            fm.find_coherence_products,
+            fm.find_interferogram_products,
+        ):
+            with pytest.raises(ValueError, match="must be 'Ascending' or 'Descending'"):
+                # pyrefly: ignore [bad-argument-type]
+                find(pass_direction=direction)
+
+    def test_other_per_burst_products(self, fm: FileManager) -> None:
+        [gtc] = fm.find_gtc_products(pass_direction="Descending")
+        [coh] = fm.find_coherence_products(pass_direction="Ascending", baseline_days=12)
+        [ifg] = fm.find_interferogram_products(pass_direction="Descending")
+
+        assert (gtc.rel_orbit_number, coh.rel_orbit_number, ifg.rel_orbit_number) == (66, 15, 66)
+        assert len(fm.find_rtc_products()) == 3
+
+
+class TestLegacyProductNames:
+    """Products named before the pass direction joined the orbit are pointed out once."""
+
+    def test_warns_once_per_file_manager(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        (fm.prod_dir / "S1_RTC_066_030346_IW1_VV_20220105_32N.tif").touch()
+        (fm.prod_dir / "S1_RTC_066A_030346_IW1_VV_20220112_32N.tif").touch()
+
+        with pytest.warns(UserWarning, match="named without their pass direction") as record:
+            found = fm.find_rtc_products()
+        assert len(record) == 1
+        assert [p.date for p in found] == [pd.Timestamp("20220112")]
+
+        # A second search on the same FileManager stays quiet.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fm.find_coherence_products()
+
+    def test_current_names_do_not_warn(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        (fm.prod_dir / "S1_COH12_066A_030346_IW1_VV_20220105_20220117_32N.tif").touch()
+        (fm.slc_dir / "S1_SLC_066_030346_IW1_VV_20220105.zip").touch()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert len(fm.find_coherence_products()) == 1

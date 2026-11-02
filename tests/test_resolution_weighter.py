@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
     from upath import UPath
 
+    from s1bursts.query import PassDirection
+
 # ---------------------------------------------------------------------------
 # Lightweight product stubs for _stitch_by_orbit_date
 #
@@ -1135,6 +1137,7 @@ def _rtc(date: str, orbit: int = 15, burst_id: int = 30346) -> RTCProduct:
         crs=_UTM32,
         date=Timestamp(date),
         polarization="VV",
+        pass_direction=_DIRECTION.get(burst_id, "Ascending"),
         _rel_orbit_number=orbit,
     )
 
@@ -1152,6 +1155,7 @@ def _coh(
         date_primary=Timestamp(primary),
         date_secondary=Timestamp(secondary),
         polarization="VV",
+        pass_direction=_DIRECTION.get(burst_id, "Ascending"),
         _rel_orbit_number=orbit,
     )
 
@@ -1163,22 +1167,16 @@ class _Scene(NamedTuple):
 
 
 # Burst IDs used by the composite tests, and the pass direction each stands for.
-# Products resolve `pass_direction` through the burst-map LUT, so the table is
-# stubbed to keep these tests offline and independent of the cached map.
 _ASCENDING_BURST = 30346
 _DESCENDING_BURST = 30347
-_DIRECTION_LUT = {
-    (_ASCENDING_BURST, "IW1"): "Ascending",
-    (_DESCENDING_BURST, "IW1"): "Descending",
+_DIRECTION: dict[int, PassDirection] = {
+    _ASCENDING_BURST: "Ascending",
+    _DESCENDING_BURST: "Descending",
 }
 
 
 @pytest.fixture
-def scene(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Scene:
-    monkeypatch.setattr(
-        "s1bursts.burst.create_s1_pass_direction_lut",
-        lambda mode="IW": _DIRECTION_LUT,  # noqa: ARG005
-    )
+def scene(tmp_path: Path) -> _Scene:
     manager = FileManager(base_dir=tmp_path)
     return _Scene(ResolutionWeighter(manager, max_workers=2), manager, _geobox())
 
@@ -1602,6 +1600,7 @@ def _gtc(date: str, orbit: int = 15, burst_id: int = _ASCENDING_BURST) -> GTCPro
         crs=_UTM32,
         date=Timestamp(date),
         polarization="VV",
+        pass_direction=_DIRECTION.get(burst_id, "Ascending"),
         _rel_orbit_number=orbit,
     )
 

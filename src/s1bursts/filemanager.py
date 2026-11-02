@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import logging
-from operator import attrgetter
+from operator import attrgetter, itemgetter
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, Self
+import warnings
 
 from freezebase.raster import get_utm_zone_string, utm_zone_to_crs
 import pandas as pd
@@ -31,12 +32,15 @@ from s1bursts.product import (
     RTCPassComposite,
     RTCPassQA,
     RTCProduct,
+    _check_pass_direction,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from upath import UPath
+
+    from s1bursts.query import PassDirection
 
 
 class _Parseable(Protocol):
@@ -80,6 +84,8 @@ class FieldSpec(NamedTuple):
     pattern: str  # regex for this segment (no capturing groups)
     from_str: Callable[[str], Any]  # str -> parsed value
     group: str = ""  # override regex group name (defaults to name)
+    wildcard: str = "*"  # glob for this segment when its value is not given
+    sep: str = "_"  # joins this segment to the one before it
 
 
 # Maps pass direction letter to full string
@@ -87,6 +93,18 @@ _PASS_DIRECTION = {"A": "Ascending", "D": "Descending"}
 
 # Shared field specs
 _ORBIT = FieldSpec("rel_orbit_number", "{:03d}".format, r"\d{3}", int)
+# Per-burst products append the pass direction to the orbit, "066A", keeping the
+# track in one token. Fixed-width wildcards, so that filtering on one half of the
+# token cannot match across the separators of a neighbouring one.
+_TRACK_ORBIT = _ORBIT._replace(wildcard="???")
+_PASS = FieldSpec(
+    "pass_direction",
+    itemgetter(0),
+    "[AD]",
+    _PASS_DIRECTION.__getitem__,
+    wildcard="?",
+    sep="",
+)
 _BURST = FieldSpec("burst_id", "{:06d}".format, r"\d{6}", int)
 _SWATH = FieldSpec("sub_swath", str, r"IW[1-3]|EW[1-5]", str)
 _POL = FieldSpec("polarization", str, r"[A-Z]{2}", str)
@@ -100,8 +118,8 @@ _EDATE = FieldSpec("end_date", "{:%Y%m%d}".format, r"\d{8}", pd.Timestamp)
 
 # Per-product-type field lists
 _SLC_SPEC = [_ORBIT, _BURST, _SWATH, _POL, _DATE]
-_BACKSCATTER_SPEC = [_ORBIT, _BURST, _SWATH, _POL, _DATE, _UTM]
-_COREGISTERED_SPEC = [_ORBIT, _BURST, _SWATH, _POL, _DATE_P, _DATE_S, _UTM]
+_BACKSCATTER_SPEC = [_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE, _UTM]
+_COREGISTERED_SPEC = [_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE_P, _DATE_S, _UTM]
 _MGRS_BASE_SPEC = [_MGRS, _POL, _SDATE, _EDATE]
 
 # Maps each metadata class to its parse arguments: (prefix_re, spec, prefix_captures).
@@ -172,6 +190,20 @@ _PARSERS: dict[
 }
 
 
+def _checked_pass_direction(value: PassDirection | None) -> PassDirection | None:
+    """Return a ``pass_direction`` filter after rejecting a value no file name holds."""
+    if value is not None:
+        _check_pass_direction(value)
+    return value
+
+
+# A per-burst product named before the pass direction joined the relative orbit.
+_LEGACY_PRODUCT_NAME = re.compile(
+    r"S1_(?:RTC|GTC|COH\d{2}|IFG\d{2}_CMPLX)_\d{3}_\d{6}_(?:IW|EW)\d_.*\.tif"
+)
+_CHANGELOG_URL = "https://github.com/lqgentner/s1bursts/blob/main/CHANGELOG.md"
+
+
 @dataclass
 class FileManager:
     """Manages file system operations for Sentinel-1 products.
@@ -222,6 +254,8 @@ class FileManager:
         self.slc_dir = _as_path(slc_dir) if slc_dir else self.base_dir / "s1-slc"
         self.prod_dir = _as_path(prod_dir) if prod_dir else self.base_dir / "s1-prod"
         self.comp_dir = _as_path(comp_dir) if comp_dir else self.base_dir / "s1-comp"
+
+        self._legacy_names_checked = False
 
         # Create all directories (UPath.mkdir on S3 is a no-op)
         for directory in [self.slc_dir, self.prod_dir, self.comp_dir]:
@@ -292,6 +326,23 @@ class FileManager:
         )
         return self._find_products(self.slc_dir, pattern, Burst, suffix=".zip")
 
+    def _warn_on_legacy_names(self) -> None:
+        """Warn once if ``prod_dir`` holds products named without their pass direction."""
+        if self._legacy_names_checked:
+            return
+        self._legacy_names_checked = True
+        # Only names without a letter after the orbit match this glob.
+        candidates = self.prod_dir.glob(
+            "S1_*_[0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_*.tif"
+        )
+        if any(_LEGACY_PRODUCT_NAME.fullmatch(path.name) for path in candidates):
+            msg = (
+                f"{self.prod_dir} holds per-burst products named without their pass "
+                "direction, which the find_* methods no longer find. Rename them with "
+                f"the recipe in the changelog entry on the pass direction: {_CHANGELOG_URL}"
+            )
+            warnings.warn(msg, stacklevel=3)
+
     # ============ Generic Build/Parse Engine ============
 
     def _build_pattern(
@@ -302,12 +353,12 @@ class FileManager:
         suffix: str = ".tif",
         **values: Any,
     ) -> str:
-        """Build a glob pattern from a prefix and field spec; a missing value becomes ``*``."""
-        parts = [prefix]
+        """Build a glob pattern from a prefix and field spec, with wildcards for missing values."""
+        pattern = prefix
         for f in spec:
             v = values.get(f.name)
-            parts.append(f.to_str(v) if v is not None else "*")
-        return "_".join(parts) + suffix
+            pattern += f.sep + (f.to_str(v) if v is not None else f.wildcard)
+        return pattern + suffix
 
     def _parse_filename(
         self,
@@ -319,8 +370,8 @@ class FileManager:
         suffix: str = ".tif",
     ) -> dict[str, Any] | None:
         """Parse a filename into field values, or ``None`` if it does not match the spec."""
-        groups = "_".join(f"(?P<{f.group or f.name}>{f.pattern})" for f in spec)
-        match = re.fullmatch(rf"{prefix_re}_{groups}{re.escape(suffix)}", filename)
+        groups = "".join(f"{f.sep}(?P<{f.group or f.name}>{f.pattern})" for f in spec)
+        match = re.fullmatch(rf"{prefix_re}{groups}{re.escape(suffix)}", filename)
         if not match:
             return None
         result = {f.name: f.from_str(match.group(f.group or f.name)) for f in spec}
@@ -361,6 +412,7 @@ class FileManager:
         sub_swath: str | None = None,
         polarization: str | None = None,
         crs: CRSInput | None = None,
+        pass_direction: PassDirection | None = None,
     ) -> list[RTCProduct]:
         """Find RTC backscatter products matching criteria.
 
@@ -379,12 +431,26 @@ class FileManager:
             Filter by polarization.
         crs
             Filter by coordinate reference system (UTM zone).
+        pass_direction
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
 
         Returns
         -------
         list[RTCProduct]
             List of matching RTC products.
+
+        Raises
+        ------
+        ValueError
+            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
+
+        Warns
+        -----
+        UserWarning
+            Once per ``FileManager``, if ``prod_dir`` holds products named
+            without their pass direction, which are not found.
         """
+        self._warn_on_legacy_names()
         pattern = self._build_pattern(
             "S1_RTC",
             _BACKSCATTER_SPEC,
@@ -393,6 +459,7 @@ class FileManager:
             sub_swath=sub_swath,
             polarization=polarization,
             crs=crs,
+            pass_direction=_checked_pass_direction(pass_direction),
         )
         return self._find_products(self.prod_dir, pattern, RTCProduct)
 
@@ -409,6 +476,7 @@ class FileManager:
         sub_swath: str | None = None,
         polarization: str | None = None,
         crs: CRSInput | None = None,
+        pass_direction: PassDirection | None = None,
     ) -> list[GTCProduct]:
         """Find GTC backscatter products matching criteria.
 
@@ -427,12 +495,26 @@ class FileManager:
             Filter by polarization.
         crs
             Filter by coordinate reference system (UTM zone).
+        pass_direction
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
 
         Returns
         -------
         list[GTCProduct]
             List of matching GTC products.
+
+        Raises
+        ------
+        ValueError
+            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
+
+        Warns
+        -----
+        UserWarning
+            Once per ``FileManager``, if ``prod_dir`` holds products named
+            without their pass direction, which are not found.
         """
+        self._warn_on_legacy_names()
         pattern = self._build_pattern(
             "S1_GTC",
             _BACKSCATTER_SPEC,
@@ -441,6 +523,7 @@ class FileManager:
             sub_swath=sub_swath,
             polarization=polarization,
             crs=crs,
+            pass_direction=_checked_pass_direction(pass_direction),
         )
         return self._find_products(self.prod_dir, pattern, GTCProduct)
 
@@ -459,6 +542,7 @@ class FileManager:
         polarization: str | None = None,
         baseline_days: int | None = None,
         crs: CRSInput | None = None,
+        pass_direction: PassDirection | None = None,
     ) -> list[CoherenceProduct]:
         """Find coherence products matching criteria.
 
@@ -479,12 +563,26 @@ class FileManager:
             Filter by temporal baseline.
         crs
             Filter by coordinate reference system (UTM zone).
+        pass_direction
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
 
         Returns
         -------
         list[CoherenceProduct]
             List of matching coherence products.
+
+        Raises
+        ------
+        ValueError
+            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
+
+        Warns
+        -----
+        UserWarning
+            Once per ``FileManager``, if ``prod_dir`` holds products named
+            without their pass direction, which are not found.
         """
+        self._warn_on_legacy_names()
         bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
         pattern = self._build_pattern(
             f"S1_COH{bd}",
@@ -494,6 +592,7 @@ class FileManager:
             sub_swath=sub_swath,
             polarization=polarization,
             crs=crs,
+            pass_direction=_checked_pass_direction(pass_direction),
         )
         return self._find_products(self.prod_dir, pattern, CoherenceProduct)
 
@@ -512,6 +611,7 @@ class FileManager:
         polarization: str | None = None,
         baseline_days: int | None = None,
         crs: CRSInput | None = None,
+        pass_direction: PassDirection | None = None,
     ) -> list[InterferogramProduct]:
         """Find interferogram products matching criteria.
 
@@ -532,12 +632,26 @@ class FileManager:
             Filter by temporal baseline.
         crs
             Filter by coordinate reference system (UTM zone).
+        pass_direction
+            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
 
         Returns
         -------
         list[InterferogramProduct]
             List of matching interferogram products.
+
+        Raises
+        ------
+        ValueError
+            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
+
+        Warns
+        -----
+        UserWarning
+            Once per ``FileManager``, if ``prod_dir`` holds products named
+            without their pass direction, which are not found.
         """
+        self._warn_on_legacy_names()
         bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
         pattern = self._build_pattern(
             f"S1_IFG{bd}_CMPLX",
@@ -547,6 +661,7 @@ class FileManager:
             sub_swath=sub_swath,
             polarization=polarization,
             crs=crs,
+            pass_direction=_checked_pass_direction(pass_direction),
         )
         return self._find_products(self.prod_dir, pattern, InterferogramProduct)
 

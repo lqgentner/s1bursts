@@ -119,6 +119,7 @@ def _rtc_burst() -> RTCProduct:
         crs=_UTM32,
         date=Timestamp("2020-02-05"),
         polarization="VV",
+        pass_direction="Ascending",
         _rel_orbit_number=15,
     )
 
@@ -130,6 +131,7 @@ def _gtc_burst() -> GTCProduct:
         crs=_UTM32,
         date=Timestamp("2020-02-05"),
         polarization="VH",
+        pass_direction="Ascending",
         _rel_orbit_number=15,
     )
 
@@ -142,6 +144,7 @@ def _coh_burst() -> CoherenceProduct:
         date_primary=Timestamp("2020-02-05"),
         date_secondary=Timestamp("2020-02-17"),
         polarization="VV",
+        pass_direction="Ascending",
         _rel_orbit_number=15,
     )
 
@@ -154,6 +157,7 @@ def _ifg_burst() -> InterferogramProduct:
         date_primary=Timestamp("2020-02-05"),
         date_secondary=Timestamp("2020-02-17"),
         polarization="VV",
+        pass_direction="Ascending",
         _rel_orbit_number=15,
     )
 
@@ -687,6 +691,7 @@ class TestBurstProducts:
             date_primary=Timestamp("2022-08-25T17:15:50.399"),
             date_secondary=Timestamp("2022-09-06T17:15:50.100"),
             polarization="VV",
+            pass_direction="Ascending",
             _rel_orbit_number=15,
         )
         assert product.baseline_days == 12

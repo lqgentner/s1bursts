@@ -558,14 +558,15 @@ BURST_ID = 30346
 
 
 def _make_burst(date: str) -> Burst:
-    # Propagate the relative orbit number (as a burst from a CDSE search or SLC
-    # filename would) so product creation needs no opt-in burst-map download.
+    # Propagate the relative orbit number and pass direction (as a burst from a
+    # CDSE search would) so product creation needs no opt-in burst-map download.
     return Burst(
         burst_id=BURST_ID,
         sub_swath="IW1",
         polarization="VV",
         date=Timestamp(date),
         _rel_orbit_number=44,
+        _pass_direction="Ascending",
     )
 
 

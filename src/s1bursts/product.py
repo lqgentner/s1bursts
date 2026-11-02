@@ -5,17 +5,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, Self, override
+from typing import TYPE_CHECKING, Any, Protocol, Self, get_args, override
 
 from freezebase.mgrs import mgrs_to_crs
 from pandas import Timestamp
 from pyproj import CRS
 
 from s1bursts.burst import _FOOTPRINT_ALIASES, BurstFootprintMixin
+from s1bursts.query import PassDirection
 
 if TYPE_CHECKING:
     from s1bursts.burst import Burst, BurstPair
-    from s1bursts.query import PassDirection, Polarization, SubSwath
+    from s1bursts.query import Polarization, SubSwath
 
 
 class CRSLike(Protocol):
@@ -48,6 +49,16 @@ def _utm_zone_crs(crs: CRSInput) -> CRS:
         "target cell's `crs`, or `utm_zone_of(burst)` for a single burst."
     )
     raise ValueError(msg)
+
+
+_PASS_DIRECTIONS: tuple[str, ...] = get_args(PassDirection.__value__)
+
+
+def _check_pass_direction(value: object) -> None:
+    """Raise ValueError unless ``value`` is ``"Ascending"`` or ``"Descending"``."""
+    if value not in _PASS_DIRECTIONS:
+        msg = f"pass_direction must be 'Ascending' or 'Descending', received {value!r}."
+        raise ValueError(msg)
 
 
 class QaMetric(StrEnum):
@@ -137,26 +148,34 @@ class GeocodedBurst(BurstFootprintMixin, BaseProduct, ABC):
         Sub-swath identifier.
     crs
         The coordinate reference system.
+    pass_direction
+        Pass direction, ``"Ascending"`` or ``"Descending"``. Keyword-only.
+
+    Raises
+    ------
+    ValueError
+        If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
     """
 
     burst_id: int
     sub_swath: SubSwath
     crs: CRSLike
-    # None delegates to the mixin's burst-map lookup. The orbit fields are not part
-    # of equality: the burst ID already fixes the orbit, and comparing it would make
-    # ``==`` depend on whether a value was propagated or the burst map is installed.
-    # Read-only here because the dataclass is frozen; the mixin declares them read-write.
+    # Keyword-only so the positional order of the identity fields is unchanged.
+    pass_direction: PassDirection = field(kw_only=True)
+    # None delegates to the mixin's burst-map lookup. The orbit is not part of
+    # equality: the burst ID already fixes it, and comparing it would make ``==``
+    # depend on whether a value was propagated or the burst map is installed.
+    # Read-only here because the dataclass is frozen; the mixin declares it read-write.
     # pyrefly: ignore [bad-override]
     _rel_orbit_number: int | None = field(default=None, repr=False, compare=False, kw_only=True)
-    # pyrefly: ignore [bad-override]
-    _pass_direction: PassDirection | None = field(
-        default=None, repr=False, compare=False, kw_only=True
-    )
     # Include the resolved value in asdict()-based filenames.
     rel_orbit_number: int = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Convert crs to pyproj.CRS object."""
+        """Check the pass direction and convert crs to a pyproj.CRS object."""
+        # The file name keeps only its first letter, so anything else would be
+        # written under a name that is never found again.
+        _check_pass_direction(self.pass_direction)
         if not isinstance(self.crs, CRS):
             object.__setattr__(self, "crs", CRS.from_user_input(self.crs))
 
@@ -177,6 +196,8 @@ class BackscatterProduct(GeocodedBurst):
         Acquisition date.
     polarization
         The polarization.
+    pass_direction
+        Pass direction, ``"Ascending"`` or ``"Descending"``. Keyword-only.
     """
 
     date: Timestamp
@@ -209,6 +230,9 @@ class BackscatterProduct(GeocodedBurst):
         ------
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone.
+        BurstMapUnavailableError
+            If the burst carries no relative orbit number or pass direction and
+            the burst map has not been downloaded.
         """
         return cls(
             burst_id=burst.burst_id,
@@ -216,10 +240,8 @@ class BackscatterProduct(GeocodedBurst):
             polarization=burst.polarization,
             date=burst.date,
             crs=_utm_zone_crs(crs),
+            pass_direction=burst.pass_direction,
             _rel_orbit_number=burst.rel_orbit_number,
-            # The propagated value only: the public property would fall back to the
-            # burst map, which bursts found on disk need not have.
-            _pass_direction=burst._pass_direction,  # noqa: SLF001
         )
 
 
@@ -241,6 +263,8 @@ class RTCProduct(BackscatterProduct):
         Acquisition date.
     polarization
         The polarization.
+    pass_direction
+        Pass direction, ``"Ascending"`` or ``"Descending"``. Keyword-only.
     """
 
     @property
@@ -274,6 +298,8 @@ class GTCProduct(BackscatterProduct):
         Acquisition date.
     polarization
         The polarization.
+    pass_direction
+        Pass direction, ``"Ascending"`` or ``"Descending"``. Keyword-only.
     """
 
     @property
@@ -307,6 +333,8 @@ class CoregisteredProduct(GeocodedBurst, ABC):
         Secondary acquisition date.
     polarization
         The polarization.
+    pass_direction
+        Pass direction, ``"Ascending"`` or ``"Descending"``. Keyword-only.
     """
 
     date_primary: Timestamp
@@ -346,6 +374,9 @@ class CoregisteredProduct(GeocodedBurst, ABC):
         ------
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone.
+        BurstMapUnavailableError
+            If the burst carries no relative orbit number or pass direction and
+            the burst map has not been downloaded.
         """
         return cls(
             burst_id=pair.primary.burst_id,
@@ -354,9 +385,8 @@ class CoregisteredProduct(GeocodedBurst, ABC):
             date_secondary=pair.secondary.date,
             polarization=pair.primary.polarization,
             crs=_utm_zone_crs(crs),
+            pass_direction=pair.pass_direction,
             _rel_orbit_number=pair.rel_orbit_number,
-            # See ``BackscatterProduct.from_burst``.
-            _pass_direction=pair.primary._pass_direction,  # noqa: SLF001
         )
 
 
@@ -378,6 +408,8 @@ class CoherenceProduct(CoregisteredProduct):
         Secondary acquisition date.
     polarization
         The polarization.
+    pass_direction
+        Pass direction, ``"Ascending"`` or ``"Descending"``. Keyword-only.
     """
 
     @property
@@ -405,6 +437,8 @@ class InterferogramProduct(CoregisteredProduct):
         Secondary acquisition date.
     polarization
         The polarization.
+    pass_direction
+        Pass direction, ``"Ascending"`` or ``"Descending"``. Keyword-only.
     """
 
     @property
