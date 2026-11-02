@@ -341,6 +341,54 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   comp = weighter.compose_rtc_by_pass(rtc, cell, write_qa=True)["Ascending"]
   [c for c in fm.find_rtc_lrw_products(mgrs_code="32TMS03") if Layer.QA_CQM in c.layers]
   ```
+- **Breaking:** compositing failures that belong to the cell's data are
+  `CompositeError`s, so a loop over cells can tell them from a wrong call.
+  Each keeps its builtin base, so `except ValueError:` still catches the first
+  two.
+  - `EmptyCompositeError` is now a `CompositeError` (still a `ValueError`).
+  - The new `InconsistentInputsError`, a `ValueError`, replaces the plain
+    `ValueError` for an input on another CRS, pixel size or grid than the
+    cell, inputs made with different DEMs, and an observation without a
+    matching scattering area.
+  - The new `CompositeInputError`, an `OSError`, replaces the
+    `FileNotFoundError` for a missing input and rasterio's `RasterioIOError`
+    for an unreadable one.
+
+  An invalid argument still raises a plain `ValueError`, which
+  `CompositeError` does not catch. That now includes an empty `rtc_products`
+  in `compose_coherence_lrw()`, which raised the scattering-area error.
+
+  ```python
+  # before
+  except EmptyCompositeError: ...
+  except (ValueError, FileNotFoundError, RasterioIOError): ...
+  # after
+  except CompositeError as err: ...
+  ```
+- **Breaking:** `compose_rtc_by_pass()`, `compose_gtc_by_pass()` and
+  `compose_coherence_by_pass()` behave like the LRW methods:
+  - Empty input raises `ValueError` instead of returning `{}`.
+  - A cell that no input reaches raises `EmptyCompositeError` and writes
+    nothing, instead of writing all-NaN composites. A pass direction that no
+    input reaches is left out of the returned dict and gets no file.
+  - Only orbit-date observations with a valid pixel in the cell count in
+    `CONTRIBUTING_OBSERVATIONS` and in `FIRST_ACQUISITION_DATE` and
+    `LAST_ACQUISITION_DATE`, which used to count every input of the direction.
+  - A direction whose files all exist is skipped before its inputs are read,
+    so a resumed run no longer reads every input again for each finished cell.
+  - With `overwrite=True`, a direction, or for any `compose_*` method a cell,
+    that no input reaches has the files of an earlier composite of the same
+    identity deleted, so no stale composite outlives the rerun.
+
+  ```python
+  # before: {} for no products, all-NaN files for products that miss the cell
+  composites = weighter.compose_rtc_by_pass(products, cell)
+  # after
+  try:
+      composites = weighter.compose_rtc_by_pass(products, cell) if products else {}
+  except EmptyCompositeError:
+      composites = {}
+  ```
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.

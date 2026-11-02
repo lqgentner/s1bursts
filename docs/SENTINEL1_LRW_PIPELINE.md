@@ -218,6 +218,10 @@ Results (`summary.py`): `OkResult[T]` (`source`, `result`, `skipped`), `ErrorRes
 
 `aggregation` is `"mean"`, `"median"` or a quantile level in `(0, 1)`. Within one relative orbit and acquisition date the bursts are mosaicked by first valid pixel, so seams are never averaged; the resulting orbit-date observations are then aggregated in time.
 
+Only orbit-date observations with a valid pixel in the cell count, in the composite, in `CONTRIBUTING_OBSERVATIONS` and in the first and last acquisition dates. A cell that no observation reaches raises `EmptyCompositeError` and writes nothing; in a pass composite, a direction that no observation reaches is left out of the returned dict and gets no file. A pass composite whose files all exist is skipped before any input is read.
+
+Every failure that belongs to the cell's data is a `CompositeError` (`s1bursts.errors`), so a loop over cells can catch it and move on: `EmptyCompositeError`, `InconsistentInputsError` (another CRS, pixel size or grid than the cell, mixed DEMs, an observation without a scattering area) and `CompositeInputError` (an input missing or unreadable). An invalid argument, such as an empty product list, mixed polarizations or baselines, or an input outside `time_range`, raises a plain `ValueError`.
+
 **LRW formula** (Small et al. 2022, eq. 3-6; CEOS-ARD SAR v1.3.1, Annex 5):
 
 $$

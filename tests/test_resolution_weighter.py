@@ -18,7 +18,12 @@ import pytest
 import rasterio
 
 from s1bursts import product_tags
-from s1bursts.errors import EmptyCompositeError
+from s1bursts.errors import (
+    CompositeError,
+    CompositeInputError,
+    EmptyCompositeError,
+    InconsistentInputsError,
+)
 from s1bursts.filemanager import FileManager
 from s1bursts.product import (
     CoherenceProduct,
@@ -686,7 +691,7 @@ class TestCheckSimCoverage:
         key_b = (10, Timestamp("2024-01-13"))
         obs = {key_a: arr, key_b: arr}
         sim = {key_a: arr}  # key_b missing
-        with pytest.raises(ValueError, match=r"orbit 10, 2024-01-13"):
+        with pytest.raises(InconsistentInputsError, match=r"orbit 10, 2024-01-13"):
             ResolutionWeighter._check_area_coverage(obs, sim)
 
 
@@ -1358,7 +1363,7 @@ class TestComposeRtcLrw:
 
     def test_reports_a_missing_product_file(self, scene: _Scene) -> None:
         """A catalogued product whose raster was never written must fail loudly."""
-        with pytest.raises(FileNotFoundError, match="product file not found"):
+        with pytest.raises(CompositeInputError, match="product file not found"):
             scene.weighter.compose_rtc_lrw([_rtc("2022-08-25")], scene.geobox)
 
 
@@ -1484,10 +1489,21 @@ class TestComposeCohLrw:
     def test_reports_coherence_without_a_matching_rtc(self, scene: _Scene) -> None:
         """Every coherence group needs a simulated-area group from the same date/orbit."""
         coh = _coh("2022-08-01", "2022-08-13")
+        other_date = _rtc("2022-08-13")
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
+        _write_raster(scene.manager.get_product_path(other_date), [_full(1.0), _full(1.0)])
+
+        with pytest.raises(InconsistentInputsError, match="No matching RTC scattering area"):
+            scene.weighter.compose_coherence_lrw([coh], [other_date], scene.geobox)
+
+    def test_no_rtc_products_is_an_argument_error(self, scene: _Scene) -> None:
+        # Previously an InconsistentInputsError, which a loop over cells catches.
+        coh = _coh("2022-08-01", "2022-08-13")
         _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
 
-        with pytest.raises(ValueError, match="No matching RTC scattering area"):
+        with pytest.raises(ValueError, match="rtc_products must not be empty") as info:
             scene.weighter.compose_coherence_lrw([coh], [], scene.geobox)
+        assert not isinstance(info.value, CompositeError)
 
     def test_a_missing_qa_layer_rewrites_the_measurement_too(self, scene: _Scene) -> None:
         products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
@@ -1565,9 +1581,136 @@ class TestComposeByPass:
 
         assert set(result) == {"Ascending", "Descending"}
 
-    def test_empty_input_yields_no_composites(self, scene: _Scene) -> None:
-        assert scene.weighter.compose_coherence_by_pass([], scene.geobox) == {}
-        assert scene.weighter.compose_rtc_by_pass([], scene.geobox) == {}
+    def test_empty_input_is_an_argument_error(self, scene: _Scene) -> None:
+        # Previously returned {}, unlike the LRW methods.
+        for compose, name in [
+            (scene.weighter.compose_rtc_by_pass, "rtc_products"),
+            (scene.weighter.compose_gtc_by_pass, "gtc_products"),
+            (scene.weighter.compose_coherence_by_pass, "coh_products"),
+        ]:
+            with pytest.raises(ValueError, match=f"{name} must not be empty") as info:
+                compose([], scene.geobox)
+            assert not isinstance(info.value, CompositeError)
+
+    def test_a_cell_no_input_reaches_raises_and_writes_nothing(
+        self, scene: _Scene, tmp_path: Path
+    ) -> None:
+        # Previously wrote an all-NaN composite.
+        product = _rtc("2022-08-13")
+        _write_raster(scene.manager.get_product_path(product), [_full(np.nan), _full(1.0)])
+        before = set(tmp_path.rglob("*.tif"))
+
+        with pytest.raises(EmptyCompositeError, match="no input observation"):
+            scene.weighter.compose_rtc_by_pass([product], scene.geobox, write_qa=True)
+
+        assert set(tmp_path.rglob("*.tif")) == before
+
+    def test_overwriting_a_cell_no_input_reaches_removes_the_old_composite(
+        self, scene: _Scene
+    ) -> None:
+        product = _rtc("2022-08-13")
+        other = _rtc("2022-08-25")
+        _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(1.0)])
+        _write_raster(scene.manager.get_product_path(other), [_full(2.0), _full(1.0)])
+        earlier = scene.weighter.compose_rtc_lrw([product], scene.geobox, write_qa=True)
+        # An unrelated identity (another window) must survive.
+        unrelated = scene.weighter.compose_rtc_lrw([other], scene.geobox)
+        _write_raster(scene.manager.get_product_path(product), [_full(np.nan), _full(1.0)])
+
+        with pytest.raises(EmptyCompositeError):
+            scene.weighter.compose_rtc_lrw([product], scene.geobox, overwrite=True)
+
+        assert not any(scene.manager.product_exists(earlier, layer) for layer in earlier.layers)
+        assert scene.manager.product_exists(unrelated)
+
+    def test_a_cell_no_input_reaches_keeps_the_old_composite_without_overwrite(
+        self, scene: _Scene
+    ) -> None:
+        coh, rtc = _coh("2022-08-01", "2022-08-13"), _rtc("2022-08-01")
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(1.0)])
+        earlier = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, write_qa=True)
+        scene.manager.get_product_path(earlier, Layer.QA_CQM).unlink()
+        _write_raster(scene.manager.get_product_path(coh), [_full(np.nan)])
+
+        with pytest.raises(EmptyCompositeError):
+            scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, write_qa=True)
+
+        assert scene.manager.product_exists(earlier)
+        assert scene.manager.product_exists(earlier, Layer.QA_NUM)
+
+        with pytest.raises(EmptyCompositeError):
+            scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, overwrite=True)
+        assert not any(scene.manager.product_exists(earlier, layer) for layer in earlier.layers)
+
+    def test_overwriting_a_direction_no_input_reaches_removes_its_old_composite(
+        self, scene: _Scene
+    ) -> None:
+        ascending = _coh("2022-08-01", "2022-08-13", burst_id=_ASCENDING_BURST)
+        descending = _coh("2022-08-01", "2022-08-13", orbit=88, burst_id=_DESCENDING_BURST)
+        for product in (ascending, descending):
+            _write_raster(scene.manager.get_product_path(product), [_full(0.4)])
+        earlier = scene.weighter.compose_coherence_by_pass(
+            [ascending, descending], scene.geobox, write_qa=True
+        )
+        _write_raster(scene.manager.get_product_path(descending), [_full(np.nan)])
+
+        kept = scene.weighter.compose_coherence_by_pass(
+            [ascending, descending], scene.geobox, write_qa=True
+        )
+        assert scene.manager.product_exists(earlier["Descending"])
+
+        result = scene.weighter.compose_coherence_by_pass(
+            [ascending, descending], scene.geobox, write_qa=True, overwrite=True
+        )
+
+        assert kept == earlier
+        assert list(result) == ["Ascending"]
+        stale = earlier["Descending"]
+        assert not any(scene.manager.product_exists(stale, layer) for layer in stale.layers)
+        assert scene.manager.product_exists(result["Ascending"], Layer.QA_NUM)
+
+    def test_a_direction_no_input_reaches_is_left_out(self, scene: _Scene) -> None:
+        ascending = _coh("2022-08-01", "2022-08-13", burst_id=_ASCENDING_BURST)
+        descending = _coh("2022-08-01", "2022-08-13", orbit=88, burst_id=_DESCENDING_BURST)
+        _write_raster(scene.manager.get_product_path(ascending), [_full(0.4)])
+        _write_raster(scene.manager.get_product_path(descending), [_full(np.nan)])
+
+        result = scene.weighter.compose_coherence_by_pass(
+            [ascending, descending], scene.geobox, write_qa=True
+        )
+
+        assert list(result) == ["Ascending"]
+        written = sorted(p.name for p in scene.manager.comp_dir.iterdir())
+        assert [name[:15] for name in written] == ["S1_COH12_COMP_A"] * 2
+
+    def test_counts_and_dates_only_observations_that_reach_the_cell(self, scene: _Scene) -> None:
+        empty, valid = _rtc("2022-08-01", orbit=66), _rtc("2022-08-13")
+        _write_raster(scene.manager.get_product_path(empty), [_full(np.nan), _full(1.0)])
+        _write_raster(scene.manager.get_product_path(valid), [_full(2.0), _full(1.0)])
+
+        result = scene.weighter.compose_rtc_by_pass([empty, valid], scene.geobox, write_qa=True)
+
+        composite = result["Ascending"]
+        for layer in composite.layers:
+            with rasterio.open(scene.manager.get_product_path(composite, layer)) as src:
+                tags = src.tags()
+            assert tags["CONTRIBUTING_OBSERVATIONS"] == "1"
+            assert tags["FIRST_ACQUISITION_DATE"] == "2022-08-13"
+
+    def test_a_finished_direction_reads_no_input(self, scene: _Scene) -> None:
+        ascending = _rtc("2022-08-13", burst_id=_ASCENDING_BURST)
+        descending = _rtc("2022-08-25", orbit=88, burst_id=_DESCENDING_BURST)
+        for product in (ascending, descending):
+            _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(1.0)])
+        first = scene.weighter.compose_rtc_by_pass([ascending, descending], scene.geobox)
+        for product in (ascending, descending):
+            scene.manager.get_product_path(product).unlink()
+
+        # The inputs are gone, so reading any of them would raise CompositeInputError.
+        again = scene.weighter.compose_rtc_by_pass([ascending, descending], scene.geobox)
+
+        assert again == first
 
     def test_writes_per_pass_qa(self, scene: _Scene) -> None:
         product = _coh("2022-08-01", "2022-08-13")
@@ -1917,6 +2060,30 @@ class TestCompositeTags:
             assert src.tags()["QA_LAYER"] == "Contributing Observations Image"
 
 
+class TestUnreadableInputs:
+    """A missing or unreadable input fails the cell with a ``CompositeInputError``."""
+
+    def test_a_corrupt_input_is_a_composite_input_error(self, scene: _Scene) -> None:
+        product = _rtc("2022-08-13")
+        path = scene.manager.get_product_path(product)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"not a GeoTIFF")
+
+        with pytest.raises(CompositeInputError, match="cannot read") as info:
+            scene.weighter.compose_rtc_lrw([product], scene.geobox)
+        assert isinstance(info.value, OSError)
+        assert isinstance(info.value.__cause__, rasterio.errors.RasterioIOError)
+
+    def test_tags_that_cannot_be_read_are_a_composite_input_error(self, scene: _Scene) -> None:
+        product = _rtc("2022-08-13")
+        path = scene.manager.get_product_path(product)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"not a GeoTIFF")
+
+        with pytest.raises(CompositeInputError, match="cannot read"):
+            scene.weighter._input_tags([product])
+
+
 class TestInputConsistency:
     """Guards on inputs a composite must not silently average together."""
 
@@ -1945,7 +2112,7 @@ class TestInputConsistency:
             dst.write(_full(1.0), 1)
             dst.write(_full(1.0), 2)
 
-        with pytest.raises(ValueError, match="target grid is"):
+        with pytest.raises(InconsistentInputsError, match="target grid is"):
             scene.weighter.compose_rtc_lrw([ours, foreign], scene.geobox)
 
     def test_a_product_at_another_pixel_size_is_refused(self, scene: _Scene) -> None:
@@ -1968,7 +2135,7 @@ class TestInputConsistency:
             dst.write(_full(1.0), 1)
             dst.write(_full(1.0), 2)
 
-        with pytest.raises(ValueError, match="must share the output grid"):
+        with pytest.raises(InconsistentInputsError, match="must share the output grid"):
             scene.weighter.compose_rtc_lrw([ours, coarse], scene.geobox)
 
     def test_a_product_offset_by_a_fraction_of_a_pixel_is_refused(self, scene: _Scene) -> None:
@@ -1993,7 +2160,7 @@ class TestInputConsistency:
             dst.write(_full(1.0), 1)
             dst.write(_full(1.0), 2)
 
-        with pytest.raises(ValueError, match="must share the output grid"):
+        with pytest.raises(InconsistentInputsError, match="must share the output grid"):
             scene.weighter.compose_rtc_lrw([ours, shifted], scene.geobox)
 
     def test_a_product_at_a_whole_pixel_offset_is_accepted(self, scene: _Scene) -> None:
@@ -2028,7 +2195,9 @@ class TestInputConsistency:
             _write_raster(scene.manager.get_product_path(product), [_full(0.5)])
 
         with pytest.raises(ValueError, match="share a temporal baseline"):
-            scene.weighter.compose_coherence_lrw([twelve, twenty_four], [], scene.geobox)
+            scene.weighter.compose_coherence_lrw(
+                [twelve, twenty_four], [_rtc("2022-08-01")], scene.geobox
+            )
 
     def test_mixed_dems_are_refused(self, scene: _Scene) -> None:
         coh = _coh("2022-08-01", "2022-08-13")
@@ -2044,7 +2213,7 @@ class TestInputConsistency:
             tags={"DEM": "GETASSE30"},
         )
 
-        with pytest.raises(ValueError, match="same DEM"):
+        with pytest.raises(InconsistentInputsError, match="same DEM"):
             scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox)
 
     def test_mixed_snap_versions_are_allowed_but_warned_about(
