@@ -14,7 +14,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
-from typing import TYPE_CHECKING, Any, Final, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, overload
 import zipfile
 
 from freezebase.errors import RasterWriteError
@@ -31,6 +31,7 @@ from s1bursts.config import get_settings, warn_if_tmpdir_unusable
 from s1bursts.errors import (
     BurstError,
     ConfigurationError,
+    NoUTMZoneError,
     SnapProcessingError,
     _is_environment_wide,
 )
@@ -346,7 +347,7 @@ def _output_tail(stdout: str | None, stderr: str | None) -> str | None:
 _ITEM_ERRORS = (BurstError, OSError, RasterioError, RasterWriteError)
 
 
-def _item_failure(source: Burst | BurstPair, error: Exception) -> ErrorResult:
+def _item_failure(source: object, error: Exception) -> ErrorResult:
     """Record ``error`` as a failure of ``source`` alone, unless every item would fail alike."""
     if _is_environment_wide(error):
         raise error
@@ -744,7 +745,7 @@ class SNAPClient:
     def create_backscatter(
         self,
         burst: Burst,
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: RTCConfig,
         overwrite: bool = False,
@@ -754,7 +755,7 @@ class SNAPClient:
     def create_backscatter(
         self,
         burst: Burst,
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: GTCConfig,
         overwrite: bool = False,
@@ -763,7 +764,7 @@ class SNAPClient:
     def create_backscatter(
         self,
         burst: Burst,
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: RTCConfig | GTCConfig,
         overwrite: bool = False,
@@ -782,7 +783,12 @@ class SNAPClient:
             The coordinate reference system of the geocoded output, a WGS 84 /
             UTM zone, north or south, which product file names record. Given as
             a CRS object, an authority string such as ``"EPSG:32632"`` or an
-            EPSG code.
+            EPSG code, or ``"auto"`` to process each burst in the UTM zone
+            that holds its footprint (``utm_zone``). Use ``"auto"`` for
+            bursts processed on their own, such as a time series, and the
+            target cell's ``crs`` for products meant for a composite: an input
+            in another zone than the cell raises ``InconsistentInputsError``
+            when composited.
         config
             Graph-shape configuration, ``RTCConfig`` or ``GTCConfig``.
         overwrite
@@ -803,7 +809,9 @@ class SNAPClient:
             If ``config`` is neither an ``RTCConfig`` nor a ``GTCConfig``.
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
-            because it would fail every burst.
+            because a wrong ``crs`` would fail every burst. Under ``"auto"``,
+            a footprint outside the UTM zones fails this item alone and is
+            recorded as a ``NoUTMZoneError``.
         OSError, SnapProcessingError or RasterWriteError
             If the disk is full, over quota or read-only, which would fail
             every remaining item alike: an ``OSError`` saying so, or an error
@@ -816,11 +824,18 @@ class SNAPClient:
             If the product exists, ``overwrite`` is ``False``, and it cannot
             be read to check its settings.
         """
+        # Under "auto", a burst without a UTM zone fails on its own.
         if isinstance(config, RTCConfig):
-            rtc = RTCProduct.from_burst(burst, crs=crs)
+            try:
+                rtc = RTCProduct.from_burst(burst, crs=crs)
+            except NoUTMZoneError as err:
+                return _item_failure(burst, err)
             return self._create_backscatter(burst, rtc, config, overwrite=overwrite)
         if isinstance(config, GTCConfig):
-            gtc = GTCProduct.from_burst(burst, crs=crs)
+            try:
+                gtc = GTCProduct.from_burst(burst, crs=crs)
+            except NoUTMZoneError as err:
+                return _item_failure(burst, err)
             return self._create_backscatter(burst, gtc, config, overwrite=overwrite)
         msg = f"`config` must be an RTCConfig or a GTCConfig, received '{type(config).__name__}'."
         raise TypeError(msg)
@@ -903,7 +918,7 @@ class SNAPClient:
     def create_coherence(
         self,
         pair: BurstPair,
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: CoherenceConfig,
         overwrite: bool = False,
@@ -920,7 +935,12 @@ class SNAPClient:
             The coordinate reference system of the geocoded output, a WGS 84 /
             UTM zone, north or south, which product file names record. Given as
             a CRS object, an authority string such as ``"EPSG:32632"`` or an
-            EPSG code.
+            EPSG code, or ``"auto"`` to process each pair in the UTM zone
+            that holds its footprint (``utm_zone``). Use ``"auto"`` for
+            pairs processed on their own, such as a time series, and the
+            target cell's ``crs`` for products meant for a composite: an input
+            in another zone than the cell raises ``InconsistentInputsError``
+            when composited.
         config
             Graph-shape configuration (window size, DEM, …).
         overwrite
@@ -939,7 +959,9 @@ class SNAPClient:
         ------
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
-            because it would fail every burst.
+            because a wrong ``crs`` would fail every burst. Under ``"auto"``,
+            a footprint outside the UTM zones fails this item alone and is
+            recorded as a ``NoUTMZoneError``.
         OSError, SnapProcessingError or RasterWriteError
             If the disk is full, over quota or read-only, which would fail
             every remaining item alike: an ``OSError`` saying so, or an error
@@ -952,7 +974,10 @@ class SNAPClient:
             If the product exists, ``overwrite`` is ``False``, and it cannot
             be read to check its settings.
         """
-        product = CoherenceProduct.from_burst_pair(pair, crs=crs)
+        try:
+            product = CoherenceProduct.from_burst_pair(pair, crs=crs)
+        except NoUTMZoneError as err:
+            return _item_failure(pair, err)
         product_path = self.manager.get_product_path(product)
 
         skipped = self._existing(pair, product, config, overwrite=overwrite)
@@ -1008,7 +1033,7 @@ class SNAPClient:
     def create_interferogram(
         self,
         pair: BurstPair,
-        crs: CRSInput,
+        crs: CRSInput | Literal["auto"],
         *,
         config: InterferogramConfig,
         overwrite: bool = False,
@@ -1023,7 +1048,12 @@ class SNAPClient:
             The coordinate reference system of the geocoded output, a WGS 84 /
             UTM zone, north or south, which product file names record. Given as
             a CRS object, an authority string such as ``"EPSG:32632"`` or an
-            EPSG code.
+            EPSG code, or ``"auto"`` to process each pair in the UTM zone
+            that holds its footprint (``utm_zone``). Use ``"auto"`` for
+            pairs processed on their own, such as a time series, and the
+            target cell's ``crs`` for products meant for a composite: an input
+            in another zone than the cell raises ``InconsistentInputsError``
+            when composited.
         config
             Graph-shape configuration.
         overwrite
@@ -1042,7 +1072,9 @@ class SNAPClient:
         ------
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
-            because it would fail every burst.
+            because a wrong ``crs`` would fail every burst. Under ``"auto"``,
+            a footprint outside the UTM zones fails this item alone and is
+            recorded as a ``NoUTMZoneError``.
         OSError, SnapProcessingError or RasterWriteError
             If the disk is full, over quota or read-only, which would fail
             every remaining item alike: an ``OSError`` saying so, or an error
@@ -1055,7 +1087,10 @@ class SNAPClient:
             If the product exists, ``overwrite`` is ``False``, and it cannot
             be read to check its settings.
         """
-        product = InterferogramProduct.from_burst_pair(pair, crs=crs)
+        try:
+            product = InterferogramProduct.from_burst_pair(pair, crs=crs)
+        except NoUTMZoneError as err:
+            return _item_failure(pair, err)
         product_path = self.manager.get_product_path(product)
 
         skipped = self._existing(pair, product, config, overwrite=overwrite)

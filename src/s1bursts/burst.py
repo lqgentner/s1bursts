@@ -25,7 +25,7 @@ from s1bursts.burstmap import (
     create_s1_orbit_number_lut,
     create_s1_pass_direction_lut,
 )
-from s1bursts.errors import BurstNotInMapError
+from s1bursts.errors import BurstNotInMapError, NoUTMZoneError
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Iterator
@@ -378,6 +378,41 @@ class Burst(BurstFootprintMixin):
             return self._pass_direction
         return self._lut_lookup(create_s1_pass_direction_lut(mode=self.mode))
 
+    @property
+    def utm_zone(self) -> CRS:
+        """The WGS 84 / UTM zone that holds the burst's footprint, the zone ``crs="auto"`` uses.
+
+        The zone is the one containing the centre of the footprint, by the zone
+        boundaries of ``freezebase.mgrs.UTMZones``, the ones the MGRS grid uses,
+        Norway and Svalbard exceptions included. A centre on a border between
+        two zones takes the eastern one, and one on the equator the northern
+        hemisphere. The zone depends only on the burst ID and sub-swath, so a
+        time series of one burst stays in one zone. Products meant for a
+        composite take the target cell's zone instead, which need not be the
+        zone of every burst.
+
+        A burst found on disk with ``FileManager.find(Burst)`` takes its
+        footprint, and so its zone, from the burst-ID map, since file names
+        record its pass direction but not its footprint.
+
+        Returns
+        -------
+        pyproj.CRS
+            The UTM zone, such as EPSG:32632 for zone 32 north.
+
+        Raises
+        ------
+        NoUTMZoneError
+            If the centre lies outside the UTM zones, north of 84 degrees or
+            south of 80 degrees. It is a ``ValueError``.
+        BurstMapUnavailableError
+            If the footprint was not propagated and the burst map has not been
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
+        BurstNotInMapError
+            If the burst is not found in the burst map.
+        """
+        return _utm_zone(self.geometry)
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
         """Instantiate from a mapping, silently dropping unknown and non-init fields.
@@ -556,6 +591,38 @@ class BurstPair:
         return self.primary.geometry
 
     @property
+    def utm_zone(self) -> CRS:
+        """The WGS 84 / UTM zone that holds the pair's footprint, the zone ``crs="auto"`` uses.
+
+        The footprint is the primary burst's; both bursts share it. The zone
+        is the one containing the centre of the footprint, by the zone
+        boundaries of ``freezebase.mgrs.UTMZones``, the ones the MGRS grid uses,
+        Norway and Svalbard exceptions included. A centre on a border between
+        two zones takes the eastern one, and one on the equator the northern
+        hemisphere. The zone depends only on the burst ID and sub-swath, so a
+        time series of one burst stays in one zone. Products meant for a
+        composite take the target cell's zone instead, which need not be the
+        zone of every burst.
+
+        Returns
+        -------
+        pyproj.CRS
+            The UTM zone, such as EPSG:32632 for zone 32 north.
+
+        Raises
+        ------
+        NoUTMZoneError
+            If the centre lies outside the UTM zones, north of 84 degrees or
+            south of 80 degrees. It is a ``ValueError``.
+        BurstMapUnavailableError
+            If the footprint was not propagated and the burst map has not been
+            downloaded (see ``s1bursts.burstmap.download_burst_map``).
+        BurstNotInMapError
+            If the burst is not found in the burst map.
+        """
+        return self.primary.utm_zone
+
+    @property
     def baseline_days(self) -> int:
         """Temporal baseline in days.
 
@@ -567,49 +634,14 @@ class BurstPair:
         return (self.secondary.date - self.primary.date).round("D").days
 
 
-def utm_zone_of(burst: Burst | BurstPair) -> CRS:
-    """Return the WGS 84 / UTM zone that holds a burst's footprint.
-
-    The zone is the one containing the centre of the footprint, by the zone
-    boundaries of ``freezebase.mgrs.UTMZones``, the ones the MGRS grid uses,
-    Norway and Svalbard exceptions included. A centre on a border between two
-    zones takes the eastern one, and one on the equator the northern
-    hemisphere. Use it as the ``crs`` of ``BurstProcessor.create_*`` for
-    bursts processed on their own. The zone depends only on the burst ID and
-    sub-swath, so a time series of one burst stays in one zone. Do not use it for
-    products meant for a composite: those take the target cell's zone,
-    ``crs=cell.crs``, which need not be the zone of every burst. A burst found
-    on disk with ``FileManager.find(Burst)`` takes its footprint from the
-    burst-ID map, since file names record its pass direction but not its
-    footprint.
-
-    Parameters
-    ----------
-    burst
-        Burst or burst pair whose footprint to locate.
-
-    Returns
-    -------
-    pyproj.CRS
-        The UTM zone, such as EPSG:32632 for zone 32 north.
-
-    Raises
-    ------
-    ValueError
-        If the centre lies outside the UTM zones, north of 84 degrees or south
-        of 80 degrees.
-    BurstMapUnavailableError
-        If the footprint was not propagated and the burst map has not been
-        downloaded (see ``s1bursts.burstmap.download_burst_map``).
-    BurstNotInMapError
-        If the burst is not found in the burst map.
-    """
-    longitude, latitude = _footprint_centre(burst.geometry)
+def _utm_zone(footprint: Polygon | MultiPolygon) -> CRS:
+    """Return the WGS 84 / UTM zone holding the centre of a footprint; see ``Burst.utm_zone``."""
+    longitude, latitude = _footprint_centre(footprint)
     zones = UTMZones().find_intersecting(shapely.Point(longitude, latitude))
     zones = zones[zones.hemisphere == ("N" if latitude >= 0 else "S")]
     if zones.empty:
         msg = f"No UTM zone covers the footprint centre at {longitude:.4f}, {latitude:.4f}."
-        raise ValueError(msg)
+        raise NoUTMZoneError(msg)
     # Zone numbers grow eastward and a centre in [-180, 180) never touches both
     # zone 60 and zone 1, so the largest number is the eastern zone.
     return CRS.from_epsg(int(zones.epsg.max()))

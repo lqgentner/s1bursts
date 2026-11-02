@@ -19,10 +19,29 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - Every `BurstProcessor.create_*` method accepts any iterable of bursts or
   burst pairs, such as a list, not only a `BurstCollection` or
   `BurstPairCollection`.
-- `utm_zone_of(burst)` returns the WGS 84 / UTM zone that holds the centre of
-  a burst's or burst pair's footprint, as the `crs` for bursts processed on
-  their own. Products meant for a composite still take the cell's zone,
-  `crs=cell.crs`.
+- `Burst.utm_zone` and `BurstPair.utm_zone` are the WGS 84 / UTM zone that
+  holds the centre of the footprint, as a `pyproj.CRS`. The zone depends only
+  on the burst ID and sub-swath, so a time series of one burst stays in one
+  zone.
+- The `crs` of every `BurstProcessor.create_*` and `SNAPClient.create_*`
+  method, and of the products' `from_burst()` and `from_burst_pair()`, accepts
+  `"auto"`: each burst, or pair, is geocoded in its own `utm_zone`, so one
+  call processes bursts across zones. Use it for bursts processed on their
+  own, such as a time series. Products meant for a composite still take the
+  cell's zone, `crs=cell.crs`; an input in another zone than the cell raises
+  `InconsistentInputsError`. `crs` stays required, and `"auto"` is matched
+  exactly: a variant such as `"AUTO"` raises `ValueError` saying so. A burst
+  whose footprint lies outside the UTM zones fails on its own under `"auto"`,
+  recorded as the new `s1bursts.errors.NoUTMZoneError`, a `BurstError` and a
+  `ValueError`, while a missing burst map still stops the batch.
+
+  ```python
+  # before: one call per UTM zone
+  processor.create_backscatter(bursts_32n, crs="EPSG:32632")
+  processor.create_backscatter(bursts_33n, crs="EPSG:32633")
+  # after
+  processor.create_backscatter(bursts, crs="auto")
+  ```
 - `OperationSummary.raise_on_failure()` raises an `OperationFailedError`
   listing the failed items, and otherwise returns the summary, so it chains:
 
@@ -240,8 +259,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - **Breaking:** the `crs` of every `BurstProcessor.create_*` and
   `SNAPClient.create_*` method, and of the products' `from_burst()` and
   `from_burst_pair()`, must be a WGS 84 / UTM zone, north or south. Anything
-  else raises `ValueError`, in `BurstProcessor` before the first burst is
-  processed. A non-UTM CRS used to fail later with
+  else, also a string pyproj cannot parse, raises `ValueError`, in
+  `BurstProcessor` before the first burst is processed. A non-UTM CRS used to fail later with
   `Could not extract CRS identifier from: …`, and a UTM zone on another datum,
   such as ETRS89 / UTM zone 32N, was written under the name of the WGS 84 zone
   and read back as that.
@@ -250,7 +269,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   # before
   processor.create_coherences(pairs, crs="EPSG:25832")
   # after
-  processor.create_coherences(pairs, crs="EPSG:32632")  # or crs=utm_zone_of(pairs[0])
+  processor.create_coherences(pairs, crs="EPSG:32632")  # or crs="auto"
   ```
 - **Breaking:** the file names of SLC bursts and of RTC, GTC, coherence and
   interferogram products record the pass direction, as `A` or `D` after the

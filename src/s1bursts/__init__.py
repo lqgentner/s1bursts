@@ -10,7 +10,6 @@ search, processing, and compositing services, and the configs they take.
 
 from importlib.metadata import version as _version
 
-from s1bursts.burst import utm_zone_of
 from s1bursts.burstmap import download_burst_map
 from s1bursts.catalog import BurstCatalog
 from s1bursts.dem import prepare_dem_for_snap
@@ -47,5 +46,4 @@ __all__ = [
     "TimeRange",
     "download_burst_map",
     "prepare_dem_for_snap",
-    "utm_zone_of",
 ]

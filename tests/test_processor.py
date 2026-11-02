@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 from pathlib import Path
 import threading
@@ -10,14 +11,20 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 from pandas import Timestamp
-from pyproj.exceptions import CRSError
+from pyproj import CRS
 import pytest
 import rasterio
 import rasterio.transform
+import shapely
 
 from s1bursts import product_tags
 from s1bursts.burst import Burst, BurstPair
-from s1bursts.errors import ProductSettingsMismatchError, SnapProcessingError
+from s1bursts.errors import (
+    BurstMapUnavailableError,
+    NoUTMZoneError,
+    ProductSettingsMismatchError,
+    SnapProcessingError,
+)
 from s1bursts.filemanager import FileManager
 from s1bursts.processor import BurstProcessor
 from s1bursts.product import CoherenceProduct, InterferogramProduct, RTCProduct
@@ -426,8 +433,14 @@ class TestDispatch:
         processor.create_backscatter([], crs=crs)
 
     def test_invalid_crs_fails_before_processing(self, processor: BurstProcessor) -> None:
-        with pytest.raises(CRSError):
+        # Previously pyproj's CRSError, a RuntimeError naming neither UTM nor "auto".
+        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
             processor.create_backscatter([MagicMock()], crs="EPSG:32632x")
+
+    @pytest.mark.parametrize("crs", ["AUTO", "Auto", " auto"])
+    def test_a_misspelled_auto_is_named(self, processor: BurstProcessor, crs: str) -> None:
+        with pytest.raises(ValueError, match="matched exactly"):
+            processor.create_backscatter([MagicMock()], crs=crs)
 
         cast("MagicMock", processor.snap_client).create_backscatter.assert_not_called()
 
@@ -546,6 +559,76 @@ class TestSkipSettings:
         assert "Skipped 2 existing product(s) without checking" in messages[0]
         assert "another SNAP version than the running 14.0.0" in messages[1]
         assert {warning.filename for warning in record} == {__file__}
+
+    def test_auto_checks_each_existing_product_in_its_own_zone(self, real: BurstProcessor) -> None:
+        west = replace(_burst("2022-01-05"), _geometry=shapely.box(8.0, 46.0, 9.0, 47.0))
+        east = replace(
+            _burst("2022-01-17", burst_id=30347), _geometry=shapely.box(16.0, 46.0, 17.0, 47.0)
+        )
+        for burst in (west, east):
+            product = RTCProduct.from_burst(burst, "auto")
+            _write_product(real.manager.get_product_path(product), product, RTCConfig())
+
+        with patch.object(real.snap_client, "create_backscatter") as create:
+            summary = real.create_backscatter([west, east], crs="auto")
+
+        create.assert_not_called()
+        assert [product.crs for product in summary.products] == [
+            CRS.from_epsg(32632),
+            CRS.from_epsg(32633),
+        ]
+
+    @pytest.mark.parametrize("overwrite", [False, True])
+    def test_auto_fails_a_burst_without_a_zone_on_its_own(
+        self, real: BurstProcessor, overwrite: bool
+    ) -> None:
+        polar = replace(_burst("2022-01-05"), _geometry=shapely.box(10.0, 84.5, 11.0, 85.5))
+        alpine = replace(_burst("2022-01-17"), _geometry=shapely.box(8.0, 46.0, 9.0, 47.0))
+
+        with (
+            patch.object(real.snap_client, "_run_gpt") as mock_gpt,
+            patch.object(real.snap_client, "_finalize_product"),
+        ):
+            summary = real.create_backscatter([polar, alpine], crs="auto", overwrite=overwrite)
+
+        # Previously the polar burst stopped the whole batch.
+        assert (summary.n_processed, summary.n_failed) == (1, 1)
+        [failure] = summary.failed_items
+        assert failure.source is polar
+        assert isinstance(failure.error, NoUTMZoneError)
+        mock_gpt.assert_called_once()
+
+    def test_auto_without_a_zone_stops_a_batch_that_does_not_continue(
+        self, real: BurstProcessor
+    ) -> None:
+        real.continue_on_error = False
+        polar = replace(_burst("2022-01-05"), _geometry=shapely.box(10.0, 84.5, 11.0, 85.5))
+
+        with pytest.raises(NoUTMZoneError, match="No UTM zone covers"):
+            real.create_backscatter([polar], crs="auto")
+
+    def test_auto_hands_the_client_auto(self, processor: BurstProcessor) -> None:
+        burst = replace(_burst("2022-01-05"), _geometry=shapely.box(8.0, 46.0, 9.0, 47.0))
+        client = cast("MagicMock", processor.snap_client)
+        client.create_backscatter.return_value = OkResult(source=burst, result="rtc")
+
+        processor.create_backscatter([burst], crs="auto")
+
+        assert client.create_backscatter.call_args.args[1] == "auto"
+
+    def test_auto_without_the_burst_map_fails_before_any_item(
+        self, processor: BurstProcessor
+    ) -> None:
+        with (
+            patch(
+                "s1bursts.burst.create_s1_geometry_lut",
+                side_effect=BurstMapUnavailableError("not downloaded"),
+            ),
+            pytest.raises(BurstMapUnavailableError),
+        ):
+            processor.create_coherences([_pair()], crs="auto")
+
+        cast("MagicMock", processor.snap_client).create_coherence.assert_not_called()
 
     def test_overwrite_neither_checks_nor_skips(self, real: BurstProcessor) -> None:
         burst = _burst("2022-01-05")
