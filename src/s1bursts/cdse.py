@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from http import HTTPStatus
 import logging
 import threading
 import time
@@ -94,6 +95,51 @@ def _without_request(error: requests.RequestException) -> requests.RequestExcept
     except TypeError:
         # A subclass whose constructor takes more than a message.
         return requests.RequestException(str(error))
+
+
+# Longest part of an unusable catalog response quoted in an error message.
+_MAX_EXCERPT_CHARS = 500
+
+
+def _excerpt(text: str) -> str:
+    """Return ``text`` cut to a length fit for an error message."""
+    text = text.strip()
+    if len(text) <= _MAX_EXCERPT_CHARS:
+        return text
+    return f"{text[:_MAX_EXCERPT_CHARS]}... ({len(text)} characters)"
+
+
+def _catalog_detail(response: requests.Response) -> str | None:
+    """Return the explanation a catalog error response carries as ``detail.message``."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    message = detail.get("message") if isinstance(detail, dict) else detail
+    if not isinstance(message, str) or not message.strip():
+        return None
+    return _excerpt(message)
+
+
+def _catalog_http_error(error: requests.HTTPError) -> CatalogError:
+    """Describe a failed catalog request by its status and the catalog's explanation."""
+    response = error.response
+    if response is None:
+        return CatalogError(f"Failed to query bursts: {error}")
+    status = response.status_code
+    msg = f"Failed to query bursts: the catalog answered HTTP {status} {response.reason}"
+    if (detail := _catalog_detail(response)) is not None:
+        msg += f": {detail}"
+    msg += "."
+    if status == HTTPStatus.REQUEST_URI_TOO_LONG:
+        msg += (
+            f" The request URL is {len(response.url or '')} characters long, more than the "
+            "catalog accepts; an `intersects` geometry with many vertices is the usual "
+            "cause. Search with its bounding box, `shapely.box(*geometry.bounds)`, and keep "
+            "the bursts that reach the geometry with `BurstCollection.intersecting(geometry)`."
+        )
+    return CatalogError(msg, status_code=status)
 
 
 class CDSEAuth(AuthBase):
@@ -315,16 +361,29 @@ class CDSEResponse:
         Raises
         ------
         CatalogError
-            If an unknown EPSG code is found in the geometry definitions.
+            If a burst has no footprint, a footprint that is not a polygon in
+            EWKT, or one in an unknown EPSG code.
         """
         df_results = pd.DataFrame(self.value)
         geometry = gpd.GeoSeries([], crs=EPSG_WGS84, dtype="geometry")
 
         if not df_results.empty:
+            if _FOOTPRINT_COL not in df_results:
+                msg = f"The catalog returned bursts without a '{_FOOTPRINT_COL}'."
+                raise CatalogError(msg)
             # Bursts crossing the antimeridian come back as MULTIPOLYGON.
-            extracted = df_results[_FOOTPRINT_COL].str.extract(
-                r"SRID=(\d+);((?:MULTI)?POLYGON \(.*\))",
+            extracted = (
+                df_results[_FOOTPRINT_COL]
+                .astype("string")
+                .str.extract(
+                    r"SRID=(\d+);((?:MULTI)?POLYGON \(.*\))",
+                )
             )
+            unparsed = extracted[0].isna()
+            if unparsed.any():
+                footprint = df_results[_FOOTPRINT_COL][unparsed].iloc[0]
+                msg = f"The catalog returned an unrecognised footprint: {footprint!r:.200}"
+                raise CatalogError(msg)
             epsg_codes = extracted[0].astype(int)
             if not (epsg_codes == EPSG_WGS84).all():
                 msg = f"Found unknown EPSG codes:\n{epsg_codes}"
@@ -426,6 +485,17 @@ class CDSEBurstClient:
 
     # Search has no fallback endpoint, so retry its intermittent HTTP 500 responses.
     @retry_request(logger=logger, extra_status_codes=frozenset({500}))
+    def _get_catalog_page(self, params: dict[str, Any]) -> requests.Response:
+        """Request one page of the catalog, raising the ``requests`` error of a failure."""
+        # The catalog endpoint requires no authentication
+        response = requests.get(
+            url=self.catalog_endpoint,
+            params=params,
+            timeout=self.request_timeout,
+        )
+        response.raise_for_status()
+        return response
+
     def search_bursts(
         self,
         filters: list[str] | None = None,
@@ -457,25 +527,38 @@ class CDSEBurstClient:
         Raises
         ------
         CatalogError
-            If the API response is malformed or invalid.
-        requests.HTTPError
-            If the search request fails.
+            If the catalog cannot be reached, answers with an HTTP error, after
+            retrying a transient one, or returns a malformed response. Its
+            ``status_code`` is the HTTP status of an error response, such as
+            ``414`` for a filter geometry with too many vertices.
         """
         query = self._build_query_params(filters=filters, ascending=ascending, count=count)
-        # The catalog endpoint requires no authentication
-        response = requests.get(
-            url=self.catalog_endpoint,
-            params=query,
-            timeout=self.request_timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = self._get_catalog_page(query)
+        except requests.HTTPError as e:
+            raise _catalog_http_error(e) from e
+        except requests.RequestException as e:
+            msg = f"Failed to query bursts: the CDSE catalog could not be reached ({e})."
+            raise CatalogError(msg) from e
         content_type = response.headers.get("Content-Type", "")
         if not content_type.startswith("application/json"):
-            msg = f"Failed to query bursts: \n{response.text}"
+            msg = (
+                f"Failed to query bursts: the catalog answered with "
+                f"'{content_type or 'no content type'}' instead of JSON: "
+                f"{_excerpt(response.text)}"
+            )
             raise CatalogError(msg)
-        json_ = response.json()
-        if not isinstance(json_, dict) or json_.get("@odata.context") != "$metadata#Bursts":
-            msg = f"Failed to query bursts: \n{json_}"
+        try:
+            json_ = response.json()
+        except ValueError as e:
+            msg = f"Failed to query bursts: the catalog's response is not valid JSON ({e})."
+            raise CatalogError(msg) from e
+        if (
+            not isinstance(json_, dict)
+            or json_.get("@odata.context") != "$metadata#Bursts"
+            or not isinstance(json_.get("value"), list)
+        ):
+            msg = f"Failed to query bursts: unexpected response {_excerpt(str(json_))}"
             raise CatalogError(msg)
         return CDSEResponse.from_dict(json_)
 

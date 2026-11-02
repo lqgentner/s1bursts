@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +11,9 @@ import requests
 
 from s1bursts.cdse import MAX_PAGE_SIZE, CDSEAuth, CDSEBurstClient, CDSEResponse
 from s1bursts.errors import CatalogError, ConfigurationError
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 POLYGON_WKT = "POLYGON ((7 46, 8 46, 8 47, 7 47, 7 46))"
 
@@ -437,8 +440,201 @@ class TestCDSEBurstClient:
         ):
             client.search_bursts()
 
+    def test_search_bursts_rejects_a_response_without_value(self) -> None:
+        # Previously a bare KeyError from CDSEResponse.from_dict.
+        http_response = MagicMock()
+        http_response.headers = {"Content-Type": "application/json"}
+        http_response.json.return_value = {"@odata.context": "$metadata#Bursts"}
+
+        with (
+            patch("s1bursts.cdse.requests.get", return_value=http_response),
+            pytest.raises(CatalogError, match="unexpected response") as info,
+        ):
+            CDSEBurstClient().search_bursts()
+        assert info.value.status_code is None
+
+    def test_search_bursts_rejects_invalid_json(self) -> None:
+        # Previously requests' JSONDecodeError.
+        http_response = MagicMock()
+        http_response.headers = {"Content-Type": "application/json"}
+        http_response.json.side_effect = requests.JSONDecodeError("Expecting value", "<", 0)
+
+        with (
+            patch("s1bursts.cdse.requests.get", return_value=http_response),
+            pytest.raises(CatalogError, match="not valid JSON") as info,
+        ):
+            CDSEBurstClient().search_bursts()
+        assert isinstance(info.value.__cause__, requests.JSONDecodeError)
+
+    def test_search_bursts_quotes_a_long_non_json_body_in_part(self) -> None:
+        http_response = MagicMock()
+        http_response.headers = {"Content-Type": "text/html"}
+        http_response.text = "x" * 5000
+
+        with (
+            patch("s1bursts.cdse.requests.get", return_value=http_response),
+            pytest.raises(CatalogError, match=r"'text/html' instead of JSON") as info,
+        ):
+            CDSEBurstClient().search_bursts()
+        assert "(5000 characters)" in str(info.value)
+        assert len(str(info.value)) < 1000
+
     def test_download_burst_requires_auth(self, tmp_path: Any) -> None:
         client = CDSEBurstClient(auth=None)
 
         with pytest.raises(TypeError, match="Must be an instance of 'CDSEAuth'"):
             client.download_burst("some-id", save_path=tmp_path / "burst.zip")
+
+
+def _error_response(
+    status: int,
+    reason: str,
+    *,
+    body: bytes = b"",
+    url: str = "https://catalogue.example/odata/v1/Bursts",
+) -> requests.Response:
+    """Return a real catalog error response, so ``raise_for_status`` raises as it would."""
+    response = requests.Response()
+    response.status_code = status
+    response.reason = reason
+    response.url = url
+    response._content = body
+    response.headers["Content-Type"] = "application/json"
+    return response
+
+
+class TestSearchRequestFailures:
+    """A failed catalog request raises CatalogError with the HTTPError as its cause."""
+
+    @pytest.fixture(autouse=True)
+    def _no_retry_wait(self) -> Iterator[None]:
+        with patch("tenacity.nap.time.sleep"):
+            yield
+
+    def test_uri_too_long_explains_the_geometry(self) -> None:
+        # Previously a raw requests.HTTPError, e.g. for the outline of an MGRS cell.
+        url = "https://catalogue.example/odata/v1/Bursts?$filter=" + "x" * 15_000
+        response = _error_response(414, "Request-URI Too Large", url=url)
+
+        with (
+            patch("s1bursts.cdse.requests.get", return_value=response) as get,
+            pytest.raises(CatalogError, match="HTTP 414 Request-URI Too Large") as info,
+        ):
+            CDSEBurstClient().search_bursts(["BurstId eq 1"])
+
+        assert get.call_count == 1
+        assert info.value.status_code == 414
+        assert isinstance(info.value.__cause__, requests.HTTPError)
+        message = str(info.value)
+        assert f"{len(url)} characters long" in message
+        assert "shapely.box(*geometry.bounds)" in message
+        assert "BurstCollection.intersecting(geometry)" in message
+
+    def test_a_rejected_filter_names_the_catalogs_reason(self) -> None:
+        body = (
+            b'{"detail":{"message":"Invalid value: Geometry is invalid. '
+            b'Self-intersection[0.5 0.5]","request_id":"abc"}}'
+        )
+        response = _error_response(400, "Bad Request", body=body)
+
+        with (
+            patch("s1bursts.cdse.requests.get", return_value=response),
+            pytest.raises(CatalogError, match=r"Self-intersection\[0.5 0.5\]") as info,
+        ):
+            CDSEBurstClient().search_bursts()
+
+        assert info.value.status_code == 400
+        assert "intersecting" not in str(info.value)
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b"<html>Bad Request</html>",
+            b'{"detail": "Invalid field: Name"}',
+            b"[]",
+            b'{"detail": 1}',
+        ],
+    )
+    def test_any_error_body_is_reported(self, body: bytes) -> None:
+        response = _error_response(400, "Bad Request", body=body)
+
+        with (
+            patch("s1bursts.cdse.requests.get", return_value=response),
+            pytest.raises(CatalogError, match="HTTP 400 Bad Request") as info,
+        ):
+            CDSEBurstClient().search_bursts()
+
+        detail = "Invalid field: Name" in str(info.value)
+        assert detail == (body == b'{"detail": "Invalid field: Name"}')
+
+    def test_a_persistent_server_error_is_retried_then_raised(self) -> None:
+        with (
+            patch(
+                "s1bursts.cdse.requests.get",
+                side_effect=lambda **_kwargs: _error_response(500, "Internal Server Error"),
+            ) as get,
+            pytest.raises(CatalogError, match="HTTP 500") as info,
+        ):
+            CDSEBurstClient().search_bursts()
+
+        assert get.call_count == 3
+        assert info.value.status_code == 500
+
+    def test_a_transient_server_error_is_retried(self) -> None:
+        ok = MagicMock()
+        ok.headers = {"Content-Type": "application/json"}
+        empty: list[dict[str, Any]] = []
+        ok.json.return_value = {"@odata.context": "$metadata#Bursts", "value": empty}
+
+        with patch(
+            "s1bursts.cdse.requests.get",
+            side_effect=[_error_response(500, "Internal Server Error"), ok],
+        ) as get:
+            response = CDSEBurstClient().search_bursts()
+
+        assert get.call_count == 2
+        assert len(response) == 0
+
+    def test_an_unreachable_catalog_raises_catalog_error(self) -> None:
+        # Previously requests.ConnectionError.
+        with (
+            patch(
+                "s1bursts.cdse.requests.get",
+                side_effect=requests.ConnectionError("Name or service not known"),
+            ) as get,
+            pytest.raises(CatalogError, match="could not be reached") as info,
+        ):
+            CDSEBurstClient().search_bursts()
+
+        assert get.call_count == 3
+        assert info.value.status_code is None
+        assert isinstance(info.value.__cause__, requests.ConnectionError)
+
+    def test_an_http_error_without_response_is_reported(self) -> None:
+        with (
+            patch("s1bursts.cdse.requests.get", side_effect=requests.HTTPError("boom")),
+            pytest.raises(CatalogError, match="Failed to query bursts: boom") as info,
+        ):
+            CDSEBurstClient().search_bursts()
+
+        assert info.value.status_code is None
+
+
+class TestFootprintParsing:
+    def test_a_burst_without_footprint_raises_catalog_error(self) -> None:
+        value = make_response_value()
+        del value["Footprint"]
+        response = CDSEResponse(context="$metadata#Bursts", value=[value], count=1)
+
+        with pytest.raises(CatalogError, match="without a 'Footprint'"):
+            response.to_geodataframe()
+
+    @pytest.mark.parametrize("footprint", ["POINT (7 46)", None])
+    def test_an_unrecognised_footprint_raises_catalog_error(self, footprint: str | None) -> None:
+        # Previously a ValueError from casting NaN to int.
+        value = make_response_value()
+        value["Footprint"] = footprint
+        response = CDSEResponse(context="$metadata#Bursts", value=[value], count=1)
+
+        with pytest.raises(CatalogError, match="unrecognised footprint"):
+            response.to_geodataframe()

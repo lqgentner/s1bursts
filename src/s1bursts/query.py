@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Literal, Protocol, runtime_checkable
 
+from pyproj import CRS
+
 from s1bursts.time_range import TimeRange, _check_time_range
 
 type Polarization = Literal["VV", "VH", "HH", "HV"]
@@ -20,6 +22,8 @@ _MODES = ("IW", "EW")
 _SUB_SWATHS = ("IW1", "IW2", "IW3", "EW1", "EW2", "EW3", "EW4", "EW5")
 _PASS_DIRECTIONS = ("Ascending", "Descending")
 _PLATFORM_SERIAL_IDS = ("A", "B", "C", "D")
+
+_WGS84 = CRS.from_epsg(4326)
 
 # Sentinel-1's repeat cycle covers 175 relative orbits, numbered from 1.
 _MAX_REL_ORBIT_NUMBER = 175
@@ -47,7 +51,12 @@ class SearchQuery:
         its days, end included, and the same window can then name the composite
         built from the search.
     intersects
-        Spatial filter; bursts must intersect this geometry.
+        Spatial filter; bursts must intersect this geometry, in WGS 84
+        longitude and latitude. A geometry that carries a ``crs``, such as an
+        ``odc.geo`` ``Geometry``, must be in EPSG:4326. The catalog rejects a
+        geometry with too many vertices, such as the exact outline of an MGRS
+        cell; search with its bounding box and select with
+        ``BurstCollection.intersecting()``.
     burst_id
         Sentinel-1 relative burst ID, unique within each sub-swath. Must be positive.
     abs_burst_id
@@ -71,7 +80,8 @@ class SearchQuery:
     TypeError
         If ``time_range`` is not a ``TimeRange``.
     ValueError
-        If any value falls outside its accepted range or set of identifiers.
+        If any value falls outside its accepted range or set of identifiers,
+        or ``intersects`` is not a geometry, is empty or is not in WGS 84.
     """
 
     def __init__(
@@ -125,9 +135,24 @@ class SearchQuery:
 
     @staticmethod
     def _validate_geometry(geometry: HasWkt | None) -> HasWkt | None:
-        """Validate that geometry implements the WKT protocol."""
-        if geometry is not None and not isinstance(geometry, HasWkt):
+        """Validate that geometry implements the WKT protocol, is not empty and is in WGS 84."""
+        if geometry is None:
+            return None
+        if not isinstance(geometry, HasWkt):
             msg = "`intersects` must be a Geometry that implements `wkt`."
+            # Released as a ValueError; a TypeError would break callers that catch it.
+            raise ValueError(msg)  # noqa: TRY004
+        # An empty geometry would otherwise search without a spatial filter.
+        if getattr(geometry, "is_empty", False) is True:
+            msg = "`intersects` is an empty geometry; pass None to search without an area."
+            raise ValueError(msg)
+        # The catalog reads the WKT as longitude and latitude whatever the geometry's CRS.
+        crs = getattr(geometry, "crs", None)
+        if crs is not None and not CRS.from_user_input(crs).equals(_WGS84, ignore_axis_order=True):
+            msg = (
+                f"`intersects` is in {crs}, but the catalog takes WGS 84 longitude and "
+                'latitude; pass `geometry.to_crs("EPSG:4326")`.'
+            )
             raise ValueError(msg)
         return geometry
 

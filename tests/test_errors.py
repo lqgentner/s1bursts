@@ -215,7 +215,6 @@ def test_a_full_disk_in_the_gpt_output_is_environment_wide() -> None:
     ("exc_type", "builtin"),
     [
         (EmptyCompositeError, ValueError),
-        (InconsistentInputsError, ValueError),
         (CompositeInputError, OSError),
     ],
 )
@@ -228,3 +227,21 @@ def test_composite_errors_share_a_per_cell_base(
     assert issubclass(exc_type, builtin)
     assert issubclass(CompositeError, S1BurstsError)
     assert not issubclass(CompositeError, ValueError | OSError | BurstError)
+
+
+def test_inconsistent_inputs_stop_a_loop_over_cells() -> None:
+    """Inputs on another grid fail every cell they are given to alike."""
+    # Previously a CompositeError, so a loop over cells recorded it once per cell.
+    assert not issubclass(InconsistentInputsError, CompositeError)
+    assert issubclass(InconsistentInputsError, S1BurstsError)
+    assert issubclass(InconsistentInputsError, ValueError)
+
+
+def test_catalog_error_keeps_its_status_code_through_pickle() -> None:
+    error = CatalogError("HTTP 414", status_code=414)
+
+    restored = pickle.loads(pickle.dumps(error))  # noqa: S301
+
+    assert str(restored) == "HTTP 414"
+    assert restored.status_code == 414
+    assert CatalogError("malformed").status_code is None

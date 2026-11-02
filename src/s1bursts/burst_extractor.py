@@ -158,11 +158,19 @@ def _lookup_s3_path(product_name: str) -> str:
         timeout=30,
     )
     resp.raise_for_status()
-    values = resp.json().get("value", [])
+    body = resp.json()
+    values = body.get("value") if isinstance(body, dict) else None
+    if not isinstance(values, list):
+        msg = f"Unexpected CDSE catalogue response for product '{product_name}': {body!r:.200}"
+        raise BurstDownloadError(msg)
     if not values:
         msg = f"Product '{product_name}' not found in CDSE catalogue."
         raise BurstNotFoundError(msg)
-    return str(values[0]["S3Path"])
+    s3_path = values[0].get("S3Path") if isinstance(values[0], dict) else None
+    if not isinstance(s3_path, str):
+        msg = f"The CDSE catalogue entry of product '{product_name}' has no S3Path."
+        raise BurstDownloadError(msg)
+    return s3_path
 
 
 def _make_s3_upath(s3_path: str, settings: CDSES3Settings) -> UPath:

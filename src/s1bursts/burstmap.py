@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import functools
 from io import BytesIO
 import logging
 from typing import TYPE_CHECKING, Literal, cast, override
 from zipfile import ZipFile
 
+from freezebase.errors import DownloadError
 from freezebase.utils import format_valid_options
 from freezebase.vectools import drop_z_if_zero, simplify_multipolygons, write_parquet
 from freezebase.vectordata import DatasetMetadata, GeoVectorData
 import geopandas as gpd
 from pandas.api.types import CategoricalDtype
 from pyarrow import ArrowInvalid
+import requests
 
 from s1bursts.errors import BurstMapUnavailableError
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
     from shapely import MultiPolygon, Polygon
@@ -177,29 +181,32 @@ def download_burst_map(cache_dir: str | Path | None = None, *, mode: Mode = "IW"
     Raises
     ------
     BurstMapUnavailableError
-        If the downloaded archive holds no burst-ID map for ``mode``.
+        If the download fails, the downloaded archive is corrupt or holds no
+        burst-ID map for ``mode``, or a map prepared earlier is unreadable.
+        The message names the file to delete, and the cause is kept.
     """
     dataset = Sentinel1Bursts(cache_dir=cache_dir, mode=mode)
-    dataset.get_data(download=True)
+    with _reporting_unusable_map(dataset):
+        dataset.get_data(download=True)
     return dataset.processed_path
 
 
-def _load_indexed_burst_map(cache_dir: str | Path | None, mode: Mode) -> gpd.GeoDataFrame:
-    """Load the prepared burst map indexed by ``(burst_id, subswath_name)``.
+def _download_hint(mode: Mode) -> str:
+    """Return the call that downloads the burst-ID map of ``mode``."""
+    return f"`s1bursts.download_burst_map(mode='{mode}')`"
 
-    Does not download: the map is opt-in. Raises ``BurstMapUnavailableError``,
-    pointing at ``download_burst_map``, when the data has not been fetched yet
-    or its cached copy is corrupt.
-    """
-    dataset = Sentinel1Bursts(cache_dir=cache_dir, mode=mode)
-    download = f"`s1bursts.download_burst_map(mode='{mode}')`"
+
+@contextmanager
+def _reporting_unusable_map(dataset: Sentinel1Bursts) -> Iterator[None]:
+    """Report a burst-ID map that cannot be downloaded or read as ``BurstMapUnavailableError``."""
+    mode = dataset.mode
+    download = _download_hint(mode)
     try:
-        df = dataset.get_data(download=False)
-    except FileNotFoundError as e:
+        yield
+    except (requests.RequestException, DownloadError) as e:
         msg = (
-            f"The Sentinel-1 {mode} burst-ID map is required to look up this burst's "
-            "orbit/geometry, but it has not been downloaded. Fetch it once (~500 MB "
-            f"download) with {download}."
+            f"Downloading the Sentinel-1 {mode} burst-ID map from SAR-MPC failed: {e}. "
+            f"Try again with {download}."
         )
         raise BurstMapUnavailableError(msg) from e
     except ArrowInvalid as e:
@@ -218,6 +225,26 @@ def _load_indexed_burst_map(cache_dir: str | Path | None, mode: Mode) -> gpd.Geo
             f"'{dataset.raw_path}' and download it again with {download}."
         )
         raise BurstMapUnavailableError(msg) from e
+
+
+def _load_indexed_burst_map(cache_dir: str | Path | None, mode: Mode) -> gpd.GeoDataFrame:
+    """Load the prepared burst map indexed by ``(burst_id, subswath_name)``.
+
+    Does not download: the map is opt-in. Raises ``BurstMapUnavailableError``,
+    pointing at ``download_burst_map``, when the data has not been fetched yet
+    or its cached copy is corrupt.
+    """
+    dataset = Sentinel1Bursts(cache_dir=cache_dir, mode=mode)
+    with _reporting_unusable_map(dataset):
+        try:
+            df = dataset.get_data(download=False)
+        except FileNotFoundError as e:
+            msg = (
+                f"The Sentinel-1 {mode} burst-ID map is required to look up this burst's "
+                "orbit/geometry, but it has not been downloaded. Fetch it once (~500 MB "
+                f"download) with {_download_hint(mode)}."
+            )
+            raise BurstMapUnavailableError(msg) from e
     return df.set_index(["burst_id", "subswath_name"])
 
 

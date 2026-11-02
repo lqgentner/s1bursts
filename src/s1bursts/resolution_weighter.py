@@ -233,13 +233,19 @@ class ResolutionWeighter:
 
         Raises
         ------
+        TypeError
+            If ``time_range`` is not a ``TimeRange``.
         ValueError
-            If ``rtc_products`` is empty.
+            If ``rtc_products`` is empty, ``aggregation`` is neither ``"mean"``,
+            ``"median"`` nor a quantile level in ``(0, 1)``, or an input lies
+            outside ``time_range``.
         EmptyCompositeError
             If no input has a valid pixel in ``geobox``; nothing is written.
         InconsistentInputsError
-            If an input is on another CRS, pixel size or grid than
-            ``geobox``, or the inputs were made with different DEMs.
+            If the inputs differ in polarization, an input is on another
+            CRS, pixel size or grid than ``geobox``, or the inputs were made
+            with different DEMs. Not a ``CompositeError``: other cells given
+            these inputs would meet it too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -405,16 +411,23 @@ class ResolutionWeighter:
 
         Raises
         ------
+        TypeError
+            If ``time_range`` is not a ``TimeRange``.
         ValueError
-            If ``coh_products`` or ``rtc_products`` is empty.
+            If ``coh_products`` or ``rtc_products`` is empty, ``aggregation``
+            is neither ``"mean"``, ``"median"`` nor a quantile level in
+            ``(0, 1)``, or an input lies outside ``time_range``.
         EmptyCompositeError
             If no input has a valid pixel in ``geobox``; nothing is written.
         InconsistentInputsError
-            If an input is on another CRS, pixel size or grid than
-            ``geobox``, the inputs were made with different DEMs, or no RTC
-            product supplies the scattering area of an observation.
+            If the inputs differ in polarization or temporal baseline, an
+            input is on another CRS, pixel size or grid than ``geobox``, or
+            the inputs were made with different DEMs. Not a
+            ``CompositeError``: other cells given these inputs would meet it
+            too.
         CompositeInputError
-            If an input product is missing or cannot be read.
+            If an input product is missing or cannot be read, or no RTC product
+            supplies the scattering area of an observation.
         ProductSettingsMismatchError
             If ``overwrite`` is ``False`` and an existing layer file records
             another grid than ``geobox``, other compositing parameters, or
@@ -576,14 +589,20 @@ class ResolutionWeighter:
 
         Raises
         ------
+        TypeError
+            If ``time_range`` is not a ``TimeRange``.
         ValueError
-            If ``rtc_products`` is empty.
+            If ``rtc_products`` is empty, ``aggregation`` is neither ``"mean"``,
+            ``"median"`` nor a quantile level in ``(0, 1)``, or an input lies
+            outside ``time_range``.
         EmptyCompositeError
             If no input of any direction has a valid pixel in ``geobox``;
             nothing is written.
         InconsistentInputsError
-            If an input is on another CRS, pixel size or grid than
-            ``geobox``, or the inputs were made with different DEMs.
+            If the inputs differ in polarization, an input is on another
+            CRS, pixel size or grid than ``geobox``, or the inputs were made
+            with different DEMs. Not a ``CompositeError``: other cells given
+            these inputs would meet it too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -675,14 +694,20 @@ class ResolutionWeighter:
 
         Raises
         ------
+        TypeError
+            If ``time_range`` is not a ``TimeRange``.
         ValueError
-            If ``gtc_products`` is empty.
+            If ``gtc_products`` is empty, ``aggregation`` is neither ``"mean"``,
+            ``"median"`` nor a quantile level in ``(0, 1)``, or an input lies
+            outside ``time_range``.
         EmptyCompositeError
             If no input of any direction has a valid pixel in ``geobox``;
             nothing is written.
         InconsistentInputsError
-            If an input is on another CRS, pixel size or grid than
-            ``geobox``, or the inputs were made with different DEMs.
+            If the inputs differ in polarization, an input is on another
+            CRS, pixel size or grid than ``geobox``, or the inputs were made
+            with different DEMs. Not a ``CompositeError``: other cells given
+            these inputs would meet it too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -922,14 +947,21 @@ class ResolutionWeighter:
 
         Raises
         ------
+        TypeError
+            If ``time_range`` is not a ``TimeRange``.
         ValueError
-            If ``coh_products`` is empty.
+            If ``coh_products`` is empty, ``aggregation`` is neither ``"mean"``,
+            ``"median"`` nor a quantile level in ``(0, 1)``, or an input lies
+            outside ``time_range``.
         EmptyCompositeError
             If no input of any direction has a valid pixel in ``geobox``;
             nothing is written.
         InconsistentInputsError
-            If an input is on another CRS, pixel size or grid than
-            ``geobox``, or the inputs were made with different DEMs.
+            If the inputs differ in polarization or temporal baseline, an
+            input is on another CRS, pixel size or grid than ``geobox``, or
+            the inputs were made with different DEMs. Not a
+            ``CompositeError``: other cells given these inputs would meet it
+            too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -996,7 +1028,7 @@ class ResolutionWeighter:
 
     @staticmethod
     def _check_baseline_days(products: Sequence[CoherenceProduct]) -> int:
-        """Return the common temporal baseline, or raise ValueError if products differ.
+        """Return the common temporal baseline, or raise InconsistentInputsError if they differ.
 
         Coherence falls off with the baseline, so mixing 12-day and 24-day
         pairs averages two different quantities — and the composite carries a
@@ -1006,7 +1038,7 @@ class ResolutionWeighter:
         if len(baselines) != 1:
             listed = ", ".join(str(b) for b in sorted(baselines))
             msg = f"All coherence products must share a temporal baseline; got {listed} days."
-            raise ValueError(msg)
+            raise InconsistentInputsError(msg)
         return baselines.pop()
 
     @staticmethod
@@ -1024,11 +1056,12 @@ class ResolutionWeighter:
 
     @staticmethod
     def _check_polarization(products: Sequence[ComposableProduct]) -> Polarization:
-        """Return the common polarization or raise ValueError if products differ."""
+        """Return the common polarization or raise InconsistentInputsError if products differ."""
         polarization = products[0].polarization
         if not all(p.polarization == polarization for p in products):
-            msg = "All products must have the same polarization."
-            raise ValueError(msg)
+            listed = ", ".join(sorted({p.polarization for p in products}))
+            msg = f"All products must have the same polarization; got {listed}."
+            raise InconsistentInputsError(msg)
         return polarization
 
     def _load_band(
@@ -1459,7 +1492,7 @@ class ResolutionWeighter:
         if missing:
             formatted = ", ".join(f"(orbit {orbit}, {date.date()})" for orbit, date in missing)
             msg = f"No matching RTC scattering area for orbit/date group(s): {formatted}"
-            raise InconsistentInputsError(msg)
+            raise CompositeInputError(msg)
 
     @staticmethod
     def _calc_weights(

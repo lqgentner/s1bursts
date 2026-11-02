@@ -51,6 +51,15 @@ def _describe(error: Exception) -> str:
     return f"{type(error).__name__}: {error}"
 
 
+def _check_endpoint(endpoint: object) -> Endpoint:
+    """Return a download endpoint by its canonical name, or raise ``ValueError``."""
+    for name in _ENDPOINT_LABELS:
+        if isinstance(endpoint, str) and endpoint.lower() == name:
+            return name
+    msg = f"`endpoint` must be 'odata' or 's3', received '{endpoint}'"
+    raise ValueError(msg)
+
+
 def _cdse_id_present(cdse_id: str | None) -> TypeGuard[str]:
     """Type guard narrowing a burst's ``cdse_id`` to ``str`` when present."""
     return cdse_id is not None
@@ -88,6 +97,11 @@ class BurstCatalog:
     default_endpoint
         Default download endpoint. If a download fails, the other endpoint
         is tried automatically.
+
+    Raises
+    ------
+    ValueError
+        If ``default_endpoint`` is neither ``"odata"`` nor ``"s3"``.
     """
 
     def __init__(
@@ -103,7 +117,7 @@ class BurstCatalog:
         self.file_manager = file_manager
         self.show_progress = show_progress
         self.continue_on_error = continue_on_error
-        self.default_endpoint: Endpoint = default_endpoint
+        self.default_endpoint: Endpoint = _check_endpoint(default_endpoint)
         # Cache source-confirmed absences to avoid repeating both endpoint attempts.
         self._unavailable_bursts: dict[Burst, BurstNotFoundError] = {}
         self._unavailable_lock = threading.Lock()
@@ -165,7 +179,9 @@ class BurstCatalog:
             If more than 1000 bursts match, the most one catalog request
             returns. Narrow the query, or combine several searches with ``+``.
         CatalogError
-            If the catalog's response is malformed or does not hold the
+            If the catalog cannot be reached or rejects the request, such as
+            with HTTP 414 for an ``intersects`` geometry with too many
+            vertices, or if its response is malformed or does not hold the
             number of bursts it reports as matching.
         """
         filters = self._convert_query_to_filters(query)
@@ -219,6 +235,9 @@ class BurstCatalog:
         ------
         TypeError
             If an item is neither a ``Burst`` nor a ``BurstPair``.
+        ValueError
+            If ``endpoint`` is neither ``"odata"`` nor ``"s3"``, raised before
+            any burst is downloaded.
         ConfigurationError
             If an environment variable holds an invalid value, or CDSE rejects
             the username and password with OData as ``endpoint``, which the
@@ -230,6 +249,10 @@ class BurstCatalog:
             every remaining burst alike.
         """
         start_time = time.time()
+        # Before any burst is looked at, so that it fails even if every SLC exists.
+        endpoint_to_use = _check_endpoint(
+            endpoint if endpoint is not None else self.default_endpoint
+        )
         burst_list = self._unique_bursts(bursts)
         # The credentials may have been corrected since a previous call.
         self._auth_rejected = None
@@ -244,9 +267,6 @@ class BurstCatalog:
                 results.append(OkResult(source=burst, result=burst, skipped=True))
             else:
                 bursts_to_download.append(burst)
-
-        # Determine which endpoint to use
-        endpoint_to_use = endpoint if endpoint is not None else self.default_endpoint
 
         # Download remaining bursts if any. Authentication is deferred to the
         # OData code path (see `_ensure_auth`) so that `endpoint="s3"` works with
@@ -346,17 +366,14 @@ class BurstCatalog:
         # Determine primary and fallback endpoints
         primary_name: Endpoint
         fallback_name: Endpoint
-        if endpoint.lower() == "odata":
+        if endpoint == "odata":
             primary_name, fallback_name = "odata", "s3"
             primary_method = self._download_burst_odata
             fallback_method = self._download_burst_s3
-        elif endpoint.lower() == "s3":
+        else:
             primary_name, fallback_name = "s3", "odata"
             primary_method = self._download_burst_s3
             fallback_method = partial(self._download_burst_odata, primary=False)
-        else:
-            msg = f"`endpoint` must be 'odata' or 's3', received '{endpoint}'"
-            raise ValueError(msg)
 
         # Try primary endpoint
         primary_result = primary_method(burst)
@@ -516,7 +533,7 @@ class BurstCatalog:
                 f"ContentDate/Start ge {start.strftime(fmt)} and "
                 f"ContentDate/Start lt {end.strftime(fmt)}",
             )
-        if query.intersects:
+        if query.intersects is not None:
             filters.append(
                 f"OData.CSC.Intersects(area=geography'SRID=4326;{query.intersects.wkt}')",
             )

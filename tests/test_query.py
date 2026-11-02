@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from odc.geo import geom as odc_geom
 from pandas import Timestamp
 import pytest
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
 from s1bursts.query import SearchQuery
 from s1bursts.time_range import TimeRange
@@ -56,6 +57,29 @@ class TestGeometry:
         with pytest.raises(ValueError, match="implements `wkt`"):
             # pyrefly: ignore [bad-argument-type]
             SearchQuery(intersects="POINT (1 2)")
+
+    @pytest.mark.parametrize(
+        "geometry",
+        [Polygon(), odc_geom.Geometry(Polygon(), "EPSG:4326")],
+        ids=["shapely", "odc"],
+    )
+    def test_rejects_an_empty_geometry(self, geometry: Polygon | odc_geom.Geometry) -> None:
+        # Previously dropped, so the search ran without a spatial filter.
+        with pytest.raises(ValueError, match="empty geometry"):
+            SearchQuery(intersects=geometry)
+
+    def test_rejects_a_geometry_in_another_crs(self) -> None:
+        # Previously sent as longitude and latitude, so the search silently found nothing.
+        utm = odc_geom.box(350_000, 5_100_000, 360_000, 5_110_000, "EPSG:32632")
+
+        with pytest.raises(ValueError, match=r'EPSG:32632.*to_crs\("EPSG:4326"\)'):
+            SearchQuery(intersects=utm)
+
+    @pytest.mark.parametrize("crs", ["EPSG:4326", "OGC:CRS84", None])
+    def test_accepts_a_geometry_in_wgs84(self, crs: str | None) -> None:
+        geometry = odc_geom.box(7.0, 46.0, 8.0, 47.0, crs)
+
+        assert SearchQuery(intersects=geometry).intersects is geometry
 
 
 class TestIntValidation:

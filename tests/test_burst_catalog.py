@@ -13,9 +13,9 @@ from unittest.mock import MagicMock, patch
 from freezebase.errors import DownloadError
 from pandas import Timestamp
 import pytest
-from requests import HTTPError, Request
+from requests import HTTPError, Request, Response
 from requests.exceptions import ChunkedEncodingError
-from shapely.geometry import box
+from shapely.geometry import Point, box
 from upath import UPath
 
 from s1bursts.burst import Burst, BurstCollection, BurstPair
@@ -173,12 +173,42 @@ class TestDownloadDispatch:
 
         assert summary.n_processed == 3
 
-    def test_rejects_unknown_endpoint(self) -> None:
+    @pytest.mark.parametrize("all_exist", [False, True])
+    def test_rejects_unknown_endpoint_before_any_download(self, *, all_exist: bool) -> None:
+        # Previously raised from each worker, noting the stop as if bursts had run,
+        # and not at all when every SLC existed.
+        file_manager = MagicMock()
+        file_manager.get_slc_path.return_value.exists.return_value = all_exist
+        catalog = BurstCatalog(file_manager=file_manager, auth=MagicMock())
+
+        with (
+            patch.object(catalog, "_download_single_burst") as download_single,
+            pytest.raises(ValueError, match="must be 'odata' or 's3', received 'ftp'") as info,
+        ):
+            # pyrefly: ignore [bad-argument-type]
+            catalog.download([_make_burst()], endpoint="ftp")
+
+        download_single.assert_not_called()
+        assert not getattr(info.value, "__notes__", None)
+
+    def test_rejects_unknown_default_endpoint(self) -> None:
+        with pytest.raises(ValueError, match="must be 'odata' or 's3', received 'ftp'"):
+            # pyrefly: ignore [bad-argument-type]
+            BurstCatalog(file_manager=MagicMock(), default_endpoint="ftp")
+
+    @pytest.mark.parametrize(("given", "primary"), [("ODATA", "odata"), ("S3", "s3")])
+    def test_endpoint_names_ignore_case(self, given: str, primary: str) -> None:
         catalog = _make_catalog()
 
-        with pytest.raises(ValueError, match="must be 'odata' or 's3'"):
+        with patch.object(
+            catalog,
+            "_download_single_burst",
+            side_effect=lambda b, _e: OkResult(source=b, result=b),
+        ) as download_single:
             # pyrefly: ignore [bad-argument-type]
-            catalog._download_single_burst(_make_burst(), "ftp")
+            catalog.download([_make_burst()], endpoint=given)
+
+        assert download_single.call_args.args[1] == primary
 
     def test_skips_existing_files_without_auth(self) -> None:
         file_manager = MagicMock()
@@ -623,6 +653,24 @@ class TestSearch:
 
         with pytest.raises(CatalogError, match=r"reported 5 matching bursts but returned 3"):
             catalog.search(SearchQuery())
+
+    def test_a_geometry_the_catalog_rejects_raises_catalog_error(self) -> None:
+        # Previously a raw requests.HTTPError for the outline of an MGRS cell.
+        catalog = _make_catalog()
+        outline = Point(7.07, 46.1).buffer(0.05, quad_segs=100)
+        response = Response()
+        response.status_code = 414
+        response.reason = "Request-URI Too Large"
+        response.url = "https://catalogue.example/odata/v1/Bursts?" + "x" * 9000
+
+        with (
+            patch("s1bursts.cdse.requests.get", return_value=response),
+            pytest.raises(CatalogError, match="HTTP 414") as info,
+        ):
+            catalog.search(SearchQuery(intersects=outline))
+
+        assert info.value.status_code == 414
+        assert "intersecting(geometry)" in str(info.value)
 
     def test_a_response_without_count_raises(self) -> None:
         catalog, client = self._catalog(n_values=2, count=2)
