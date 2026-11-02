@@ -285,6 +285,12 @@ class FileManager:
         Note: Date filtering is not supported. Use list comprehension on results
         if date filtering is needed.
 
+        SLC file names record the relative orbit but neither the footprint nor
+        the pass direction. A burst found here takes its ``geometry`` and
+        ``pass_direction``, and so the names of the products created from it,
+        from the burst-ID map, which is loaded once per process; see
+        ``s1bursts.burstmap.download_burst_map``.
+
         Parameters
         ----------
         rel_orbit_number
