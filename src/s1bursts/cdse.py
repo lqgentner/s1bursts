@@ -136,8 +136,9 @@ def _catalog_http_error(error: requests.HTTPError) -> CatalogError:
         msg += (
             f" The request URL is {len(response.url or '')} characters long, more than the "
             "catalog accepts; an `intersects` geometry with many vertices is the usual "
-            "cause. Search with its bounding box, `shapely.box(*geometry.bounds)`, and keep "
-            "the bursts that reach the geometry with `BurstCollection.intersecting(geometry)`."
+            "cause. Search with its bounding box, `shapely.box(*geometry.bounds)`, or "
+            "`shapely.box(*geometry.boundingbox)` for an `odc.geo` geometry, and keep the "
+            "bursts that reach the geometry with `BurstCollection.intersecting(geometry)`."
         )
     return CatalogError(msg, status_code=status)
 

@@ -185,6 +185,7 @@ class TestDownloadDispatch:
             patch.object(catalog, "_download_single_burst") as download_single,
             pytest.raises(ValueError, match="must be 'odata' or 's3', received 'ftp'") as info,
         ):
+            # An endpoint outside the Literal is the input under test.
             # pyrefly: ignore [bad-argument-type]
             catalog.download([_make_burst()], endpoint="ftp")
 
@@ -193,6 +194,7 @@ class TestDownloadDispatch:
 
     def test_rejects_unknown_default_endpoint(self) -> None:
         with pytest.raises(ValueError, match="must be 'odata' or 's3', received 'ftp'"):
+            # An endpoint outside the Literal is the input under test.
             # pyrefly: ignore [bad-argument-type]
             BurstCatalog(file_manager=MagicMock(), default_endpoint="ftp")
 
@@ -205,6 +207,7 @@ class TestDownloadDispatch:
             "_download_single_burst",
             side_effect=lambda b, _e: OkResult(source=b, result=b),
         ) as download_single:
+            # Upper-case names are outside the Literal but accepted at runtime.
             # pyrefly: ignore [bad-argument-type]
             catalog.download([_make_burst()], endpoint=given)
 
@@ -411,6 +414,31 @@ class TestStoppingADownload:
 
 
 class TestEndpointWrappers:
+    def test_a_malformed_s3_lookup_falls_back_to_odata(self) -> None:
+        # Previously the lookup's KeyError stopped the whole download.
+        catalog = _make_catalog()
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            cdse_id="cdse-id",
+            parent_product_name="S1A_IW_SLC__1SDV.SAFE",
+        )
+        lookup = MagicMock()
+        lookup.json.return_value = {"value": [{"Name": "S1A_IW_SLC__1SDV.SAFE"}]}
+
+        with (
+            patch("s1bursts.burst_extractor.requests.get", return_value=lookup),
+            patch.object(catalog.client, "download_burst") as download_odata,
+        ):
+            summary = catalog.download([burst], endpoint="s3")
+
+        lookup.raise_for_status.assert_called_once()
+        download_odata.assert_called_once()
+        assert summary.n_failed == 0
+        assert summary.products == [burst]
+
     def test_odata_requires_cdse_id(self) -> None:
         catalog = _make_catalog()
         burst = _make_burst()  # has no cdse_id

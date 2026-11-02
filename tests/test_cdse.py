@@ -528,6 +528,7 @@ class TestSearchRequestFailures:
         message = str(info.value)
         assert f"{len(url)} characters long" in message
         assert "shapely.box(*geometry.bounds)" in message
+        assert "shapely.box(*geometry.boundingbox)" in message
         assert "BurstCollection.intersecting(geometry)" in message
 
     def test_a_rejected_filter_names_the_catalogs_reason(self) -> None:

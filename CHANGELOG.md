@@ -602,11 +602,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Fixed
 
-- `SearchQuery(intersects=...)` rejects an empty geometry and one whose
-  `crs` is not WGS 84 with `ValueError`. An empty geometry was dropped, so
-  the search ran without a spatial filter, and an `odc.geo` geometry in
-  another CRS, such as an MGRS cell's UTM extent, was sent as if its
-  coordinates were longitude and latitude, so the search found nothing.
+- **Breaking:** `SearchQuery(intersects=...)` rejects an empty geometry and
+  one whose `crs` is not WGS 84 with `ValueError`. An empty geometry was
+  dropped, so the search ran without a spatial filter, and an `odc.geo`
+  geometry in another CRS, such as an MGRS cell's UTM extent, was sent as if
+  its coordinates were longitude and latitude, so the search found nothing.
 
   ```python
   # before: silently no bursts
@@ -614,10 +614,18 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   # after
   SearchQuery(intersects=cell.extent.to_crs("EPSG:4326"))
   ```
-- `BurstCatalog` rejects an unknown `endpoint` or `default_endpoint` with
-  `ValueError` before any burst is downloaded. It was raised from the first
-  download thread, with a note claiming bursts had finished, and not at all
-  when every SLC already existed.
+- **Breaking:** `BurstCatalog` rejects an unknown `endpoint` or
+  `default_endpoint` with `ValueError` before any burst is downloaded. It was
+  raised from the first download thread, with a note claiming bursts had
+  finished, and not at all when every SLC already existed, so a catalog
+  created with an invalid `default_endpoint` used to construct without error.
+
+  ```python
+  # before: constructed, failed only once a burst was downloaded
+  BurstCatalog(fm, default_endpoint="S3_bucket")
+  # after: ValueError at once; pass "odata" or "s3"
+  BurstCatalog(fm, default_endpoint="s3")
+  ```
 - An S3 download whose catalogue lookup returns a malformed response fails
   that burst with `BurstDownloadError`, so the OData endpoint is still tried
   and the batch continues. It raised `KeyError` or `AttributeError`, which

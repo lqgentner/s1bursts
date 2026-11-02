@@ -183,7 +183,9 @@ def download_burst_map(cache_dir: str | Path | None = None, *, mode: Mode = "IW"
     BurstMapUnavailableError
         If the download fails, the downloaded archive is corrupt or holds no
         burst-ID map for ``mode``, or a map prepared earlier is unreadable.
-        The message names the file to delete, and the cause is kept.
+        A failed download keeps the ``requests`` or freezebase error as the
+        cause; a corrupt archive or unreadable prepared map keeps the read
+        error and names the file to delete.
     """
     dataset = Sentinel1Bursts(cache_dir=cache_dir, mode=mode)
     with _reporting_unusable_map(dataset):
