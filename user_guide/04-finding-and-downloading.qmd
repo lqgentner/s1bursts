@@ -29,7 +29,7 @@ bursts
 ```
 
 Even a small area usually returns several footprints. Bursts from different
-orbits and sub-swaths overlap the same few kilometres, each seeing the ground
+orbits and sub-swaths overlap the same few kilometers, each seeing the ground
 from a different direction. The area selects whole bursts and does not crop
 them. A `TimeRange` covers whole days, and both end dates are included.
 

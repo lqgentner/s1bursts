@@ -652,7 +652,7 @@ class CDSEBurstClient:
         Raises
         ------
         ValueError
-            If ``sub_swath`` is not a recognised sub-swath identifier.
+            If ``sub_swath`` is not a recognized sub-swath identifier.
         BurstNotFoundError
             If the parent product or the requested burst cannot be found.
         BurstDownloadError

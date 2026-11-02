@@ -1,4 +1,8 @@
-# s1bursts
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/lqgentner/s1bursts/main/assets/s1burst-logo.svg" alt="s1bursts" width="360">
+
+*Sentinel-1 download, processing and compositing made easy.*
 
 [![CI](https://github.com/lqgentner/s1bursts/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lqgentner/s1bursts/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/lqgentner/s1bursts/graph/badge.svg?token=V6PEU2U4DW)](https://codecov.io/gh/lqgentner/s1bursts)
@@ -9,24 +13,30 @@
 [![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-Sentinel-1 download and processing made easy.
+</div>
 
-s1bursts finds, downloads and processes Sentinel-1 synthetic aperture radar
-data from Python. It downloads from the
-[Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu/) only the
-part of each acquisition that covers your area (about 100 MB instead of a 4 GB
-scene) and processes it with [ESA SNAP](https://step.esa.int/main/toolboxes/snap/).
-This makes dense time series of a fixed area practical.
+s1bursts makes Sentinel-1 synthetic aperture radar (SAR) data easy to use from
+Python. It searches and downloads the data from the
+[Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu/) (CDSE),
+processes it with [ESA SNAP](https://step.esa.int/main/toolboxes/snap/) into
+backscatter and coherence, and combines the results into composites on a
+fixed grid.
+
+It works with bursts, the smallest part of a Sentinel-1 scene that can be
+processed on its own. A burst is about 100 MB instead of a 4 GB scene, so you
+download and process only the area you are interested in. This makes dense
+time series of a fixed area practical.
 
 ## Features
 
 - **Search** the CDSE catalog by area, time window, polarization, orbit and more
-- **Download** with automatic fallback between CDSE's burst service and its S3
-  storage
-- **Process** to terrain-corrected backscatter and coherence, with SNAP
-  processing graphs built from Python settings
-- **Composite** many acquisitions onto the 10 km MGRS grid, weighting each pixel
-  towards the acquisitions that see it in the finest detail
+- **Download** single bursts, with automatic fallback between CDSE's burst
+  service and its S3 storage
+- **Process** to terrain-corrected backscatter and interferometric coherence,
+  with SNAP processing graphs built from Python arguments
+- **Composite** many acquisitions onto the 10 km MGRS grid with local resolution
+  weighting, which favors the acquisitions with the highest spatial
+  resolution at each pixel
 - **Store** everything on local disk or S3
 
 ## Installation
@@ -42,8 +52,8 @@ covers both.
 
 ## Quick start
 
-With your CDSE credentials in the environment, download and process a pair of
-acquisitions over the Aletsch glacier:
+With your CDSE credentials in the environment, download and process two
+acquisitions of one burst over the Aletsch glacier, 12 days apart:
 
 ```python
 from s1bursts import BurstCatalog, BurstProcessor, FileManager, SearchQuery, TimeRange
@@ -53,19 +63,20 @@ catalog = BurstCatalog(fm)
 
 bursts = catalog.search(
     SearchQuery(
-        time_range=TimeRange("2022-08-01", "2022-08-31"),
+        time_range=TimeRange("2022-08-01", "2022-08-13"),
         burst_id=30346,
         sub_swath="IW1",
         polarization="VV",
     )
 )
-pair = bursts.find_pairs(baseline=12)[:1]
-catalog.download(pair).raise_on_failure()
+catalog.download(bursts).raise_on_failure()
 
 # "auto" geocodes each burst in its own UTM zone, here EPSG:32632.
 processor = BurstProcessor(fm)
-rtc = processor.create_backscatter(pair.unpair(), crs="auto").raise_on_failure()
-coherence = processor.create_coherences(pair, crs="auto").raise_on_failure()
+rtc = processor.create_backscatter(bursts, crs="auto").raise_on_failure()
+
+pairs = bursts.find_pairs(baseline=12)
+coherence = processor.create_coherences(pairs, crs="auto").raise_on_failure()
 ```
 
 ## Documentation

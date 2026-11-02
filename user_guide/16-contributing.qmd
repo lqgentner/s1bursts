@@ -9,9 +9,7 @@ Contributions are welcome as issues and pull requests on
 [GitHub](https://github.com/lqgentner/s1bursts). This page covers setting up a
 development environment and building this documentation.
 [`AGENTS.md`](https://github.com/lqgentner/s1bursts/blob/main/AGENTS.md)
-holds the full development guidelines, and the
-[pipeline design notes](https://github.com/lqgentner/s1bursts/blob/main/docs/SENTINEL1_LRW_PIPELINE.md)
-describe the product model in depth.
+holds the full development guidelines and the reasoning behind the design.
 
 ## Set up and test
 

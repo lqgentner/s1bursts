@@ -5,17 +5,18 @@ guide-section: "How-to Guides"
 
 # Processing with SNAP
 
-`BurstProcessor` turns downloaded bursts into map-projected GeoTIFFs. It runs
+`BurstProcessor` turns downloaded bursts into geocoded GeoTIFFs. It runs
 SNAP once for every burst, or once for every pair of bursts, and skips products
 that already exist.
 
 ## How a processing call works
 
-Every `create_*` method takes the bursts, the output map projection, and
+Every `create_*` method takes the bursts, the UTM zone of the output, and
 optionally a settings object. From the settings, s1bursts builds the SNAP
 processing graph, the chain of SNAP steps that turns a burst into a product.
-The settings describe how to process and suit every burst alike. The projection
-depends on where the bursts are, so it is passed separately as `crs`:
+The settings describe how to process and suit every burst alike. The UTM zone
+depends on where the bursts are, so it is passed separately as `crs`, the
+coordinate reference system (CRS):
 
 ```{.python}
 from s1bursts import BurstProcessor, RTCConfig
@@ -28,8 +29,7 @@ Products are always projected in a WGS 84 / UTM zone. `crs="auto"` takes each
 burst's own zone, its `utm_zone`, which suits bursts used on their own, such as
 a time series: the zone depends only on the footprint, so every date of a burst
 lands in the same one. To fix the zone instead, pass it as a string, an EPSG
-code or a `pyproj.CRS`, such as `crs="EPSG:32632"` for zone 32 North; any other
-projection raises a `ValueError` before the first burst is processed.
+code or a `pyproj.CRS`, such as `crs="EPSG:32632"` for zone 32 North.
 
 If you plan to [composite](compositing.qmd), choose the zone before processing:
 a composite accepts only products in the UTM zone and pixel size of its grid
@@ -42,7 +42,7 @@ Each product has its own method and settings object:
 |---|---|---|---|
 | `create_backscatter()` | Bursts | `RTCConfig` or `GTCConfig` | Backscatter of each acquisition |
 | `create_coherences()` | Pairs | `CoherenceConfig` | Coherence between two acquisitions |
-| `create_interferograms()` | Pairs | `InterferogramConfig` | Phase difference between two acquisitions |
+| `create_interferograms()` | Pairs | `InterferogramConfig` | Complex interferogram and the intensity of both acquisitions |
 
 The settings objects share most fields. The one you are most likely to change
 is the pixel size, `grid_spacing`, which is 10 m by default; a smaller pixel
@@ -63,12 +63,12 @@ correction (RTC), following the terrain-flattening method of
 [Small (2011)](https://doi.org/10.1109/TGRS.2011.2120616). RTC divides each
 pixel by the area of ground that contributed to it, so the remaining
 differences in brightness come from the surface itself. The result is called
-gamma-0 (`gamma0`).
+gamma-0.
 
 Use RTC unless you have a reason not to; only RTC products can be composited
 with [resolution weighting](resolution-weighting.qmd). The settings object
 selects the product: `RTCConfig`, the default, gives RTC, and `GTCConfig` gives
-geometrically terrain-corrected (GTC) backscatter, called beta-0 (`beta0`),
+geometrically terrain-corrected (GTC) backscatter, called beta-0,
 which places pixels correctly on the map but keeps the slope brightness:
 
 ```{.python}
@@ -81,7 +81,8 @@ gtc = processor.create_backscatter(bursts, crs="auto", config=GTCConfig())
 
 Coherence measures how similar two acquisitions of the same footprint are, from
 0 to 1. It drops wherever the surface changed between the two dates, for
-example through snowfall, melt or vegetation growth. The pairs come from
+example through snowfall, melt, vegetation growth or movement, such as the
+flow of a glacier. The pairs come from
 [`find_pairs()`](finding-and-downloading.qmd#pair-acquisitions):
 
 ```{.python}
@@ -89,13 +90,14 @@ pairs = bursts.find_pairs(baseline=12)
 coherence = processor.create_coherences(pairs, crs="auto")
 ```
 
-Coherence is estimated over a small window of neighbouring pixels, set by
+Coherence is estimated over a small window of neighboring pixels, set by
 `CoherenceConfig(window=...)`. A larger window gives smoother values at a
 coarser resolution.
 
-`create_interferograms()` takes the same pairs and writes the interferometric
-phase. s1bursts does not unwrap that phase, so turning it into displacement
-needs other software.
+`create_interferograms()` takes the same pairs and writes the complex
+interferogram, whose angle is the interferometric phase, together with the
+intensity of both acquisitions. s1bursts does not unwrap the phase, so turning
+it into displacement needs other software.
 
 ## Run several jobs at once
 

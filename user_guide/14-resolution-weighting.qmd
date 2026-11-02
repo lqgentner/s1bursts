@@ -6,7 +6,7 @@ guide-section: "Background"
 # Local resolution weighting
 
 Local resolution weighting (LRW) combines acquisitions so that each pixel comes
-mostly from the acquisitions that see it in the finest detail. The method was
+mostly from the acquisitions with the highest spatial resolution there. The method was
 introduced by Small et al. (2022)[^small] and is how s1bursts composes RTC
 backscatter and coherence.
 
@@ -37,7 +37,7 @@ much there. A pixel without a valid area, such as one in shadow, gets no
 weight.
 
 Bursts from the same orbit and date are joined first, so the overlap between
-neighbouring bursts is not counted twice.
+neighboring bursts is not counted twice.
 
 ## The quality layers
 

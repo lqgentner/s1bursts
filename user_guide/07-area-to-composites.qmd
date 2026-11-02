@@ -65,11 +65,11 @@ reach each square.
 A composite is written on its grid square's pixel grid, in the square's UTM
 zone, `square.crs`. It accepts only products on that same grid, so the
 products must be processed with `crs=square.crs`. A product in another zone
-raises an `InconsistentInputsError` when it is composed.
+is rejected when it is composed.
 
 That is why these loops pass a zone and not `crs="auto"`. `"auto"` projects
-each burst in the zone that holds its centre. A burst spans about 85 km across
-the track, so near a zone boundary its centre can lie in the neighbouring
+each burst in the zone that holds its center. A burst spans about 85 km across
+the track, so near a zone boundary its center can lie in the neighboring
 zone, and its product would then be rejected by the square it was processed
 for.
 
@@ -161,7 +161,7 @@ for square in squares:
     weighter.compose_rtc_lrw(rtc, square, write_qa=True, time_range=window)
 ```
 
-Each search stays small, and each square can lie in another zone. Neighbouring
+Each search stays small, and each square can lie in another zone. Neighboring
 squares share most of their bursts, but each burst is downloaded and processed
 only once per zone: the later squares find its files and skip them. The price
 is parallelism, because each batch hands SNAP only the few bursts not processed

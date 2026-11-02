@@ -45,22 +45,36 @@ seo:
 
 # Theming
 # -------
-content_style: mint
-navbar_style: mint
+content_style: dusk
+navbar_style: dusk
+
+# Custom CSS
+# ----------
+# Great Docs caps the text column at 749 px but shows figures at their own pixel
+# size, so a wider one scrolls sideways and a narrower one leaves a gap. Scale
+# every figure to the column instead. Its 24 px navbar logo makes the detailed
+# logo illegible; 40 px still fits the navbar's 45 px limit.
+include_in_header:
+  - text: |
+      <style>
+      .cell-output-display img.figure-img { width: 100%; height: auto; }
+      .navbar-logo { height: 40px; }
+      </style>
 
 # Icons
 # -----
 nav_icons:
   sidebar:
+    Introduction: compass
     Installation: download
-    Environment variables: settings
+    Environment variables: sliders-vertical
     Quickstart: rocket
     Finding and downloading bursts: search
     Processing with SNAP: workflow
-    Using an external DEM: mountain
     Compositing: layers
     From an area to composites: map
     Storing products on S3: cloud
+    Using an external DEM: mountain
     Contributing: wrench
 
 # API Reference Structure

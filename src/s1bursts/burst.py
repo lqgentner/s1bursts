@@ -69,7 +69,7 @@ class BurstFootprintMixin:
             """Sub-swath identifier."""
 
     # Authoritative overrides; None here so subclasses without their own field
-    # (e.g. product.GeocodedBurst) inherit the LUT-fallback behaviour.
+    # (e.g. product.GeocodedBurst) inherit the LUT-fallback behavior.
     _rel_orbit_number: int | None = None
     _geometry: Polygon | MultiPolygon | None = None
 
@@ -287,7 +287,7 @@ def _ring_coordinates(
 
 
 def _ground_lengths(lon_lat: NDArray[np.float64]) -> NDArray[np.float64]:
-    """Return the approximate ground length in metres between consecutive vertices."""
+    """Return the approximate ground length in meters between consecutive vertices."""
     lon, lat = np.radians(lon_lat[:, 0]), np.radians(lon_lat[:, 1])
     dlon = (np.diff(lon) + np.pi) % (2 * np.pi) - np.pi
     mean_lat = (lat[1:] + lat[:-1]) / 2
@@ -382,9 +382,9 @@ class Burst(BurstFootprintMixin):
     def utm_zone(self) -> CRS:
         """The WGS 84 / UTM zone that holds the burst's footprint, the zone ``crs="auto"`` uses.
 
-        The zone is the one containing the centre of the footprint, by the zone
+        The zone is the one containing the center of the footprint, by the zone
         boundaries of ``freezebase.mgrs.UTMZones``, the ones the MGRS grid uses,
-        Norway and Svalbard exceptions included. A centre on a border between
+        Norway and Svalbard exceptions included. A center on a border between
         two zones takes the eastern one, and one on the equator the northern
         hemisphere. The zone depends only on the burst ID and sub-swath, so a
         time series of one burst stays in one zone. Products meant for a
@@ -403,7 +403,7 @@ class Burst(BurstFootprintMixin):
         Raises
         ------
         NoUTMZoneError
-            If the centre lies outside the UTM zones, north of 84 degrees or
+            If the center lies outside the UTM zones, north of 84 degrees or
             south of 80 degrees. It is a ``ValueError``.
         BurstMapUnavailableError
             If the footprint was not propagated and the burst map has not been
@@ -595,9 +595,9 @@ class BurstPair:
         """The WGS 84 / UTM zone that holds the pair's footprint, the zone ``crs="auto"`` uses.
 
         The footprint is the primary burst's; both bursts share it. The zone
-        is the one containing the centre of the footprint, by the zone
+        is the one containing the center of the footprint, by the zone
         boundaries of ``freezebase.mgrs.UTMZones``, the ones the MGRS grid uses,
-        Norway and Svalbard exceptions included. A centre on a border between
+        Norway and Svalbard exceptions included. A center on a border between
         two zones takes the eastern one, and one on the equator the northern
         hemisphere. The zone depends only on the burst ID and sub-swath, so a
         time series of one burst stays in one zone. Products meant for a
@@ -612,7 +612,7 @@ class BurstPair:
         Raises
         ------
         NoUTMZoneError
-            If the centre lies outside the UTM zones, north of 84 degrees or
+            If the center lies outside the UTM zones, north of 84 degrees or
             south of 80 degrees. It is a ``ValueError``.
         BurstMapUnavailableError
             If the footprint was not propagated and the burst map has not been
@@ -635,14 +635,14 @@ class BurstPair:
 
 
 def _utm_zone(footprint: Polygon | MultiPolygon) -> CRS:
-    """Return the WGS 84 / UTM zone holding the centre of a footprint; see ``Burst.utm_zone``."""
+    """Return the WGS 84 / UTM zone holding the center of a footprint; see ``Burst.utm_zone``."""
     longitude, latitude = _footprint_centre(footprint)
     zones = UTMZones().find_intersecting(shapely.Point(longitude, latitude))
     zones = zones[zones.hemisphere == ("N" if latitude >= 0 else "S")]
     if zones.empty:
-        msg = f"No UTM zone covers the footprint centre at {longitude:.4f}, {latitude:.4f}."
+        msg = f"No UTM zone covers the footprint center at {longitude:.4f}, {latitude:.4f}."
         raise NoUTMZoneError(msg)
-    # Zone numbers grow eastward and a centre in [-180, 180) never touches both
+    # Zone numbers grow eastward and a center in [-180, 180) never touches both
     # zone 60 and zone 1, so the largest number is the eastern zone.
     return CRS.from_epsg(int(zones.epsg.max()))
 
@@ -666,8 +666,8 @@ def _footprint_centre(footprint: Polygon | MultiPolygon) -> tuple[float, float]:
     # to 0-360 degrees, its halves join again.
     if east - west > _ANTIMERIDIAN:
         footprint = _unwrap_longitudes(footprint)
-    centre = footprint.centroid
-    return (centre.x + _ANTIMERIDIAN) % 360.0 - _ANTIMERIDIAN, centre.y
+    center = footprint.centroid
+    return (center.x + _ANTIMERIDIAN) % 360.0 - _ANTIMERIDIAN, center.y
 
 
 class _BaseBurstCollection[TEntry]:

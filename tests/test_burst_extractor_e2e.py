@@ -398,7 +398,7 @@ class TestS3Lookup:
 
         monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: _Response())
 
-        with pytest.raises(BurstNotFoundError, match="not found in CDSE catalogue"):
+        with pytest.raises(BurstNotFoundError, match="not found in CDSE catalog"):
             _lookup_s3_path("S1A_MISSING.SAFE")
 
     @pytest.mark.parametrize(

@@ -271,7 +271,7 @@ class BackscatterProduct(GeocodedBurst):
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone.
         NoUTMZoneError
-            If ``crs`` is ``"auto"`` and the footprint's centre lies outside
+            If ``crs`` is ``"auto"`` and the footprint's center lies outside
             the UTM zones.
         BurstMapUnavailableError
             If the burst carries no relative orbit number or pass direction,
@@ -421,7 +421,7 @@ class CoregisteredProduct(GeocodedBurst, ABC):
         ValueError
             If ``crs`` is not a WGS 84 / UTM zone.
         NoUTMZoneError
-            If ``crs`` is ``"auto"`` and the footprint's centre lies outside
+            If ``crs`` is ``"auto"`` and the footprint's center lies outside
             the UTM zones.
         BurstMapUnavailableError
             If the burst carries no relative orbit number or pass direction,

@@ -63,7 +63,7 @@ the two dates. In August the ice-free slopes are highly coherent, while the
 glacier stays dark, which makes its outline stand out.
 
 ```{python}
-#| fig-cap: "Coherence of a 12-day pair in winter and in summer 2022. The rectangles are the sample areas on the glacier (white) and on ice-free ground (orange)."
+#| fig-cap: "Coherence of a 12-day pair in winter and in summer 2022. The rectangles are the sample areas on the glacier (white) and on ice-free ground (cyan)."
 import matplotlib.pyplot as plt
 import rasterio
 from rasterio.warp import transform_bounds
@@ -73,21 +73,21 @@ from shapely.geometry import box
 view = (7.95, 46.38, 8.15, 46.55)  # lon/lat bounds of the map
 areas = {
     "glacier": (box(8.065, 46.472, 8.072, 46.477), "white"),
-    "ice-free ground": (box(8.104, 46.448, 8.112, 46.453), "orange"),
+    "ice-free ground": (box(8.104, 46.448, 8.112, 46.453), "tab:cyan"),
 }
 products = sorted(coherence.products, key=lambda p: p.date_primary)
 
-fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), sharey=True)
+fig, axes = plt.subplots(1, 2, figsize=(7.8, 3.7), sharey=True, layout="constrained")
 for ax, product in zip(axes, [products[0], products[7]]):
     with rasterio.open(fm.get_product_path(product)) as src:
         left, bottom, right, top = transform_bounds("EPSG:4326", src.crs, *view)
         coh = src.read(1, window=from_bounds(left, bottom, right, top, src.transform))
-        for area, colour in areas.values():
+        for area, color in areas.values():
             x0, y0, x1, y1 = transform_bounds("EPSG:4326", src.crs, *area.bounds)
             ax.add_patch(plt.Rectangle((x0 / 1000, y0 / 1000), (x1 - x0) / 1000,
-                                       (y1 - y0) / 1000, fill=False, edgecolor=colour))
+                                       (y1 - y0) / 1000, fill=False, edgecolor=color))
     image = ax.imshow(coh, extent=[v / 1000 for v in (left, right, bottom, top)],
-                      cmap="viridis", vmin=0, vmax=1)
+                      cmap="magma", vmin=0, vmax=1)
     ax.set(title=f"{product.date_primary:%d %b} to {product.date_secondary:%d %b %Y}", xlabel="Easting (km)")
 axes[0].set_ylabel("Northing (km)")
 fig.colorbar(image, ax=axes, shrink=0.8, label="Coherence")
@@ -118,10 +118,10 @@ for product in products:
                             "coherence": np.median(valid[np.isfinite(valid)])})
 series = pd.DataFrame(records).pivot(index="date", columns="area", values="coherence")
 
-fig, ax = plt.subplots(figsize=(8, 3.5))
-for name, (_, colour) in areas.items():
+fig, ax = plt.subplots(figsize=(7.8, 3.3))
+for name, (_, color) in areas.items():
     ax.plot(series.index, series[name], "o-", label=name,
-            color="tab:blue" if colour == "white" else "tab:orange")
+            color="tab:blue" if color == "white" else color)
 ax.set(xlabel="Date of the first acquisition", ylabel="Median coherence", ylim=(0, 1))
 ax.legend()
 ax.grid(alpha=0.25)

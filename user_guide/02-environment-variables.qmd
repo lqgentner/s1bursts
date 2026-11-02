@@ -16,8 +16,11 @@ SNAP_MAX_RAM_GB=16
 
 s1bursts does not read `.env` by itself. Run your script with
 `uv run --env-file .env script.py`, or call `dotenv.load_dotenv()` from
-[python-dotenv](https://pypi.org/project/python-dotenv/) at its start. Keep the
-file out of version control.
+[python-dotenv](https://pypi.org/project/python-dotenv/) at its start.
+
+::: {.callout-warning}
+Keep `.env` out of version control, since it holds your password.
+:::
 
 ## CDSE credentials
 

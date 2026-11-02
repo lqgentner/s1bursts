@@ -26,7 +26,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   burst pairs, such as a list, not only a `BurstCollection` or
   `BurstPairCollection`.
 - `Burst.utm_zone` and `BurstPair.utm_zone` are the WGS 84 / UTM zone that
-  holds the centre of the footprint, as a `pyproj.CRS`. The zone depends only
+  holds the center of the footprint, as a `pyproj.CRS`. The zone depends only
   on the burst ID and sub-swath, so a time series of one burst stays in one
   zone.
 - The `crs` of every `BurstProcessor.create_*` and `SNAPClient.create_*`
@@ -579,7 +579,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   # or keep both, each in its own directory
   fm_10m = FileManager("data", prod_dir="data/s1-prod-10m")
   ```
-- `pyarrow>=17` is a direct dependency, to recognise a corrupt burst-ID map.
+- `pyarrow>=17` is a direct dependency, to recognize a corrupt burst-ID map.
   freezebase already required it, so nothing new is installed.
 - The default `SNAP_MAX_RAM_GB` is 8 GB instead of 4 GB to leave more heap for
   SNAP. Set `SNAP_MAX_RAM_GB=4` to keep the old budget.
@@ -720,7 +720,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   was recorded for every remaining item.
 - A batch stops promptly. When Ctrl-C or an error ends
   `BurstCatalog.download()` or a `BurstProcessor.create_*` method, the queued
-  items are cancelled and only the running ones finish, instead of the whole
+  items are canceled and only the running ones finish, instead of the whole
   queue running before the error surfaced. This includes the first failure
   under `continue_on_error=False`, which `download()` previously raised only
   after every queued burst had been attempted. The error carries a note such
@@ -988,8 +988,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 - `compensate_dem_for_snap()`, which makes an external DEM sample at the position its
   georeferencing states. SNAP reads a DEM passed as `externalDEMFile` half a DEM
-  pixel towards the lower right. The helper writes a cached copy whose geotransform
-  origin is moved onto the centre of the first pixel; elevations pass through untouched.
+  pixel toward the lower right. The helper writes a cached copy whose geotransform
+  origin is moved onto the center of the first pixel; elevations pass through untouched.
   Verified against SNAP 13.0.0.
 - `SNAP_DEM_CACHE` setting (`SNAPSettings.dem_cache`, default `~/.s1bursts/dem`),
   the directory `compensate_dem_for_snap()` caches converted DEMs in.
@@ -1033,7 +1033,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 - **Breaking:** SNAP's `grSquarePixel` is now pinned off on the `Multilook`
   operator and is not exposed. With it enabled (SNAP's own default, and this
-  library's behaviour until now), SNAP derives `nAzLooks` from `nRgLooks` and
+  library's behavior until now), SNAP derives `nAzLooks` from `nRgLooks` and
   the local geometry and **silently discards the requested azimuth looks**, so a
   `(5, 1)` multilook was applied as `(5, 2)` for Sentinel-1 IW. Non-square pixels
   are correctly resampled to `grid_spacing` in geocoding (terrain correction).
@@ -1089,7 +1089,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   with only `CDSE_S3_*` credentials configured. OData credentials are requested
   lazily and only when an OData request (primary or fallback) actually runs.
 - Non-integer standard-grid origin now uses true division
-  (`grid_spacing / 2`), so a 7.5 m grid yields a 3.75 m pixel-centre origin.
+  (`grid_spacing / 2`), so a 7.5 m grid yields a 3.75 m pixel-center origin.
 - Downloaded SAFE annotation/calibration/noise/RFI/manifest XML is parsed with a
   hardened parser (no entity resolution, no network access), matching the graph
   parser.

@@ -323,7 +323,7 @@ def _pixel_centres(
     transform: Affine,
     window: rasterio.windows.Window,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return two arrays containing every pixel centre in a raster window."""
+    """Return two arrays containing every pixel center in a raster window."""
     columns, rows = np.meshgrid(
         np.arange(window.col_off, window.col_off + window.width, dtype="float64") + 0.5,
         np.arange(window.row_off, window.row_off + window.height, dtype="float64") + 0.5,
@@ -430,7 +430,7 @@ def prepare_dem_for_snap(
     """Return an external DEM prepared for SNAP's sampling and height conventions.
 
     The output geotransform is shifted by half a pixel because SNAP interprets an
-    external DEM's origin as the centre of its first pixel, and so samples the file
+    external DEM's origin as the center of its first pixel, and so samples the file
     half a pixel south-east of where its georeferencing places it [1]. SNAP fixed
     that in the 14.0.2 update of its ``snap-dem`` module, so the shift is applied
     only for an installation older than that, and for one whose version cannot be

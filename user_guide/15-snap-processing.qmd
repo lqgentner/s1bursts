@@ -22,7 +22,7 @@ graph has eight steps:
 | `ThermalNoiseRemoval` | Removes the instrument's own noise | |
 | `Calibration` | Converts the raw values to radar brightness | |
 | `TOPSAR-Deburst` | Joins the burst into one seamless image | |
-| `Multilook` | Averages neighbouring pixels to reduce noise and runtime | `multilook` |
+| `Multilook` | Averages neighboring pixels to reduce noise and runtime | `multilook` |
 | `Terrain-Flattening` | Corrects brightness for the slope of the terrain | `RTCConfig` only |
 | `ReplaceZerosWithNoData` | Marks the empty border of the burst as missing ([why](#corrections-s1bursts-applies)) | `replace_zeros_with_nan` |
 | `Terrain-Correction` | Places every pixel on the map, using the DEM | `grid_spacing`, `dem` |
@@ -86,8 +86,8 @@ print(f':::{{.callout-note collapse="true"}}\n## The full graph\n\n```xml\n{xml}
 ```
 
 The graph leaves two placeholders, `${source}` for the burst file and `${crs}`
-for the projection. s1bursts fills them in for every burst it processes, which
-is why the projection is passed to the `create_*` methods rather than stored in
+for the UTM zone. s1bursts fills them in for every burst it processes, which
+is why the UTM zone is passed to the `create_*` methods rather than stored in
 the settings. Save the XML beside your results to record exactly how they were
 made:
 
@@ -172,7 +172,7 @@ series that switches version contains an artificial step. Between SNAP 13 and
 
 SNAP 14 also adds two coherence options, exposed as
 `CoherenceConfig.correct_coherence_bias` and `remove_local_phase_ramp`. Both
-are off by default, and enabling either under SNAP 13 raises an error.
+are off by default and need SNAP 14 or newer.
 
 ## Validation
 

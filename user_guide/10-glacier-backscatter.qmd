@@ -57,8 +57,8 @@ rtc = processor.create_backscatter(
 ## Map the glacier
 
 The map shows the glacier in January and in May. The Great Aletsch Glacier
-starts at Konkordiaplatz, where its tributaries meet near the top centre, and
-flows south-east, then south-west towards its tongue. In May the glacier and
+starts at Konkordiaplatz, where its tributaries meet near the top center, and
+flows south-east, then south-west toward its tongue. In May the glacier and
 much of the terrain around it are far darker than in January.
 
 ```{python}
@@ -74,14 +74,14 @@ view = (7.95, 46.38, 8.15, 46.55)  # lon/lat bounds of the map
 sample = box(8.065, 46.472, 8.072, 46.477)  # on the glacier below Konkordiaplatz
 products = sorted(rtc.products, key=lambda p: p.date)
 
-fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), sharey=True)
+fig, axes = plt.subplots(1, 2, figsize=(7.8, 3.7), sharey=True, layout="constrained")
 for ax, product in zip(axes, [products[0], products[4]]):
     with rasterio.open(fm.get_product_path(product)) as src:
         left, bottom, right, top = transform_bounds("EPSG:4326", src.crs, *view)
         gamma0 = src.read(1, window=from_bounds(left, bottom, right, top, src.transform))
         x0, y0, x1, y1 = transform_bounds("EPSG:4326", src.crs, *sample.bounds)
     extent = [v / 1000 for v in (left, right, bottom, top)]
-    image = ax.imshow(10 * np.log10(gamma0), extent=extent, cmap="gray", vmin=-25, vmax=0)
+    image = ax.imshow(10 * np.log10(gamma0), extent=extent, cmap="viridis", vmin=-25, vmax=0)
     ax.add_patch(plt.Rectangle((x0 / 1000, y0 / 1000), (x1 - x0) / 1000, (y1 - y0) / 1000,
                                fill=False, edgecolor="white"))
     ax.set(title=f"{product.date:%d %B %Y}", xlabel="Easting (km)")
@@ -115,7 +115,7 @@ series = pd.DataFrame(records)
 
 ```{python}
 #| fig-cap: "Median RTC backscatter in the sample rectangle, one acquisition per month in 2022."
-fig, ax = plt.subplots(figsize=(8, 3.5))
+fig, ax = plt.subplots(figsize=(7.8, 3.3))
 ax.plot(series.date, series.gamma0_db, "o-")
 ax.set(xlabel="Acquisition date", ylabel="Median gamma-0 (dB)")
 ax.grid(alpha=0.25)

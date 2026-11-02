@@ -1,6 +1,7 @@
 ---
 title: "Installation"
 guide-section: "Getting Started"
+freeze: true
 ---
 
 # Installation
@@ -31,6 +32,16 @@ uv add s1bursts
 
 ```{.bash}
 pixi add --pypi s1bursts
+```
+
+### conda
+
+s1bursts is not packaged for conda. Install it from PyPI into your conda
+environment:
+
+```{.bash}
+conda activate my-env
+pip install s1bursts
 ```
 
 :::
@@ -75,15 +86,19 @@ results, so a time series that mixes them contains a small artificial step; see
 ## Check that SNAP is found
 
 s1bursts uses the `gpt` in `SNAP_BIN` if that is set, and otherwise the one on
-your `PATH`. Check that your shell finds it:
+your `PATH`. Check which one it finds by running this in the environment where
+you installed s1bursts:
 
-```{.bash}
-which gpt  # Linux and macOS
-where gpt  # Windows
+```{python}
+from s1bursts import SNAPConfig
+
+config = SNAPConfig()
+print("gpt:", config.resolved_gpt_path)
+print("SNAP version:", config.resolved_snap_version)
 ```
 
-If this prints nothing and `SNAP_BIN` is not set, processing stops with a
-`ConfigurationError`.
+If s1bursts cannot find `gpt`, `SNAPConfig()` raises an error that says what to
+set.
 
 ## Set up credentials
 

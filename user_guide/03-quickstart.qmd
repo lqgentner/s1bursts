@@ -26,11 +26,10 @@ load_dotenv(root / ".env")
 os.chdir(root / "cache/docs")
 ```
 
-## Find a pair of acquisitions
+## Find two acquisitions
 
-A search returns the catalog records that match a query. This one asks for one
-month of one burst footprint, then picks the first pair of acquisitions
-12 days apart:
+A search returns the catalog records that match a query. This one asks for two
+weeks of one burst footprint, which Sentinel-1 imaged twice, 12 days apart:
 
 ```{python}
 from s1bursts import BurstCatalog, BurstProcessor, FileManager, SearchQuery, TimeRange
@@ -39,10 +38,9 @@ fm = FileManager("data/quickstart")
 catalog = BurstCatalog(fm)
 
 bursts = catalog.search(SearchQuery(
-    time_range=TimeRange("2022-08-01", "2022-08-31"),
+    time_range=TimeRange("2022-08-01", "2022-08-13"),
     burst_id=30346, sub_swath="IW1", polarization="VV",
 ))
-pair = bursts.find_pairs(baseline=12)[:1]
 ```
 
 ## Download and process
@@ -50,15 +48,18 @@ pair = bursts.find_pairs(baseline=12)[:1]
 The download stores both acquisitions under `data/quickstart/s1-slc`.
 Processing then writes one GeoTIFF per product under `data/quickstart/s1-prod`.
 With `crs="auto"`, each burst is projected in the UTM zone that holds it, here
-zone 32 North (EPSG:32632):
+zone 32 North (EPSG:32632). Backscatter is processed per burst; coherence needs
+a pair of acquisitions, which `find_pairs()` builds from the same bursts:
 
 ```{python}
 #| output: false
-catalog.download(pair).raise_on_failure()
+catalog.download(bursts).raise_on_failure()
 
 processor = BurstProcessor(fm)
-rtc = processor.create_backscatter(pair.unpair(), crs="auto").raise_on_failure()
-coherence = processor.create_coherences(pair, crs="auto").raise_on_failure()
+rtc = processor.create_backscatter(bursts, crs="auto").raise_on_failure()
+
+pairs = bursts.find_pairs(baseline=12)
+coherence = processor.create_coherences(pairs, crs="auto").raise_on_failure()
 ```
 
 A burst that fails does not stop the others. `raise_on_failure()` raises an
@@ -81,18 +82,18 @@ with rasterio.open(fm.get_product_path(rtc.products[0])) as src:
 with rasterio.open(fm.get_product_path(coherence.products[0])) as src:
     coh = src.read(1, masked=True)
 
-fig, (top, bottom) = plt.subplots(2, 1, figsize=(10, 6), layout="constrained")
-fig.colorbar(top.imshow(10 * np.log10(gamma0), cmap="gray", vmin=-25, vmax=5),
+fig, (top, bottom) = plt.subplots(2, 1, figsize=(7.8, 4.7), layout="constrained")
+fig.colorbar(top.imshow(10 * np.log10(gamma0), cmap="viridis", vmin=-20, vmax=0),
              ax=top, label="Backscatter (dB)")
-fig.colorbar(bottom.imshow(coh, cmap="viridis", vmin=0, vmax=1), ax=bottom, label="Coherence")
+fig.colorbar(bottom.imshow(coh, cmap="magma", vmin=0, vmax=1), ax=bottom, label="Coherence")
 for ax in (top, bottom):
     ax.set_axis_off()
 plt.show()
 ```
 
 The burst covers a strip of the Alps about 85 km long. Coherence is high
-(yellow) where the ground changed little in the 12 days, such as bare rock and
-meadows, and low (dark blue) where it changed, for example on the melting
+(light) where the ground changed little in the 12 days, such as bare rock and
+meadows, and low (dark) where it changed, for example on the melting
 glaciers and in forests.
 
 ## What you get

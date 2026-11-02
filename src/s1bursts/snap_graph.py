@@ -604,7 +604,7 @@ def _coherence_option_values(
         )
         raise ConfigurationError(msg)
     # Not writing them is not the same as turning them off: SNAP 14 defaults
-    # `correctCoherenceBias` to true. Older SNAP has neither behaviour anyway.
+    # `correctCoherenceBias` to true. Older SNAP has neither behavior anyway.
     return (None, None)
 
 
@@ -925,7 +925,7 @@ class GeocodingConfig(BaseModel):
     Parameters
     ----------
     grid_spacing
-        Output pixel spacing in metres of the target CRS. Must be positive.
+        Output pixel spacing in meters of the target CRS. Must be positive.
     dem
         DEM used for geocoding. A string selects one of SNAP's auto-download
         DEMs; a path (or a string with a file suffix) is passed as an external
@@ -1126,7 +1126,7 @@ class CoherenceConfig(GeocodingConfig):
     subtract_topographic_phase
         Remove the topographic phase using ``dem``.
     square_pixel
-        Let SNAP's ``Coherence`` operator adjust the estimation window towards
+        Let SNAP's ``Coherence`` operator adjust the estimation window toward
         square ground pixels. Leave off: as with SNAP's ``grSquarePixel`` on
         the ``Multilook`` operator, enabling it means the applied window is not
         the requested one.
@@ -1183,7 +1183,7 @@ class InterferogramConfig(GeocodingConfig):
     subtract_topographic_phase
         Remove the topographic phase using ``dem``.
     square_pixel
-        Let SNAP adjust the interferogram window towards square ground pixels.
+        Let SNAP adjust the interferogram window toward square ground pixels.
     replace_zeros_with_nan
         Convert SNAP's zero fill value to NaN.
     """

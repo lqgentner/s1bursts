@@ -164,7 +164,7 @@ def _lookup_s3_path(product_name: str) -> str:
         msg = f"Unexpected CDSE catalogue response for product '{product_name}': {body!r:.200}"
         raise BurstDownloadError(msg)
     if not values:
-        msg = f"Product '{product_name}' not found in CDSE catalogue."
+        msg = f"Product '{product_name}' not found in CDSE catalog."
         raise BurstNotFoundError(msg)
     s3_path = values[0].get("S3Path") if isinstance(values[0], dict) else None
     if not isinstance(s3_path, str):
@@ -347,7 +347,7 @@ def _resolve_burst(
 
 
 def _edit_annotation(root: etree._Element, meta: _BurstMeta) -> bytes:
-    """Edit the annotation XML tree in-place and return the serialised bytes."""
+    """Edit the annotation XML tree in-place and return the serialized bytes."""
     burst_list = root.find("swathTiming/burstList")
     for burst in list(burst_list.findall("burst")):
         if burst.findtext("byteOffset") != meta.byte_offset:
@@ -643,7 +643,7 @@ def extract_burst_from_s3(  # noqa: PLR0915
     Raises
     ------
     ValueError
-        If ``sub_swath`` is not a recognised subswath identifier.
+        If ``sub_swath`` is not a recognized subswath identifier.
     BurstNotFoundError
         If the parent product or the requested burst cannot be found.
     BurstDownloadError

@@ -223,7 +223,7 @@ def external_dem_needs_half_pixel_shift(bin_dir: Path | None = None) -> bool:
     """Whether SNAP samples an external DEM half a pixel south-east of its georeferencing.
 
     Where no installation is found by default, or its ``snap-dem`` version cannot
-    be read, the bug is assumed present: that is the behaviour of every SNAP release
+    be read, the bug is assumed present: that is the behavior of every SNAP release
     up to 14.0.1, and of the whole 13.x line.
 
     Parameters
@@ -437,6 +437,15 @@ class SNAPConfig:
         Seconds one GPT run may take before it is stopped and recorded as
         failed; must be positive and finite, or ``None`` for no limit. Defaults to
         ``SNAP_TIMEOUT`` (or 3600), where ``none`` means no limit.
+
+    Attributes
+    ----------
+    resolved_gpt_path
+        The ``gpt`` executable this configuration runs, from ``bin``,
+        ``SNAP_BIN`` or ``PATH``.
+    resolved_snap_version
+        Version of the SNAP installation that ``gpt`` belongs to, such as
+        ``(14, 0, 0)``, or ``None`` if it cannot be determined.
 
     Raises
     ------
