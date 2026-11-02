@@ -608,12 +608,15 @@ class TestCheckPolarization:
         assert result == "HH"
 
     def test_mismatched_polarizations_raise(self) -> None:
-        """Differing polarizations must raise ValueError."""
+        """Differing polarizations stop a loop over cells, still as a ValueError."""
+        # Previously a plain ValueError, unlike the other inputs that cannot be mixed.
         p1 = _RTCStub(rel_orbit_number=1, date=Timestamp("2023-01-01"), polarization="VV")
         p2 = _RTCStub(rel_orbit_number=2, date=Timestamp("2023-01-12"), polarization="VH")
-        with pytest.raises(ValueError, match="polarization"):
+        with pytest.raises(InconsistentInputsError, match="same polarization; got VH, VV") as info:
             # pyrefly: ignore [bad-argument-type]
             ResolutionWeighter._check_polarization([p1, p2])
+        assert isinstance(info.value, ValueError)
+        assert not isinstance(info.value, CompositeError)
 
 
 # ---------------------------------------------------------------------------
@@ -686,13 +689,13 @@ class TestCheckSimCoverage:
         ResolutionWeighter._check_area_coverage(obs, sim)
 
     def test_missing_group_raises(self) -> None:
-        """A missing sim group raises ValueError naming the orbit/date."""
+        """A missing sim group raises CompositeInputError naming the orbit/date."""
         arr: NDArray[np.floating[Any]] = np.zeros((1, 1))
         key_a = (10, Timestamp("2024-01-01"))
         key_b = (10, Timestamp("2024-01-13"))
         obs = {key_a: arr, key_b: arr}
         sim = {key_a: arr}  # key_b missing
-        with pytest.raises(InconsistentInputsError, match=r"orbit 10, 2024-01-13"):
+        with pytest.raises(CompositeInputError, match=r"orbit 10, 2024-01-13"):
             ResolutionWeighter._check_area_coverage(obs, sim)
 
 
@@ -1512,8 +1515,10 @@ class TestComposeCohLrw:
         _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
         _write_raster(scene.manager.get_product_path(other_date), [_full(1.0), _full(1.0)])
 
-        with pytest.raises(InconsistentInputsError, match="No matching RTC scattering area"):
+        # Previously an InconsistentInputsError; a missing RTC is a gap of this cell's data.
+        with pytest.raises(CompositeInputError, match="No matching RTC scattering area") as info:
             scene.weighter.compose_coherence_lrw([coh], [other_date], scene.geobox)
+        assert isinstance(info.value, CompositeError)
 
     def test_no_rtc_products_is_an_argument_error(self, scene: _Scene) -> None:
         # Previously an InconsistentInputsError, which a loop over cells catches.
@@ -2122,8 +2127,10 @@ class TestInputConsistency:
             dst.write(_full(1.0), 1)
             dst.write(_full(1.0), 2)
 
-        with pytest.raises(InconsistentInputsError, match="target grid is"):
+        # Previously a CompositeError, which a loop over cells recorded for every cell.
+        with pytest.raises(InconsistentInputsError, match="target grid is") as info:
             scene.weighter.compose_rtc_lrw([ours, foreign], scene.geobox)
+        assert not isinstance(info.value, CompositeError)
 
     def test_a_product_at_another_pixel_size_is_refused(self, scene: _Scene) -> None:
         ours, coarse = _rtc("2022-08-13"), _rtc("2022-08-25")
@@ -2145,8 +2152,9 @@ class TestInputConsistency:
             dst.write(_full(1.0), 1)
             dst.write(_full(1.0), 2)
 
-        with pytest.raises(InconsistentInputsError, match="must share the output grid"):
+        with pytest.raises(InconsistentInputsError, match="must share the output grid") as info:
             scene.weighter.compose_rtc_lrw([ours, coarse], scene.geobox)
+        assert not isinstance(info.value, CompositeError)
 
     def test_a_product_offset_by_a_fraction_of_a_pixel_is_refused(self, scene: _Scene) -> None:
         # Previously the read window was rounded to whole pixels, shifting the
@@ -2204,10 +2212,11 @@ class TestInputConsistency:
         for product in (twelve, twenty_four):
             _write_raster(scene.manager.get_product_path(product), [_full(0.5)])
 
-        with pytest.raises(ValueError, match="share a temporal baseline"):
+        with pytest.raises(InconsistentInputsError, match="share a temporal baseline") as info:
             scene.weighter.compose_coherence_lrw(
                 [twelve, twenty_four], [_rtc("2022-08-01")], scene.geobox
             )
+        assert not isinstance(info.value, CompositeError)
 
     def test_mixed_dems_are_refused(self, scene: _Scene) -> None:
         coh = _coh("2022-08-01", "2022-08-13")
@@ -2223,8 +2232,9 @@ class TestInputConsistency:
             tags={"DEM": "GETASSE30"},
         )
 
-        with pytest.raises(InconsistentInputsError, match="same DEM"):
+        with pytest.raises(InconsistentInputsError, match="same DEM") as info:
             scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox)
+        assert not isinstance(info.value, CompositeError)
 
     def test_mixed_snap_versions_are_allowed_but_warned_about(
         self,

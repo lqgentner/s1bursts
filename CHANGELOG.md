@@ -202,6 +202,32 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
     `CDSEResponse.to_geodataframe()`. `CDSEResponse.is_complete()` without a
     count raised `AttributeError` before: replace `except AttributeError:`
     with `except CatalogError:`.
+  - A catalog search that fails raises `CatalogError` too, with the
+    `requests` error as its `__cause__`. This covers an HTTP error, after
+    retrying a transient one, a catalog that cannot be reached, and a body
+    that is not valid JSON, which raised `requests.HTTPError`,
+    `requests.ConnectionError` and `requests.JSONDecodeError` before; a
+    response without a `value` list or a burst without a recognizable
+    footprint raised `KeyError` or `ValueError`. The new
+    `CatalogError.status_code` is the HTTP status of an error response. The
+    message quotes the catalog's own explanation, such as
+    `Geometry is invalid. Self-intersection[...]`, and for HTTP 414, which the
+    catalog returns for an `intersects` geometry with too many vertices such
+    as the exact outline of an MGRS cell, says to search with the geometry's
+    bounding box and select with `BurstCollection.intersecting()`.
+
+    ```python
+    # before
+    try:
+        bursts = catalog.search(query)
+    except requests.HTTPError as err:
+        status = err.response.status_code
+    # after
+    try:
+        bursts = catalog.search(query)
+    except CatalogError as err:
+        status = err.status_code
+    ```
   - A missing or undownloadable PROJ grid in `prepare_dem_for_snap()` raises
     `TransformationGridError`, a `ConfigurationError` and a `RuntimeError`.
     `except RuntimeError:` still catches it. An `except ConfigurationError:`
@@ -213,7 +239,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   - A burst-ID map that has not been downloaded, or cannot be read, raises
     `BurstMapUnavailableError`, a `ConfigurationError`, instead of
     `FileNotFoundError`: replace `except FileNotFoundError:` with
-    `except BurstMapUnavailableError:`. It always stops a `BurstProcessor`
+    `except BurstMapUnavailableError:`. `download_burst_map()` raises it as
+    well, keeping the cause, for a failed download, which raised the
+    `requests` or `freezebase.errors.DownloadError` error before, and for a
+    corrupt download, which raised freezebase's plain `ValueError`; its message
+    names the file to delete. It always stops a `BurstProcessor`
     run. Before, a pair whose secondary burst needed the map to stage its SLC
     was recorded as a failed item instead. A corrupt cached map, which raised
     `ValueError` or pyarrow's `ArrowInvalid`, raises it too and names the
@@ -369,27 +399,33 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   ```
 - **Breaking:** compositing failures that belong to the cell's data are
   `CompositeError`s, so a loop over cells can tell them from a wrong call.
-  Each keeps its builtin base, so `except ValueError:` still catches the first
-  two.
+  Each keeps its builtin base, so `except ValueError:` still catches the
+  first, and `except OSError:` the second.
   - `EmptyCompositeError` is now a `CompositeError` (still a `ValueError`).
-  - The new `InconsistentInputsError`, a `ValueError`, replaces the plain
-    `ValueError` for an input on another CRS, pixel size or grid than the
-    cell, inputs made with different DEMs, and an observation without a
-    matching scattering area.
   - The new `CompositeInputError`, an `OSError`, replaces the
     `FileNotFoundError` for a missing input and rasterio's `RasterioIOError`
-    for an unreadable one.
+    for an unreadable one. It also replaces the `ValueError` for an
+    observation of `compose_coherence_lrw()` without a matching RTC
+    scattering area: a failed RTC leaves only the cells its burst reaches
+    without one.
 
+  Inputs that cannot be composited together raise the new
+  `InconsistentInputsError`, an `S1BurstsError` and a `ValueError` but not a
+  `CompositeError`, so `except ValueError:` still catches it and a loop over
+  cells stops at it: products in another UTM zone, at another pixel size or
+  on another grid than the cell, made with different DEMs, or differing in
+  polarization or coherence baseline would fail every cell they are given to.
   An invalid argument still raises a plain `ValueError`, which
-  `CompositeError` does not catch. That now includes an empty `rtc_products`
-  in `compose_coherence_lrw()`, which raised the scattering-area error.
+  `CompositeError` does not catch either. That now includes an empty
+  `rtc_products` in `compose_coherence_lrw()`, which raised the
+  scattering-area error.
 
   ```python
   # before
   except EmptyCompositeError: ...
   except (ValueError, FileNotFoundError, RasterioIOError): ...
   # after
-  except CompositeError as err: ...
+  except CompositeError as err: ...  # per cell; InconsistentInputsError propagates
   ```
 - **Breaking:** `compose_rtc_by_pass()`, `compose_gtc_by_pass()` and
   `compose_coherence_by_pass()` behave like the LRW methods:
@@ -566,6 +602,35 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Fixed
 
+- `SearchQuery(intersects=...)` rejects an empty geometry and
+  one whose `crs` is not WGS 84 with `ValueError`. An empty geometry was
+  dropped, so the search ran without a spatial filter, and an `odc.geo`
+  geometry in another CRS, such as an MGRS cell's UTM extent, was sent as if
+  its coordinates were longitude and latitude, so the search found nothing.
+
+  ```python
+  # before: silently no bursts
+  SearchQuery(intersects=cell.extent)
+  # after
+  SearchQuery(intersects=cell.extent.to_crs("EPSG:4326"))
+  ```
+- `BurstCatalog` rejects an unknown `endpoint` or
+  `default_endpoint` with `ValueError` before any burst is downloaded. It was
+  raised from the first download thread, with a note claiming bursts had
+  finished, and not at all when every SLC already existed, so a catalog
+  created with an invalid `default_endpoint` used to construct without error.
+
+  ```python
+  # before: constructed, failed only once a burst was downloaded
+  BurstCatalog(fm, default_endpoint="S3_bucket")
+  # after: ValueError at once; pass "odata" or "s3"
+  BurstCatalog(fm, default_endpoint="s3")
+  ```
+- An S3 download whose catalog lookup returns a malformed response fails
+  that burst with `BurstDownloadError`, so the OData endpoint is still tried
+  and the batch continues. It raised `KeyError` or `AttributeError`, which
+  stopped the whole download, and a response without a `value` list was
+  taken for a product missing from the catalog.
 - **Breaking:** `QA-CQM` of `median` (previously the default) and quantile
   composites overstated the local resolution, on an Alpine tile by a median
   factor of 1.7 and up to 4. It was $1 / \operatorname{wquantile}_q(A;\, W)$ and is now

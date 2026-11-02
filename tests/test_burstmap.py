@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 from zipfile import ZipFile
 
+from freezebase.errors import DownloadError
 import geopandas as gpd
 from pyarrow import ArrowInvalid
 import pytest
+import requests
 from shapely.geometry import Polygon, box
 
 from s1bursts import burstmap
@@ -147,6 +150,52 @@ class TestDownloadBurstMap:
 
         get_data.assert_called_once_with(download=True)
         assert burstmap._BURSTMAP_VERSION in path.name
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            requests.ConnectionError("connection reset"),
+            requests.HTTPError("503 Server Error"),
+            DownloadError("redirected too often"),
+        ],
+    )
+    def test_a_failed_download_raises_burst_map_unavailable(
+        self,
+        tmp_path: Path,
+        error: Exception,
+    ) -> None:
+        # Previously the requests or freezebase error itself.
+        with (
+            patch.object(burstmap.Sentinel1Bursts, "get_data", side_effect=error),
+            pytest.raises(BurstMapUnavailableError, match="from SAR-MPC failed") as info,
+        ):
+            burstmap.download_burst_map(cache_dir=tmp_path, mode="EW")
+
+        assert "download_burst_map(mode='EW')" in str(info.value)
+        assert info.value.__cause__ is error
+
+    def test_a_corrupt_download_names_the_file_to_delete(self, tmp_path: Path) -> None:
+        # Previously freezebase's plain ValueError, unlike loading the same map.
+        dataset = burstmap.Sentinel1Bursts(cache_dir=tmp_path, mode="IW")
+        dataset.raw_path.parent.mkdir(parents=True, exist_ok=True)
+        dataset.raw_path.write_bytes(b"truncated")
+
+        with pytest.raises(BurstMapUnavailableError, match="is corrupt") as info:
+            burstmap.download_burst_map(cache_dir=tmp_path, mode="IW")
+
+        assert str(dataset.raw_path) in str(info.value)
+        assert isinstance(info.value.__cause__, ValueError)
+
+    def test_a_full_disk_keeps_its_type(self, tmp_path: Path) -> None:
+        full = OSError(errno.ENOSPC, "No space left on device")
+
+        with (
+            patch.object(burstmap.Sentinel1Bursts, "get_data", side_effect=full),
+            pytest.raises(OSError, match="No space left") as info,
+        ):
+            burstmap.download_burst_map(cache_dir=tmp_path, mode="IW")
+
+        assert info.value is full
 
 
 class TestModeValidation:

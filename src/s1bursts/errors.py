@@ -19,10 +19,11 @@ can still fail on a batch that finished with failures:
   raised on request by ``OperationSummary.raise_on_failure()``, after every
   item has run, and lists the items that failed.
 - ``CompositeError`` (and subclasses) are *per-cell* compositing failures: the
-  inputs of one grid cell are empty there, inconsistent or unreadable, and the
+  inputs of one grid cell are empty there, missing or unreadable, and the
   next cell may still succeed. A loop over cells catches this base class; an
   invalid argument to ``compose_*`` stays a plain ``ValueError`` and is not
-  caught by it.
+  caught by it, nor are inputs that cannot be composited together at all, an
+  ``InconsistentInputsError``, such as products on another UTM zone or grid.
 - ``ProductSettingsMismatchError`` says that a product to be skipped exists
   but was made with other settings than requested. Changed settings affect
   every product of a call, so it stops a batch like an environment-wide
@@ -134,7 +135,30 @@ class BurstNotInMapError(S1BurstsError, LookupError):
 
 
 class CatalogError(S1BurstsError, RuntimeError):
-    """The CDSE catalog returned a response that cannot be used."""
+    """A CDSE catalog request failed, or its response cannot be used.
+
+    Raised when the catalog cannot be reached, answers with an HTTP error, for
+    example HTTP 414 for a search geometry with too many vertices, or returns a
+    malformed response. The underlying ``requests`` error is kept as the cause.
+
+    Parameters
+    ----------
+    *args
+        The message, as for any exception.
+    status_code
+        HTTP status of the catalog's response.
+
+    Attributes
+    ----------
+    status_code
+        HTTP status of the catalog's error response, such as ``414`` or
+        ``503``. ``None`` if the catalog could not be reached or answered
+        successfully with an unusable response.
+    """
+
+    def __init__(self, *args: object, status_code: int | None = None) -> None:
+        super().__init__(*args)
+        self.status_code = status_code
 
 
 class OperationFailedError(S1BurstsError):
@@ -227,7 +251,9 @@ class CompositeError(S1BurstsError):
     """Compositing one grid cell failed; another cell may still succeed.
 
     Raised by ``ResolutionWeighter.compose_*`` for problems with the data of
-    the cell, never for an invalid argument, which raises ``ValueError``.
+    the cell, never for an invalid argument, which raises ``ValueError``, or
+    for inputs that cannot be composited together, which raise
+    ``InconsistentInputsError``.
     """
 
 
@@ -240,17 +266,24 @@ class EmptyCompositeError(CompositeError, ValueError):
     """
 
 
-class InconsistentInputsError(CompositeError, ValueError):
-    """The input products of a cell cannot be composited together.
+class InconsistentInputsError(S1BurstsError, ValueError):
+    """The input products passed to ``compose_*`` cannot be composited together.
 
     They are on another CRS, pixel size or pixel grid than the target cell,
-    were made with different DEMs, or an observation has no RTC product to
-    supply its local scattering area.
+    were made with different DEMs, or differ in polarization or temporal
+    baseline. The inputs are chosen by the call, so every other cell given
+    such inputs fails alike: this is not a ``CompositeError``, and a loop over
+    cells stops at it.
     """
 
 
 class CompositeInputError(CompositeError, OSError):
-    """An input product of a cell is missing or cannot be read."""
+    """An input product of a cell is missing or cannot be read.
+
+    Missing includes the RTC product that supplies an observation's local
+    scattering area in a coherence composite: an RTC that failed to process
+    leaves only the cells its burst reaches without one.
+    """
 
 
 class ProductSettingsMismatchError(S1BurstsError):

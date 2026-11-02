@@ -401,6 +401,34 @@ class TestS3Lookup:
         with pytest.raises(BurstNotFoundError, match="not found in CDSE catalogue"):
             _lookup_s3_path("S1A_MISSING.SAFE")
 
+    @pytest.mark.parametrize(
+        ("body", "match"),
+        [
+            ([], "Unexpected CDSE catalogue response"),
+            ({"error": "busy"}, "Unexpected CDSE catalogue response"),
+            ({"value": [{"Name": "x.SAFE"}]}, "has no S3Path"),
+            ({"value": ["x.SAFE"]}, "has no S3Path"),
+        ],
+    )
+    def test_a_malformed_response_fails_the_burst(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        body: object,
+        match: str,
+    ) -> None:
+        # Previously an AttributeError or KeyError, which stopped the whole download.
+        class _Response:
+            def raise_for_status(self) -> None: ...
+
+            def json(self) -> object:
+                return body
+
+        monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: _Response())
+
+        with pytest.raises(BurstDownloadError, match=match) as info:
+            _lookup_s3_path("S1A_IW_SLC.SAFE")
+        assert not isinstance(info.value, BurstNotFoundError)
+
 
 class TestS3Authentication:
     def test_prefers_a_named_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
