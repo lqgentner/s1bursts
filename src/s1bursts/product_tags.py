@@ -11,6 +11,33 @@ from in ``METADATA_VOCABULARY``.
 
 Borrowing the vocabulary is not conformance, which is neither assessed nor
 claimed here.
+
+Tags named after a parameter of the CEOS-ARD SAR Metadata Specification v1.3,
+upper-snake-cased, with the PFS item that asks for it::
+
+    Tag                           Metadata parameter          PFS item
+    BACKSCATTER_MEASUREMENT       BackscatterMeasurement      3.1
+    BACKSCATTER_CONVENTION        BackscatterConvention       3.1
+    BACKSCATTER_CONVERSION_EQ     BackscatterConversionEq     3.1 (and 3.2)
+    CQM_CONVERSION_EQ             CQMdBScaling                2.22
+    CONTRIBUTING_OBSERVATIONS     NbrObservations             2.21
+    COMPOSITING_METHOD            CBMethod                    1.7.24
+    COMPOSITING_METHOD_REFERENCE  CBReference                 1.7.24
+    PIXEL_COORDINATE_CONVENTION   PixelCoordinateConvention   1.7.10
+    RELATIVE_ORBIT_NUMBER         RelativeOrbitNumber         1.6.5
+    PASS_DIRECTION                PassDirection               1.6.5
+    MEASUREMENT_TYPE              Measurements type           [InSAR] 3.8
+    COHERENCE_AVERAGE             CoherenceAverage            [InSAR] 3.8
+    COHERENCE_STD                 CoherenceStd                [InSAR] 3.8
+    PHASE_QUALITY_METHOD          InSARPhaseQualityMethod     [InSAR] 1.7.18
+    PHASE_QUALITY_REFERENCE       InSARPhaseQualityReference  [InSAR] 1.7.18
+    COHERENCE_WINDOW_RANGE        CoherenceWindowColumn       [InSAR] 1.7.18
+    COHERENCE_WINDOW_AZIMUTH      CoherenceWindowLine         [InSAR] 1.7.18
+    COHERENCE_WEIGHTING_SHAPE     CoherenceWeightingShape     [InSAR] 1.7.18
+    TEMPORAL_BASELINE_DAYS        TemporalBaseline            [InSAR] 1.7.16
+
+Every other tag has no counterpart in the specification and a plain
+descriptive name.
 """
 
 from __future__ import annotations
@@ -702,7 +729,11 @@ def qa_metadata(
     tags |= {
         "QA_LAYER": "Composite Quality Map Image",
         "LAYER_NAME": "cqm",
-        "LAYER_DESCRIPTION": "Composite local resolution, 1/sum(W_i * A_i); dimensionless.",
+        "LAYER_DESCRIPTION": (
+            "Composite local resolution: the reciprocal of the local scattering areas A_i, "
+            "aggregated with the composite's weights and statistic; higher is better "
+            "resolved; dimensionless."
+        ),
     }
     # <CQMdBScaling>: the declaration of a conversion, on linear data.
     tags["CQM_CONVERSION_EQ"] = CONVERSION_EQ
@@ -811,7 +842,9 @@ def backscatter_metadata(
             {"LAYER_NAME": "gamma0"},
             {
                 "LAYER_NAME": "scattering_area",
-                "LAYER_DESCRIPTION": ("Local scattering area relative to a flat reference facet."),
+                "LAYER_DESCRIPTION": (
+                    "Local scattering area that terrain flattening divides beta-0 by"
+                ),
             },
         ],
     )

@@ -1,0 +1,85 @@
+---
+title: "Using an external DEM"
+guide-section: "How-to Guides"
+---
+
+# Using an external DEM
+
+Terrain correction needs a digital elevation model (DEM). By default SNAP
+downloads the Copernicus 30 m DEM by itself, so most users never need this
+page. Use an external DEM when a better local one exists, such as a national
+elevation model, or to avoid SNAP's
+[height error](snap-processing.qmd#corrections-s1bursts-applies) with the
+built-in Copernicus DEM.
+
+## Prepare the DEM
+
+An external DEM must be prepared before SNAP reads it, because SNAP has two
+reported problems with external DEMs:
+
+- **It samples them half a pixel off**, to the south-east
+  ([forum report](https://forum.step.esa.int/t/external-dem-is-sampled-half-a-pixel-off/46042)).
+  SNAP fixed this in the 14.0.2 update of its DEM module.
+- **It knows only one height reference, EGM96**, which most modern DEMs do not
+  use ([forum report](https://forum.step.esa.int/t/copernicus-dem-built-in-path-applies-egm96-while-the-data-is-egm2008/46041)).
+
+`prepare_dem_for_snap()` corrects both and writes a copy, leaving your original
+untouched:
+
+```{.python}
+from pathlib import Path
+from s1bursts import prepare_dem_for_snap
+
+prepared = prepare_dem_for_snap(
+    Path("swissalti3d_30m.tif"),
+    source_crs="EPSG:2056+5728",
+    download_missing_grids=True,
+)
+```
+
+`source_crs` states both the map projection and the height reference of the
+DEM, joined by `+`. Here, `EPSG:2056` is the Swiss LV95 grid and `5728` the
+Swiss LN02 heights; look these up in your DEM's documentation. Converting the
+heights can need correction grids from PROJ, which
+`download_missing_grids=True` fetches when they are freely available.
+
+The half-pixel shift is applied only for SNAP versions that still need it.
+`prepare_dem_for_snap()` checks the SNAP installation it finds the same way
+processing does, so the prepared copy is correct only for that installation and
+only for SNAP. Prepared copies are cached, so preparing the same file again
+costs nothing.
+
+## Use the prepared DEM
+
+Pass the prepared file to the processing settings, together with a short name.
+The name is written into every product's metadata, so you can tell later which
+DEM was used. It also lets a rerun check that an existing product was made with
+the same DEM before skipping it; without a name, that check is left out:
+
+```{.python}
+from s1bursts import RTCConfig
+
+config = RTCConfig(
+    dem=prepared,
+    dem_name="swissALTI3D 30 m",
+    external_dem_apply_egm=False,
+)
+```
+
+Keep `external_dem_apply_egm=False`: the preparation has already converted the
+heights, and SNAP would otherwise convert them a second time.
+
+## Downsample a fine DEM first
+
+SNAP's terrain flattening and terrain correction (geocoding) take much longer
+on a fine DEM grid. So a DEM much finer than your products should be downsampled before
+preparing it, by averaging all fine pixels within each coarse one.
+freezebase's `vrt.warp()`
+averages by default; this reduces the 2 m swissALTI3D to 30 m:
+
+```{.python}
+from freezebase import vrt
+from freezebase.raster import write_cog
+
+write_cog(vrt.warp("swissalti3d_2m.tif", resolution=30), "swissalti3d_30m.tif")
+```

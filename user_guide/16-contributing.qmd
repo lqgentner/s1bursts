@@ -1,0 +1,66 @@
+---
+title: "Contributing"
+guide-section: "Development"
+---
+
+# Contributing
+
+Contributions are welcome as issues and pull requests on
+[GitHub](https://github.com/lqgentner/s1bursts). This page covers setting up a
+development environment and building this documentation.
+[`AGENTS.md`](https://github.com/lqgentner/s1bursts/blob/main/AGENTS.md)
+holds the full development guidelines and the reasoning behind the design.
+
+## Set up and test
+
+The project uses [uv](https://docs.astral.sh/uv/). These commands install the
+environment and run the checks that every pull request must pass:
+
+```{.bash}
+uv sync
+uv run pytest
+uv run ruff format
+uv run ruff check --fix
+uv run pyrefly check
+```
+
+The default tests run offline. Tests that download data or run SNAP are marked
+`integration` and run with `uv run pytest -m integration`, given CDSE
+credentials and a SNAP installation.
+
+## Build the documentation
+
+The site is built with [Great Docs](https://posit-dev.github.io/great-docs/),
+which also needs [Quarto](https://quarto.org/docs/get-started/). Guide pages
+live in `user_guide/`, the API reference comes from the docstrings, and
+`great-docs.yml` configures the site:
+
+```{.bash}
+uv sync --group docs
+uv run python -m ipykernel install --sys-prefix --name python3
+uv run great-docs build
+uv run great-docs preview
+```
+
+The built site lands in `great-docs/_site/`, which is generated and never
+edited by hand.
+
+## Frozen tutorials
+
+The tutorials download real data and run SNAP, which takes too long for every
+build. Their results are therefore frozen: `_freeze/` stores each page's
+rendered output and figures, and builds reuse it without running the code. CI
+builds the site from `_freeze/` alone, without credentials or SNAP.
+
+Refresh a frozen page after changing its code or the API it uses. This reruns
+the page, so it needs `.env` and SNAP; downloads and products are cached in
+`cache/docs/` and reused. Refresh one page per command, then rebuild:
+
+```{.bash}
+uv run great-docs freeze user_guide/10-glacier-backscatter.qmd
+uv run great-docs build
+```
+
+Review the new figures and the `_freeze/` diff before committing. Each frozen
+page ends with its run details: the date, the s1bursts version and the SNAP
+version it was run with.

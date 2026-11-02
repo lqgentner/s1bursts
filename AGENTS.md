@@ -1,6 +1,6 @@
 # s1bursts Development Setup
 
-s1bursts is a Sentinel-1 SLC burst download and InSAR processing package, built on the CDSE APIs and ESA SNAP GPT. For domain context, product hierarchy, and pipeline design decisions, see [`docs/SENTINEL1_LRW_PIPELINE.md`](docs/SENTINEL1_LRW_PIPELINE.md).
+s1bursts is a Sentinel-1 SLC burst download and InSAR processing package, built on the CDSE APIs and ESA SNAP GPT. The [user guide](user_guide/) describes the product model and the API from a user's side; the sections below hold the reasoning behind it that users do not need.
 
 Shared geo/IO helpers (MGRS grid, rasterio/S3 raster access, HTTP download tooling) come from the sibling [freezebase](https://github.com/lqgentner/freezebase) package — the only first-party dependency, so that s1bursts can be released on PyPI with a wheel-only dependency set (no GDAL, no scipy).
 
@@ -112,7 +112,7 @@ The half-pixel bug is fixed in the `snap-dem` module from 14.0.2 on ([SNAP-4264]
 
 `ReplaceZerosWithNoData` sits between Terrain-Flattening and Terrain-Correction and maps the SLC's zero fill onto a no-data marker, because TC otherwise averages those zeros into its interpolation kernel and biases edge pixels dark ([forum report](https://forum.step.esa.int/t/sentinel-1-slc-terrain-correction-operator-uses-zero-values-in-interpolation-instead-of-treating-them-as-no-data/45336)).
 
-The marker is the finite `NODATA_SENTINEL` (`-2**40`), not `NaN`. TC recognises a no-data sample only through `v == tileData.noDataValue`, which is false for every `v` when the declared value is `NaN` — so SNAP 13 never reached its no-data path and let the `NaN` poison every output pixel whose kernel touched it, eroding the footprint, while SNAP 14 tests `Double.isNaN(v)` as well and did reach it. That was the whole of the 13-vs-14 mask difference (measured at 52,892 pixels on burst 30346). A finite marker is detected by both, so both fall back to the nearest valid sample.
+The marker is the finite `NODATA_SENTINEL` (`-2**40`), not `NaN`. TC recognizes a no-data sample only through `v == tileData.noDataValue`, which is false for every `v` when the declared value is `NaN` — so SNAP 13 never reached its no-data path and let the `NaN` poison every output pixel whose kernel touched it, eroding the footprint, while SNAP 14 tests `Double.isNaN(v)` as well and did reach it. That was the whole of the 13-vs-14 mask difference (measured at 52,892 pixels on burst 30346). A finite marker is detected by both, so both fall back to the nearest valid sample.
 
 Two constraints pick the value, `-2**40`. It has to lie outside every band's range: the binding case is the interferogram, whose `i_ifg` and `q_ifg` are signed and, because no operator before them calibrates, are products of raw CInt16 SLC counts bounded by `2 * 32768**2 = 2**31`. And it has to be exactly representable in float32, because SNAP compares the float32 sample widened to double against the double it parsed from the XML — `-1e12` and `-1e30` are *not*, so they would silently fail the same way `NaN` does. Powers of two written out in full satisfy both. Within a complex pair the two bands must also declare the same marker, since TC reads `srcBands[0].getNoDataValue()` and applies it to both.
 
@@ -166,11 +166,42 @@ docker run --rm -v "$PWD:/w" -w /w --env-file .env \
 
 ### Parity with CDSE's burst products
 
-The burst extractor reproduces the products of CDSE's burst service (the raster is byte-identical on burst 30346). Two fields differ on purpose, so do not "fix" them: GCP rows follow the reference script's corrected behaviour, since CDSE's are one whole burst too far (-9006 where ours are -4503) and `tests/safe_conformance.py` reports it as `KNOWN DEVIATION:`; and footprint coordinates are copied as the annotation's raw text, which is what CDSE ships, whereas the reference script's XPath `number()` loses a digit. The wide footprint, blanked manifest checksums and retained out-of-burst grid points are CDSE's behaviour too. Before changing what `burst_extractor.py` outputs, run `uv run --env-file .env pytest -m integration -k ReferenceConformance` and diff against CDSE instead of reasoning from the SAFE spec.
+The burst extractor reproduces the products of CDSE's burst service (the raster is byte-identical on burst 30346). Two fields differ on purpose, so do not "fix" them: GCP rows follow the reference script's corrected behavior, since CDSE's are one whole burst too far (-9006 where ours are -4503) and `tests/safe_conformance.py` reports it as `KNOWN DEVIATION:`; and footprint coordinates are copied as the annotation's raw text, which is what CDSE ships, whereas the reference script's XPath `number()` loses a digit. The wide footprint, blanked manifest checksums and retained out-of-burst grid points are CDSE's behavior too. Before changing what `burst_extractor.py` outputs, run `uv run --env-file .env pytest -m integration -k ReferenceConformance` and diff against CDSE instead of reasoning from the SAFE spec.
 
 ### Terminology and band names
 
 The area Terrain-Flattening divides beta-0 by is the **local scattering area** (CEOS-ARD SAR PFS wording; Small et al. say contributing area, OPERA the area normalization factor, SNAP `simulatedImage`), kept only where those are external identifiers. Each band has one snake_case name, used as the graph's target band, the GeoTIFF band description and the `LAYER_NAME` tag: RTC `gamma0` and `scattering_area`, GTC `beta0`, `coherence`, and `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` for the interferogram. CEOS-ARD PFS SAR v1.3.1 governs; its Composite Backscatter product covers the LRW output. Do not rename `QA-NUM` to match item 2.21 of that standard, because the token is embedded in output filenames and the `filemanager.py` discovery regexes. The `tests/fixtures/regenerate_*_reference.py` scripts read bands by description and silently fall back to band 1 on a miss, so a band rename must reach them.
+
+### Design decisions
+
+- **Minimal metadata in file names.** A name holds only the identifiers a glob needs; settings are GeoTIFF tags. One table, `_NAME_FORMATS` in `filemanager.py`, builds and parses every name, so `find()` and `get_product_path()` cannot disagree.
+- **The scattering area travels with its backscatter**, as band 2 of every RTC GeoTIFF, never as a separate product. It is date-aligned with the acquisition by construction, and a coherence LRW composite takes it from the RTC product of the same orbit and date.
+- **LRW needs RTC.** Terrain effects must be corrected before weighting, so GTC products get pass composites only. Terrain flattening happens inside the SNAP graph; there is no post-processing step.
+- **No Multilook in the coherence graph.** The estimation window is the only control over the looks; a multilook after the estimator would only average coherence magnitudes.
+- **Composites are keyed by `mgrs_code`**, since they combine several footprints. Within one relative orbit and date, bursts are mosaicked by first valid pixel, so seams are never averaged; the orbit-date observations are then aggregated in time.
+- **The burst-ID map stays optional.** Relative orbit and pass direction come from the search response or the SLC file name, so the normal workflow never opens the map. Only a hand-built burst, and the footprint of a burst found with `find(Burst)`, need it.
+
+### Metadata tags
+
+`product_tags.py` builds every product's tags; its module docstring maps each tag to the CEOS-ARD metadata parameter it is named after.
+
+- **Vocabulary, not conformance.** Tag names follow the CEOS-ARD SAR specification so a reader can look a term up; tags without a counterpart get plain descriptive names, as OPERA does. `METADATA_VOCABULARY`, identical on every product, is the only tag naming the specification, and it is a pointer, not a claim: no tag key may look like a CEOS-defined field (no `CEOS_ARD_` namespace). No conformance is assessed or claimed; items 2.2 (data mask) and 4.3 (geolocation accuracy) are known unmet Threshold requirements. `PRODUCT_FAMILY = Composite Coherence` is this package's own term, since coherence composites fall between [InSAR] 3.8 and [CB].
+- **Provenance.** `DEM` and `PROCESSING_SOFTWARE(_VERSION)` are written per burst and inherited by composites; `PIPELINE_SOFTWARE(_VERSION, _URL)` is stamped by whichever s1bursts writes the file and never inherited, because the definition of `QA-NUM` has changed between releases. `PRODUCT_LEVEL` runs L1 → L2 (burst, as OPERA's RTC-S1) → L3 (composite).
+- **The DEM is recorded by name**, the SNAP name or `GeocodingConfig.dem_name`, never by path: a path is machine-specific, so a campaign processed on two machines would compose to `N/A`.
+- **Every provenance field is always present**, as `N/A` (`product_tags.UNKNOWN`) when it cannot be determined, because absence is ambiguous with a file written before the tag existed. Conditional fields, such as the coherence window on a backscatter composite, are omitted instead.
+- **Inherited fields must be unanimous.** `ResolutionWeighter._input_tags` reads every input and carries a value forward only where all agree. `COMPOSITING_PARAMETERS` is built from the arguments of the `compose_*` call, never from a configuration object.
+- **Not emitted:** decibel-stored data (a composite still tagged `BACKSCATTER_SCALING` or `CQM_SCALING = decibel` counts as made with other settings), a conversion equation on coherence or `QA-NUM`, a data-mask description of `QA-NUM`, and composite or NRB wording on a per-burst product. Backscatter bands carry the unit `linear power` (the PFS wording), dimensionless bands none; the `BACKSCATTER_CONVENTION` tag stays `Power`, as the metadata specification enumerates it.
+- **Backfilling tags.** Burst products are plain tiled GeoTIFFs and can be retagged in place, also on S3: `rasterio_open(path, "r+")` stages through `TMPDIR` and fails without a writable one, `rewrite_tiff()` holds the uncompressed raster in memory. Composites are COGs, which a metadata write would turn into plain GeoTIFFs, so regenerate them instead.
+
+### Composite inputs
+
+Differences that would make a composite wrong are refused: a CRS, pixel size or sub-pixel grid offset other than the cell's (the read window is computed in the cell's coordinates against each source's transform, so it would read the wrong pixels), a mixed DEM, and a mixed polarization or coherence baseline (a composite carries one of each in its name) raise `InconsistentInputsError`. It is a `ValueError` but deliberately not a `CompositeError`: such inputs fail every cell they are given to, so a loop over cells must stop at them rather than record one failure per cell. A missing input, including an observation without a matching RTC scattering area, is a `CompositeInputError`, since it affects only the cells that observation reaches. A mixed SNAP version only degrades consistency and an archive built over several campaigns legitimately holds one, so it is tolerated with a warning and recorded as `N/A`.
+
+### Skipping existing products
+
+With `overwrite=False`, `settings_check.py` compares an existing product's tags with the request and raises `ProductSettingsMismatchError` on a difference; it stops the batch rather than being recorded per item, because changed settings affect every product of a call. Per-burst products compare `GRID_SPACING`, `DEM`, the multilook, the coherence window and the interferogram's phase flags, with the requested values taken from the builders that write them, so formatting cannot differ; settings no tag records, such as the resampling, are not compared. Composites compare each layer's grid with the target geobox and `COMPOSITING_PARAMETERS`, but nothing inherited, so a skip reads no input.
+
+Files that cannot be checked (`untagged`, from before s1bursts 0.3.0, and `unknown_dem`, an external DEM without `dem_name`) and products of another SNAP version are skipped rather than refused, the latter being an environment change rather than a setting; `OkResult.unchecked` and `other_snap_version` record them. `PIPELINE_SOFTWARE_VERSION` is not compared. `BurstProcessor` checks all existing products before the first GPT run and warns once per call; `SNAPClient` warns once per skip.
 
 ## Releasing
 
@@ -179,7 +210,7 @@ changes in [`CHANGELOG.md`](CHANGELOG.md) under `## Unreleased` as you go, follo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 The project is pre-1.0, so minor releases may contain breaking changes, but they must be
-labelled. Mark behavior changes with **Breaking:** and show the before/after so downstream
+labeled. Mark behavior changes with **Breaking:** and show the before/after so downstream
 call sites can be updated from the entry alone.
 
 New backward-compatible functionality is a **minor** bump; a pure bug fix with no new public

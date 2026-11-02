@@ -1,0 +1,79 @@
+---
+title: "Local resolution weighting"
+guide-section: "Background"
+---
+
+# Local resolution weighting
+
+Local resolution weighting (LRW) combines acquisitions pixel by pixel and gives
+more weight to the acquisitions that resolve the terrain more finely at that
+pixel. s1bursts follows Small et al. (2022)[^small] and applies the method to
+backscatter and coherence alike.
+
+## Why mountains need it
+
+A radar looks sideways, so the ground resolution of a mountain slope depends on
+how the slope faces the sensor. A slope facing the sensor is compressed into
+few pixels and coarsely resolved. A slope facing away is stretched over many
+pixels and finely resolved, unless it is so steep that it lies in radar shadow.
+Ascending and descending orbits look from opposite sides, so each resolves
+slopes that the other resolves poorly.
+
+## The weights
+
+The `scattering_area` band of an RTC product holds the normalized ground area
+$A_i$ that acquisition $i$ observes in each pixel. Its inverse is the local
+resolution, $r_i = 1/A_i$. At each pixel, the weights are the local
+resolutions, normalized to sum to one over the $M$ acquisitions with a valid
+observation there:
+
+$$
+W_i = \frac{r_i}{\sum_{j=1}^{M} r_j}
+$$
+
+The composite of a measured value $x$ is the weighted mean
+
+$$
+x_c = \sum_{i=1}^{M} W_i \, x_i ,
+$$
+
+or the weighted median or quantile with `aggregation="median"` or a quantile
+level. The weights depend only on the viewing geometry, so $x$ can be
+backscatter $\gamma^0$ or coherence. A coherence product has no scattering
+area of its own, so each pair is weighted by the RTC product of its primary
+acquisition, which is why `compose_coherence_lrw()` takes RTC products as
+well.
+
+An acquisition in radar shadow has no valid area there and does not count
+toward $M$. Bursts of the same orbit and date are joined first, so the overlap
+of neighboring bursts counts once.
+
+## Capping the local resolution
+
+Close to radar shadow, $A_i$ approaches zero and $r_i$ grows without bound,
+although the simulated area is least reliable there. `clip_max_resolution`
+sets a cap $r_\text{max}$ and uses $\min(r_i, r_\text{max})$ in place of $r_i$
+in the weights, so that one acquisition cannot dominate such pixels. By
+default, no cap is applied. For scale, flat terrain has a local resolution of
+about 0.6 to 1.0.
+
+## The quality layers
+
+The number of observations (`QA-NUM`) is $M$, the number of acquisitions that
+contributed to each pixel. The composite quality map (`QA-CQM`) is the local
+resolution of the composite: the inverse of the mean scattering area, weighted
+as the composite is:
+
+$$
+\text{CQM} = \left( \sum_{i=1}^{M} W_i \, A_i \right)^{-1}
+$$
+
+A higher value means a finer resolution. The quality map describes the viewing
+geometry only, not the accuracy of the measured value. With a median or
+quantile, it is still the weighted mean above, so it describes the weighting
+rather than the acquisitions that supplied each value.
+
+[^small]: Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
+    (2022). Wide-area analysis-ready radar backscatter composites. *IEEE
+    Transactions on Geoscience and Remote Sensing*, 60, 5201814.
+    <https://doi.org/10.1109/TGRS.2021.3055562>

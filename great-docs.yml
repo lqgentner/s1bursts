@@ -1,0 +1,212 @@
+# Great Docs Configuration
+# See https://posit-dev.github.io/great-docs/user-guide/configuration.html
+
+display_name: s1bursts
+parser: numpy
+module: s1bursts
+dynamic: true
+freeze: auto
+
+# GitHub Integration
+# ------------------
+repo: https://github.com/lqgentner/s1bursts
+site_url: "https://lqgentner.github.io/s1bursts/"
+
+source:
+  enabled: true
+  branch: main
+  placement: usage
+
+
+# Author Information
+# ------------------
+authors:
+  - name: Luis Gentner
+    role: Author
+    email: luis.gentner@geo.uzh.ch
+    github: lqgentner
+    orcid: 0009-0006-4453-0881
+
+# Logo & Favicon
+# --------------
+# The logo already spells out the package name, so the hero hides its own.
+logo: assets/s1burst-logo.svg
+# The bursts are illegible at tab size, so the favicon is the bare "S1". Great
+# Docs derives its Apple touch icon from the same file; the docs workflow
+# replaces that with `assets/s1burst-favicon.svg`.
+favicon: assets/s1burst-favicon-small.svg
+
+hero:
+  name: false
+
+# Avoid duplicating the site name in page titles.
+seo:
+  title_template: "{page_title}"
+
+# Theming
+# -------
+content_style: dusk
+navbar_style: dusk
+
+# Custom CSS
+# ----------
+# Great Docs caps the text column at 749 px but shows figures at their own pixel
+# size, so a wider one scrolls sideways and a narrower one leaves a gap. Scale
+# every figure to the column instead. Its 24 px navbar logo makes the detailed
+# logo illegible; 40 px still fits the navbar's 45 px limit.
+include_in_header:
+  - text: |
+      <style>
+      .cell-output-display img.figure-img { width: 100%; height: auto; }
+      .navbar-logo { height: 40px; }
+      </style>
+
+# Icons
+# -----
+nav_icons:
+  sidebar:
+    Introduction: compass
+    Installation: download
+    Environment variables: sliders-vertical
+    Quickstart: rocket
+    Finding and downloading bursts: search
+    Processing with SNAP: workflow
+    Compositing: layers
+    From an area to composites: map
+    Storing products on S3: cloud
+    Using an external DEM: mountain
+    Contributing: wrench
+
+# API Reference Structure
+# -----------------------
+reference:
+  title: "API Reference"
+  desc: >-
+    The public surface of s1bursts, grouped by the stage of the pipeline it
+    belongs to. The top-level `s1bursts` namespace re-exports what a pipeline is
+    *built* from; what a pipeline *produces* is imported from the module that
+    defines it.
+  sections:
+    - title: Searching and downloading
+      desc: >-
+        Query the CDSE burst catalog and fetch single bursts over OData or S3.
+      contents:
+        - query.SearchQuery
+        - time_range.TimeRange
+        - catalog.BurstCatalog
+
+    - title: Burst data model
+      desc: >-
+        The acquisitions a search returns, and the interferometric pairs built
+        from them.
+      contents:
+        - burst.Burst
+        - burst.BurstPair
+        - burst.BurstCollection
+        - burst.BurstPairCollection
+
+    - title: Processing
+      desc: >-
+        Batch SNAP GPT execution and the runtime budget it runs under.
+      contents:
+        - processor.BurstProcessor
+        - snap_client.SNAPConfig
+        - snap_client.SNAPClient
+
+    - title: Graph configuration
+      desc: >-
+        The shape of the generated SNAP graph, one config per product type.
+        Every config carries the shared Terrain-Correction tail parameters.
+      contents:
+        - snap_graph.RTCConfig
+        - snap_graph.GTCConfig
+        - snap_graph.CoherenceConfig
+        - snap_graph.InterferogramConfig
+        - snap_graph.BackscatterConfig
+        - snap_graph.GeocodingConfig
+
+    - title: Storage
+      desc: >-
+        Deterministic product paths and discovery, on local disk or S3.
+      contents:
+        - filemanager.FileManager
+
+    - title: Compositing
+      desc: >-
+        Locally resolution weighted and per-pass composites on the 10 km
+        squares of the MGRS grid, re-exported from freezebase.
+      contents:
+        - resolution_weighter.ResolutionWeighter
+        - MGRSGrid
+        - MGRSGeoBox
+
+    - title: Single-burst products
+      desc: >-
+        Metadata records returned by the processing services. They describe a
+        product; the pixels live in the GeoTIFF at its `FileManager` path.
+      contents:
+        - product.RTCProduct
+        - product.GTCProduct
+        - product.CoherenceProduct
+        - product.InterferogramProduct
+
+    - title: Composite products
+      desc: >-
+        MGRS grid-square composites. Each holds its measurement and,
+        optionally, its quality-assurance layers.
+      contents:
+        - product.RTCLRWComposite
+        - product.CohLRWComposite
+        - product.RTCPassComposite
+        - product.CohPassComposite
+        - product.GTCPassComposite
+        - product.Layer
+
+    - title: Results and errors
+      desc: >-
+        What a batch operation reports, and the exception hierarchy that
+        separates per-item failures from environment-wide ones.
+      contents:
+        - summary.OperationSummary
+        - summary.OkResult
+        - summary.ErrorResult
+        - errors.S1BurstsError
+        - errors.OperationFailedError
+        - errors.ConfigurationError
+        - errors.TransformationGridError
+        - errors.BurstMapUnavailableError
+        - errors.CatalogError
+        - errors.TooManyResultsError
+        - errors.BurstNotInMapError
+        - errors.ProductSettingsMismatchError
+        - errors.BurstError
+        - errors.BurstNotFoundError
+        - errors.BurstDownloadError
+        - errors.NoUTMZoneError
+        - errors.SnapProcessingError
+        - errors.CompositeError
+        - errors.EmptyCompositeError
+        - errors.InconsistentInputsError
+        - errors.CompositeInputError
+
+    - title: Reference data and low-level access
+      desc: >-
+        The optional SAR-MPC burst-ID map, external-DEM preparation, and the
+        CDSE clients the high-level services are built on.
+      contents:
+        - burstmap.download_burst_map
+        - burstmap.Sentinel1Bursts
+        - dem.prepare_dem_for_snap
+        - cdse.CDSEAuth
+        - cdse.CDSEBurstClient
+        - cdse.CDSEResponse
+        - burst_extractor.extract_burst_from_s3
+        - snap_graph.xml_to_mermaid
+        - snap_graph.build_backscatter_graph
+        - snap_graph.build_coherence_graph
+        - snap_graph.build_interferogram_graph
+
+# Jupyter Kernel
+# --------------
+# Used to execute the `{python}` chunks in the user guide.
+jupyter: python3

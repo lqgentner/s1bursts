@@ -1,0 +1,215 @@
+---
+title: "Finding and downloading bursts"
+guide-section: "How-to Guides"
+---
+
+# Finding and downloading bursts
+
+A search asks the CDSE catalog which bursts exist for a place and a time
+window, and a download fetches them. Searching needs no account and downloads
+nothing, so you can refine a query freely before committing to a download.
+
+## Search an area
+
+Pass an area of interest as a shapely geometry in longitude and latitude,
+together with a time window. The search returns every burst that overlaps the
+area and shows their footprints on a map:
+
+```{python}
+from shapely.geometry import box
+from s1bursts import BurstCatalog, FileManager, SearchQuery, TimeRange
+
+catalog = BurstCatalog(FileManager("data"))
+bursts = catalog.search(SearchQuery(
+    intersects=box(8.00, 46.40, 8.08, 46.48),
+    time_range=TimeRange("2022-01-01", "2022-01-31"),
+    polarization="VV",
+))
+bursts
+```
+
+Even a small area usually returns several footprints. Bursts from different
+orbits and sub-swaths overlap the same few kilometers, each seeing the ground
+from a different direction. The area selects whole bursts and does not crop
+them. A `TimeRange` covers whole days, and both end dates are included.
+
+## Follow one footprint
+
+To follow one footprint through time, search by `burst_id` and `sub_swath`
+instead of by area. This is the usual query once an area search has shown which
+footprint covers your site best:
+
+```{.python}
+bursts = catalog.search(SearchQuery(
+    time_range=TimeRange("2022-01-01", "2022-12-31"),
+    burst_id=30346, sub_swath="IW1", polarization="VV",
+))
+```
+
+`SearchQuery` also filters by orbit, pass direction and acquisition mode; its
+[reference](../reference/query.SearchQuery.qmd) lists every field.
+
+::: {.callout-note}
+A search returns every matching burst, up to 1000, the size of one catalog
+page. A query that matches more raises `TooManyResultsError` rather than return
+an incomplete list. Narrow the time window or the area, or split the query and
+[combine the results](#combine-searches).
+:::
+
+## Combine searches
+
+Search results add up with `+`, which drops any duplicates. Use this to collect
+several searches into one download, for example the same footprint in winter
+and in summer:
+
+```{python}
+footprint = dict(burst_id=30346, sub_swath="IW1", polarization="VV")
+winter = catalog.search(SearchQuery(time_range=TimeRange("2022-01-01", "2022-01-31"), **footprint))
+summer = catalog.search(SearchQuery(time_range=TimeRange("2022-07-01", "2022-07-31"), **footprint))
+both = winter + summer
+print(len(winter), len(summer), len(both))
+```
+
+## Select part of a search
+
+A search result can be narrowed without a new query. Each selection returns a
+new collection, so they can be chained:
+
+| Method | Keeps the bursts |
+|---|---|
+| `within(time_range)` | Acquired on a day of a `TimeRange` |
+| `intersecting(geometry)` | Whose footprint touches a geometry, such as an area or an [MGRS grid square](compositing.qmd#get-the-grid-squares) |
+| `filter(**fields)` | Whose fields equal a value, or any value of a list |
+
+```{.python}
+january = bursts.within(TimeRange("2022-01-01", "2022-01-31"))
+descending = bursts.filter(pass_direction="Descending", rel_orbit_number=[66, 139])
+```
+
+## Pair acquisitions
+
+Coherence compares two acquisitions of the same footprint. `find_pairs()` turns
+a search result into pairs a fixed number of days apart, which can be
+downloaded and [processed](processing.qmd#coherence) like single bursts:
+
+```{.python}
+pairs = bursts.find_pairs(baseline=12)
+```
+
+The baseline is a whole number of days, and both arguments are passed by
+keyword. `max_delta` sets how far the actual spacing may deviate from it, six
+hours by default. A pair needs both of its acquisitions, so search a little
+beyond the end of the period you want and keep the pairs that start within
+it:
+
+```{.python}
+pairs = bursts.find_pairs(baseline=12).starting_within(january)
+```
+
+## Save a search
+
+Save a search result if you want to rerun an analysis on exactly the same
+acquisitions later. The records live in a GeoDataFrame, which can be written to
+GeoParquet and loaded again without querying the catalog:
+
+```{.python}
+import geopandas as gpd
+from s1bursts.burst import BurstCollection
+
+bursts.df.to_parquet("inventory.parquet")
+bursts = BurstCollection(gpd.read_parquet("inventory.parquet"))
+```
+
+## Download the bursts
+
+`BurstCatalog.download()` fetches the bursts of a search result, or both
+acquisitions of every pair. Bursts already on disk are skipped, so an
+interrupted download can be run again:
+
+```{.python}
+summary = catalog.download(bursts, max_workers=4)
+summary.print_summary()
+```
+
+`max_workers` sets how many bursts download in parallel. Each file lands in the
+`s1-slc` folder below the `FileManager`'s base directory.
+
+## When the burst service fails
+
+CDSE's burst service occasionally fails for particular bursts. If
+[CDSE S3 keys](environment-variables.qmd#cdse-credentials) are set, s1bursts
+then extracts the burst from the full scene on CDSE's S3 storage instead. This
+route is slower but usually succeeds. Without the keys, the burst is recorded as
+failed. Pass `endpoint="s3"` to try the S3 route first.
+
+## Failed downloads
+
+A failed burst does not stop the download by default. It is recorded in the
+returned `OperationSummary` and the remaining bursts continue. Check the
+summary before processing: `raise_on_failure()` raises an
+`OperationFailedError` that lists every failed burst, and otherwise returns the
+summary, so it can follow the call directly:
+
+```{.python}
+catalog.download(bursts).raise_on_failure()
+```
+
+To inspect the failures yourself, read them from the summary:
+
+```{.python}
+for failure in summary.failed_items:
+    print(failure.source.date, failure.error)
+```
+
+Most failures are temporary server errors and succeed on a second run, which
+downloads only the missing bursts. To stop at the first failure instead,
+create the catalog with `BurstCatalog(fm, continue_on_error=False)`. A burst
+that CDSE reports as missing is not requested again by the same
+`BurstCatalog`; create a new one to retry it later. To accept such bursts and
+continue, ignore their error type:
+
+```{.python}
+from s1bursts.errors import BurstNotFoundError
+
+catalog.download(bursts).raise_on_failure(ignore=BurstNotFoundError)
+```
+
+## Reuse downloaded bursts
+
+`FileManager` lists what is already stored, without a new search. Use this to
+process bursts downloaded in an earlier session:
+
+```{.python}
+from s1bursts import FileManager
+from s1bursts.burst import Burst
+
+fm = FileManager("data")
+bursts = fm.find(Burst, burst_id=30346, time_range=TimeRange("2022-01-01", "2022-06-30"))
+```
+
+The result is a list of bursts, which the processing methods accept as it is.
+To [form pairs](#pair-acquisitions), turn it into a collection first with
+`BurstCollection.from_bursts(bursts)`.
+
+`find()` lists every product and composite type the same way: pass the type,
+such as `RTCProduct` or `RTCLRWComposite` from `s1bursts.product`, and filter
+on the fields its filename records. These listings are rebuilt from filenames,
+so they hold less information than the original search result;
+[save the search](#save-a-search) if you need the full catalog record.
+
+### The burst-ID map
+
+A burst from a search carries its relative orbit, pass direction and footprint,
+and product and SLC filenames record the orbit and pass direction, so the usual
+search, download, process and composite workflow needs no further data. Only a
+burst that did not come from a search needs to look these up, in the
+[burst-ID map](https://sar-mpc.eu/sar-mpc-products/) published by SAR-MPC.
+That applies to a burst you construct by hand, and to the footprint of a burst
+found with `find(Burst)`, which its filename does not record. Download the map
+once, about 500 MB per acquisition mode, when you need it:
+
+```{.python}
+from s1bursts import download_burst_map
+
+download_burst_map(mode="IW")
+```

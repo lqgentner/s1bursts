@@ -1,0 +1,109 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-docs:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # hatch-vcs derives the version from git tags/history, and Great Docs
+          # reads commit dates for its page timestamps.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      # The `docs` group carries great-docs itself; the guide executes against
+      # the installed package, so the runtime dependencies are needed too.
+      - name: Install dependencies
+        run: |
+          uv sync --locked --all-extras --group docs
+          uv run python -m ipykernel install --sys-prefix --name python3
+
+      # Versioned _freeze/ outputs supply the expensive CDSE/SNAP tutorials.
+      # CI requires neither credentials nor a SNAP installation.
+      - name: Build site
+        run: uv run great-docs build
+
+      # Great Docs links every documented object to its source in this
+      # repository, so the classes re-exported from freezebase point at the
+      # copy in .venv, which is not on GitHub. Point them at freezebase's own
+      # repository, at the tag of the version the lockfile installs.
+      - name: Link re-exported classes to freezebase
+        run: |
+          uv run python - <<'EOF'
+          import re
+          from importlib.metadata import version
+          from pathlib import Path
+
+          pattern = re.compile(
+              r"https://github\.com/lqgentner/s1bursts/blob/[^/\"]+/"
+              r"\.venv/lib/python[^/]+/site-packages/freezebase/"
+          )
+          target = (
+              f"https://github.com/lqgentner/freezebase/blob/v{version('freezebase')}"
+              "/src/freezebase/"
+          )
+          for page in Path("great-docs/_site").rglob("*.html"):
+              text = page.read_text(encoding="utf-8")
+              if pattern.search(text):
+                  page.write_text(pattern.sub(target, text), encoding="utf-8")
+          EOF
+
+      # Great Docs renders every favicon from one source and ignores the
+      # `favicon.apple_touch` key its config template documents, so the
+      # home-screen icon, which has room for the full design, is redrawn here.
+      - name: Render Apple touch icon
+        run: >-
+          uv run python -c "import cairosvg;
+          cairosvg.svg2png(url='assets/s1burst-favicon.svg',
+          write_to='great-docs/_site/apple-touch-icon.png',
+          output_width=180, output_height=180)"
+
+      - name: Upload site artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-html
+          path: great-docs/_site
+          include-hidden-files: true
+
+  publish-docs:
+    name: Publish to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build-docs
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: docs-html
+          path: great-docs/_site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: great-docs/_site
+          include-hidden-files: true
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,0 +1,127 @@
+---
+title: "Products and bands"
+guide-section: "Background"
+---
+
+# Products and bands
+
+Every product is a GeoTIFF, described in Python by a small metadata record. The
+record holds the product's identity, such as burst, date and type, and
+`FileManager.get_product_path()` turns it into the file's location. This page
+describes what the files contain.
+
+## Burst products
+
+Each burst product is one GeoTIFF, with its bands named in the band
+descriptions:
+
+| Product | Bands | Values |
+|---|---|---|
+| RTC backscatter | `gamma0`, `scattering_area` | Linear power; area without units |
+| GTC backscatter | `beta0` | Linear power |
+| Coherence | `coherence` | Magnitude, 0 to 1, without units |
+| Interferogram | `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` | Uncalibrated; intensities in linear power |
+
+Backscatter is stored as linear power, not decibels, in products and
+composites alike. Convert with
+`10 * log10(value)` only after averaging, since the mean of decibels is not the
+decibel of the mean. The `scattering_area` band describes how much ground each
+pixel covers; [Local resolution weighting](resolution-weighting.qmd) explains
+how composites use it.
+
+The interferogram's phase is the angle of the complex number
+`ifg_real + i·ifg_imag`, in radians from −π to π. Its two intensity bands show
+the brightness of each acquisition.
+
+## Composites
+
+A composite holds one band, the quantity of its inputs: gamma-0, beta-0 or
+coherence, in the same units. Its band description is the polarization, such
+as `VV`; the bands of the quality layers are named `num_obs` and `cqm`.
+
+With `write_qa=True`, each quality layer of a composite is written to a file of
+its own:
+
+- The number of observations (`QA-NUM`) counts the acquisitions that
+  contributed to each pixel.
+- The composite quality map (`QA-CQM`) rates how fine the combined detail of
+  each pixel is, without units. Only LRW composites have it.
+
+[Local resolution weighting](resolution-weighting.qmd#the-quality-layers)
+explains both.
+
+## Missing values
+
+Pixels without data are `NaN`, for example outside the burst. Keep them
+missing in statistics and plots rather than replacing them with zero. The one
+exception is the number of observations, an integer layer that marks pixels
+without data as 0. Both are declared as the file's no-data value, so
+`src.read(1, masked=True)` masks them.
+
+## Metadata tags
+
+Each GeoTIFF also carries tags that say how to read it and how it was made.
+They include the units of the stored values, the acquisition dates, the DEM,
+and the SNAP and s1bursts versions:
+
+```{.python}
+import rasterio
+
+with rasterio.open(fm.get_product_path(product)) as src:
+    print(src.descriptions, src.units)
+    print(src.tags())
+```
+
+These tags make a file understandable on its own, even when separated from the
+code that wrote it. Their names follow the vocabulary of the
+[CEOS-ARD SAR specification](https://ceos.org/ard/), so a term can be looked up
+there. s1bursts borrows the vocabulary only and does not claim conformance with
+the specification.
+
+## Filenames
+
+A filename holds only what tells one product from another, in fixed fields
+joined by underscores. Each product type has its own pattern:
+
+| Product | Filename pattern |
+|---|---|
+| SLC burst | `S1_SLC_<orbit><pass>_<burst>_<swath>_<pol>_<date>.zip` |
+| RTC backscatter | `S1_RTC_<orbit><pass>_<burst>_<swath>_<pol>_<date>_<zone>.tif` |
+| GTC backscatter | `S1_GTC_<orbit><pass>_<burst>_<swath>_<pol>_<date>_<zone>.tif` |
+| Coherence | `S1_COH<baseline>_<orbit><pass>_<burst>_<swath>_<pol>_<date1>_<date2>_<zone>.tif` |
+| Interferogram | `S1_IFG<baseline>_CMPLX_<orbit><pass>_<burst>_<swath>_<pol>_<date1>_<date2>_<zone>.tif` |
+| RTC LRW composite | `S1_RTC_LRW[_<qa>]_<square>_<pol>_<start>_<end>.tif` |
+| Coherence LRW composite | `S1_COH<baseline>_LRW[_<qa>]_<square>_<pol>_<start>_<end>.tif` |
+| RTC or GTC pass composite | `S1_RTC_COMP_<pass>[_QA-NUM]_<square>_<pol>_<start>_<end>.tif`, with `GTC` for GTC |
+| Coherence pass composite | `S1_COH<baseline>_COMP_<pass>[_QA-NUM]_<square>_<pol>_<start>_<end>.tif` |
+
+Square brackets mark the part that names a quality layer; the composite itself
+has none. The fields are:
+
+| Field | Meaning | Example |
+|---|---|---|
+| `<orbit>` | Relative orbit number, three digits | `015` |
+| `<pass>` | Pass direction: `A` ascending, `D` descending | `A` |
+| `<burst>` | ESA burst ID, six digits | `030346` |
+| `<swath>` | Sub-swath | `IW1` |
+| `<pol>` | Polarization | `VV` |
+| `<date>` | Acquisition date, `YYYYMMDD` | `20220801` |
+| `<date1>`, `<date2>` | Dates of the primary and secondary acquisitions of a pair | `20220801`, `20220813` |
+| `<baseline>` | Days between the acquisitions of a pair, two digits | `12` |
+| `<zone>` | UTM zone of the product's CRS | `32N` |
+| `<square>` | MGRS grid square | `32TLS40` |
+| `<start>`, `<end>` | First and last day of the `time_range`, or of the acquisitions without one | `20250801`, `20250831` |
+| `<qa>` | Quality layer: `QA-NUM` or `QA-CQM` | `QA-CQM` |
+
+The RTC product of the [Quickstart](quickstart.qmd), burst 30346 in sub-swath
+IW1 on ascending orbit 15, is named
+`S1_RTC_015A_030346_IW1_VV_20220801_32N.tif`, and the number of observations of
+an LRW composite is named
+`S1_RTC_LRW_QA-NUM_32TLS40_VV_20250801_20250831.tif`.
+
+`FileManager` keeps SLC bursts in `s1-slc`, burst products in `s1-prod` and
+composites in `s1-comp`, below the directory it is given.
+
+Processing settings are not part of the name. They are recorded in the tags
+instead, and a rerun compares them before it skips an existing file; see
+[Reprocessing and failures](processing.qmd#reprocessing-and-failures).

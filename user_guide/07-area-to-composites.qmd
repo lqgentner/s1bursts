@@ -1,0 +1,225 @@
+---
+title: "From an area to composites"
+guide-section: "How-to Guides"
+---
+
+# From an area to composites
+
+This page joins the steps of the previous pages into one script that takes an
+area of interest (AOI) to composites on the MGRS grid squares that cover it.
+s1bursts provides each step, and the script that joins them is yours to adapt.
+The script below assumes that all squares lie in one UTM zone, as they do for
+most areas. [The last section](#areas-across-a-utm-zone-boundary) adapts it
+to an area across a zone boundary.
+
+## Outline
+
+Compositing is the only step that works one square at a time. Searching,
+downloading and processing serve all squares at once, so they run once for
+the whole area, and SNAP gets one batch of bursts that it can process in
+parallel:
+
+```{.python}
+squares = list(MGRSGrid(aoi, resolution=20))
+
+# Once for the whole area
+bursts = catalog.search(...)                     # every burst that reaches a square
+catalog.download(bursts)
+rtc = processor.create_backscatter(bursts, ...)  # one batch, in the zone of the squares
+
+# Once per square
+for square in squares:
+    square_rtc = ...                             # the products whose bursts reach it
+    weighter.compose_rtc_lrw(square_rtc, square, ...)
+```
+
+The next three sections fill in these steps. Together, their code blocks form
+the complete script. The
+[Martigny tutorial](martigny-composite.qmd) runs the same script on real data.
+
+## Find the bursts of every square
+
+`MGRSGrid` lists the squares that the AOI touches. Its `resolution` is the
+pixel size of the composites, so it is taken from the processing settings:
+
+```{.python}
+import shapely
+from shapely.geometry import box
+from s1bursts import (
+    BurstCatalog, BurstProcessor, FileManager, MGRSGrid, ResolutionWeighter,
+    RTCConfig, SearchQuery, TimeRange,
+)
+
+fm = FileManager("data")
+catalog = BurstCatalog(fm)
+processor = BurstProcessor(fm)
+weighter = ResolutionWeighter(fm)
+
+aoi = box(7.03, 46.06, 7.12, 46.14)
+window = TimeRange("2025-08-01", "2025-08-31")
+config = RTCConfig(grid_spacing=20)
+squares = list(MGRSGrid(aoi, resolution=config.grid_spacing))
+
+search_area = shapely.union_all([box(*square.geographic_extent.boundingbox) for square in squares])
+bursts = catalog.search(SearchQuery(time_range=window, intersects=search_area, polarization="VV"))
+```
+
+The search covers the squares, not the AOI. `MGRSGrid` includes every square
+that the AOI touches, whole, and each composite covers its whole square. A
+search of the AOI would miss a burst that reaches only the part of an edge
+square outside the AOI, and that square would be composed from fewer
+acquisitions without a warning. A later run would then skip the incomplete
+composite as finished.
+
+`search_area` joins the bounding boxes of the squares in longitude and
+latitude, since the exact outline of a square has too many vertices for a
+catalog query. A bounding box is slightly larger than its square, so no burst
+is missed.
+
+## Process in the zone of the squares
+
+A composite accepts only products in the UTM zone of its square, so the bursts
+are processed with that zone as `crs`, not with `crs="auto"`;
+[Compositing](compositing.qmd#get-the-grid-squares) explains why. One batch
+has one `crs`, so check first that all squares share a zone:
+
+```{.python}
+if len({square.crs for square in squares}) > 1:
+    raise ValueError("The squares span several UTM zones; process each zone on its own.")
+crs = squares[0].crs
+
+catalog.download(bursts).raise_on_failure()
+rtc = processor.create_backscatter(bursts, crs=crs, config=config).raise_on_failure().products
+```
+
+To set how many bursts SNAP processes at once, see
+[Run several jobs at once](processing.qmd#run-several-jobs-at-once).
+
+## Compose each square
+
+Each square is composed from the products whose bursts reach it.
+`intersecting()` selects those bursts from the search result, and a product
+belongs to a burst footprint by its `burst_id` and `sub_swath`:
+
+```{.python}
+from s1bursts.errors import CompositeError
+
+
+def reaching(products, bursts, square):
+    """Return the products whose burst footprint reaches the square."""
+    footprints = {(b.burst_id, b.sub_swath) for b in bursts.intersecting(square)}
+    return [p for p in products if (p.burst_id, p.sub_swath) in footprints]
+
+
+failed = {}
+for square in squares:
+    square_rtc = reaching(rtc, bursts, square)
+    if not square_rtc:
+        continue  # no burst reaches the square
+    try:
+        weighter.compose_rtc_lrw(square_rtc, square, write_qa=True, time_range=window)
+    except CompositeError as error:
+        failed[square.mgrs_code] = error
+```
+
+Passing all products to every square would give the same composites, since a
+product outside a square contributes nothing to it, but each product would be
+read once per square.
+
+Some squares cannot be composed, because of their own data. A square that no
+burst reached in the time window has no products, so the loop skips it. A
+burst footprint can also touch a square without a valid pixel in it, and if
+that holds for all products of a square, the call raises an
+`EmptyCompositeError`. Such an error concerns one square and is a
+`CompositeError`, so the loop records it in `failed` and continues with the
+next square. An error that every square would meet is not a `CompositeError`
+and stops the loop: an `InconsistentInputsError` for products in another UTM
+zone or at another pixel size, or a `ProductSettingsMismatchError` for
+composites made with other settings.
+
+A composite holds one polarization. For VV and VH, run the script once with
+each.
+
+Rerunning the script is cheap. Downloads, products and composites that exist
+are skipped, so after a failure only the missing pieces are made.
+
+## Add coherence
+
+Coherence composites follow the same outline, with pairs in place of bursts,
+and take the RTC products of the same dates as weights. A pair that starts at
+the end of the window ends after it, so the search reaches beyond the window
+by the baseline, and the bursts and pairs that start within the window are
+kept, as in [Pair acquisitions](finding-and-downloading.qmd#pair-acquisitions).
+These lines take the place of the search and of the download and processing
+calls:
+
+```{.python}
+from datetime import timedelta
+
+from s1bursts import CoherenceConfig
+
+found = catalog.search(SearchQuery(
+    time_range=TimeRange(window.start, window.end + timedelta(days=12)),
+    intersects=search_area, polarization="VV",
+))
+bursts = found.within(window)
+pairs = found.find_pairs(baseline=12).starting_within(window)
+catalog.download([*bursts, *pairs]).raise_on_failure()
+
+rtc = processor.create_backscatter(bursts, crs=crs, config=config).raise_on_failure().products
+coh = processor.create_coherences(
+    pairs, crs=crs, config=CoherenceConfig(grid_spacing=config.grid_spacing),
+).raise_on_failure().products
+```
+
+`download()` fetches both acquisitions of each pair and every burst only once.
+Each square's coherence is then composed with that square's RTC products:
+
+```{.python}
+for square in squares:
+    square_coh = reaching(coh, bursts, square)
+    if not square_coh:
+        continue  # no pair reaches the square
+    try:
+        weighter.compose_coherence_lrw(
+            square_coh, reaching(rtc, bursts, square), square, write_qa=True, time_range=window,
+        )
+    except CompositeError as error:
+        failed[square.mgrs_code] = error
+```
+
+## Areas across a UTM zone boundary
+
+Each UTM zone is gridded on its own, so for an AOI that crosses a zone
+boundary, `MGRSGrid` returns squares of both zones, and they overlap along the
+boundary. `box(5.9, 46.0, 6.1, 46.1)`, for example, crosses 6° E and gives four
+squares in zone 31 and four in zone 32, among them 32TKR69, which covers half
+of 31TGL29. Composing all of them gives that ground one composite in each zone.
+
+The squares of each zone need their own processing batch, in their zone. Group
+the squares by zone, and run the script for each group, with `zone_squares` in
+place of `squares` and without the zone check:
+
+```{.python}
+from collections import defaultdict
+
+squares_by_zone = defaultdict(list)
+for square in squares:
+    squares_by_zone[square.crs].append(square)
+
+for crs, zone_squares in squares_by_zone.items():
+    ...  # search, download, process and compose zone_squares as above
+```
+
+A burst near the boundary is found by the searches of both zones. It is
+downloaded once and processed once per zone.
+
+Another way, for any number of zones, is to run the whole script for each
+square on its own: search the bounding box of the square, keep the bursts
+`intersecting()` it, then download them, process them with `crs=square.crs`
+and compose. Each search stays small, which suits an area whose zones hold
+more bursts than one search returns. Neighboring squares share most of their
+bursts, but each burst is still downloaded and processed only once per zone,
+since the later squares find its files and skip them. The cost is
+parallelism: each batch hands SNAP only the few bursts that are not processed
+yet.

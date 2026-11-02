@@ -355,7 +355,7 @@ class NoUTMZoneError(BurstError, ValueError):
     """A burst's footprint lies outside the UTM zones, so ``crs="auto"`` has none for it.
 
     Raised by ``Burst.utm_zone`` and ``BurstPair.utm_zone`` for a footprint
-    centre north of 84 degrees or south of 80 degrees. With ``crs="auto"`` it
+    center north of 84 degrees or south of 80 degrees. With ``crs="auto"`` it
     belongs to that burst alone, so ``BurstProcessor.create_*`` and
     ``SNAPClient.create_*`` record it for the item rather than stopping.
     """

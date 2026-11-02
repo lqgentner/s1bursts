@@ -159,7 +159,7 @@ _ORBIT = FieldSpec(
 )
 # Per-burst products append the pass direction to the orbit, "066A", keeping the
 # track in one token. Fixed-width wildcards, so that filtering on one half of the
-# token cannot match across the separators of a neighbouring one.
+# token cannot match across the separators of a neighboring one.
 _TRACK_ORBIT = _ORBIT._replace(wildcard="???")
 _PASS = FieldSpec(
     "pass_direction",

@@ -1,0 +1,173 @@
+---
+title: "Glacier coherence through the seasons"
+guide-section: "Tutorials"
+freeze: true
+---
+
+# Glacier coherence through the seasons
+
+This tutorial computes coherence for one 12-day pair per month over the
+Aletsch glacier in 2022. Coherence shows where the surface stayed the same
+between two acquisitions, so it separates moving ice and changing snow from
+ground that stays put.
+
+```{python}
+#| include: false
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+root = next(p for p in (Path.cwd(), *Path.cwd().parents) if (p / "pyproject.toml").exists())
+load_dotenv(root / ".env")
+(root / "cache/docs").mkdir(parents=True, exist_ok=True)
+os.chdir(root / "cache/docs")
+```
+
+## Process one pair per month
+
+The search is the same as in the [backscatter tutorial](glacier-backscatter.qmd).
+`find_pairs()` forms every pair of acquisitions 12 days apart; keeping the
+first pair of each month leaves twelve, which are processed into coherence:
+
+```{python}
+from s1bursts import BurstCatalog, BurstProcessor, CoherenceConfig, FileManager, SearchQuery, TimeRange
+from s1bursts.burst import BurstPairCollection
+
+fm = FileManager("data/glacier")
+catalog = BurstCatalog(fm)
+bursts = catalog.search(SearchQuery(
+    time_range=TimeRange("2022-01-01", "2022-12-31"),
+    burst_id=30346, sub_swath="IW1", polarization="VV",
+))
+
+df = bursts.find_pairs(baseline=12).df.sort_values("date_1")
+monthly = BurstPairCollection(df.groupby(df.date_1.dt.month).head(1))
+print(f"{len(monthly)} pairs selected")
+```
+
+```{python}
+#| output: false
+catalog.download(monthly).raise_on_failure()
+processor = BurstProcessor(fm)
+coherence = processor.create_coherences(
+    monthly, crs="auto", config=CoherenceConfig(grid_spacing=20),
+).raise_on_failure()
+```
+
+## Coherence in winter and summer
+
+The maps compare a winter pair with a summer pair. In January almost the whole
+area is snow-covered and incoherent. Snow decorrelates quickly: new snow and
+melt change it between the two dates, and wet snow can lose its coherence
+within hours (Strozzi et al., 1999)[^strozzi].
+In August the slopes around the glacier are highly coherent, while the glacier
+stays dark, which makes its outline stand out.
+
+```{python}
+#| fig-cap: "Coherence of a 12-day pair in winter and in summer 2022. The rectangles are the sample areas on the glacier (white) and off it (cyan)."
+import matplotlib.pyplot as plt
+import rasterio
+from rasterio.warp import transform_bounds
+from rasterio.windows import from_bounds
+from shapely.geometry import box
+
+view = (7.95, 46.38, 8.15, 46.55)  # lon/lat bounds of the map
+areas = {
+    "glacier": (box(8.065, 46.472, 8.072, 46.477), "white"),
+    "no glacier": (box(8.104, 46.448, 8.112, 46.453), "tab:cyan"),
+}
+products = sorted(coherence.products, key=lambda p: p.date_primary)
+
+fig, axes = plt.subplots(1, 2, figsize=(7.8, 3.7), sharey=True, layout="constrained")
+for ax, product in zip(axes, [products[0], products[7]]):
+    with rasterio.open(fm.get_product_path(product)) as src:
+        left, bottom, right, top = transform_bounds("EPSG:4326", src.crs, *view)
+        coh = src.read(1, window=from_bounds(left, bottom, right, top, src.transform))
+        for area, color in areas.values():
+            x0, y0, x1, y1 = transform_bounds("EPSG:4326", src.crs, *area.bounds)
+            ax.add_patch(plt.Rectangle((x0 / 1000, y0 / 1000), (x1 - x0) / 1000,
+                                       (y1 - y0) / 1000, fill=False, edgecolor=color))
+    image = ax.imshow(coh, extent=[v / 1000 for v in (left, right, bottom, top)],
+                      cmap="magma", vmin=0, vmax=1)
+    ax.set(title=f"{product.date_primary:%d %b} to {product.date_secondary:%d %b %Y}", xlabel="Easting (km)")
+axes[0].set_ylabel("Northing (km)")
+fig.colorbar(image, ax=axes, shrink=0.8, label="Coherence")
+plt.show()
+```
+
+## Follow coherence through the year
+
+The time series takes the median coherence of each pair within the two
+rectangles, one on the glacier and one on a slope east of it without glacier.
+
+```{python}
+#| fig-cap: "Median coherence of one 12-day pair per month in 2022, on the glacier and off it."
+import numpy as np
+import pandas as pd
+from rasterio.mask import mask
+from rasterio.warp import transform_geom
+from shapely.geometry import mapping
+
+records = []
+for product in products:
+    with rasterio.open(fm.get_product_path(product)) as src:
+        for name, (area, _) in areas.items():
+            region = transform_geom("EPSG:4326", src.crs, mapping(area))
+            values, _ = mask(src, [region], indexes=1, crop=True, filled=False)
+            valid = values.compressed()
+            records.append({"date": product.date_primary, "area": name,
+                            "coherence": np.median(valid[np.isfinite(valid)])})
+series = pd.DataFrame(records).pivot(index="date", columns="area", values="coherence")
+
+fig, ax = plt.subplots(figsize=(7.8, 3.3))
+for name, (_, color) in areas.items():
+    ax.plot(series.index, series[name], "o-", label=name,
+            color="tab:blue" if color == "white" else color)
+ax.set(xlabel="Date of the first acquisition", ylabel="Median coherence", ylim=(0, 1))
+ax.legend()
+ax.grid(alpha=0.25)
+fig.autofmt_xdate()
+plt.show()
+```
+
+## Interpret the result
+
+On the glacier, coherence stays near 0.12 all year. Values this low mean that
+the two acquisitions are essentially unrelated. They do not reach 0, because
+the coherence magnitude estimated from a finite window of pixels is biased
+toward higher values, most strongly where coherence is low (Touzi et al.,
+1999)[^touzi]. The glacier flows, and its surface melts or gains new snow, so
+12 days are too long for it to stay coherent.
+
+Off the glacier, coherence follows the snow cover. It is low from
+November to May, rises in June, and stays between 0.57 and 0.74 until October,
+when the snow returns. Summer coherence therefore separates the glacier from
+the terrain around it, even where both look similar in backscatter.
+
+Shorter baselines keep more coherence. In 2022 only Sentinel-1A was operating,
+so 12 days is the shortest baseline available for these dates.
+
+[^strozzi]: Strozzi, T., Wegmüller, U., & Mätzler, C. (1999). Mapping wet
+    snowcovers with SAR interferometry. *International Journal of Remote
+    Sensing*, 20(12), 2395–2403. <https://doi.org/10.1080/014311699212083>
+
+[^touzi]: Touzi, R., Lopes, A., Bruniquel, J., & Vachon, P. W. (1999). Coherence
+    estimation for SAR imagery. *IEEE Transactions on Geoscience and Remote
+    Sensing*, 37(1), 135–149. <https://doi.org/10.1109/36.739146>
+
+```{python}
+#| echo: false
+#| output: asis
+from datetime import date
+from importlib.metadata import version
+
+from s1bursts import SNAPConfig
+
+snap_version = ".".join(map(str, SNAPConfig().resolved_snap_version))
+print(
+    '::: {.callout-note collapse="true"}\n## Run details\n\n'
+    f"Run on {date.today():%d %B %Y} with s1bursts {version('s1bursts')} and "
+    f"ESA SNAP {snap_version}. Contains modified Copernicus Sentinel data (2022).\n:::"
+)
+```

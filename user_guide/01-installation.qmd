@@ -1,0 +1,109 @@
+---
+title: "Installation"
+guide-section: "Getting Started"
+freeze: true
+---
+
+# Installation
+
+s1bursts needs a Python package, a free CDSE account, and ESA SNAP. Searching
+the catalog works with the package alone; downloading needs the account, and
+processing needs SNAP.
+
+## Install the package
+
+s1bursts requires Python 3.12 or newer and installs from PyPI:
+
+::: {.panel-tabset group="installer"}
+
+### pip
+
+```{.bash}
+pip install s1bursts
+```
+
+### uv
+
+```{.bash}
+uv add s1bursts
+```
+
+### pixi
+
+```{.bash}
+pixi add --pypi s1bursts
+```
+
+### conda
+
+s1bursts is not packaged for conda. Install it from PyPI into your conda
+environment:
+
+```{.bash}
+conda activate my-env
+pip install s1bursts
+```
+
+:::
+
+## Install SNAP
+
+Processing runs `gpt`, the command-line tool of SNAP version 13 or 14. Install
+it with ESA's installer, or as a conda package:
+
+::: {.panel-tabset group="snap"}
+
+### ESA installer
+
+Download [SNAP](https://step.esa.int/main/download/snap-download/) from ESA and
+include the Microwave Toolbox, which holds the Sentinel-1 tools. The installer
+does not always put `gpt` on your `PATH`; if it does not, set `SNAP_BIN` to the
+installation's `bin` directory (see
+[Environment variables](environment-variables.qmd)).
+
+### conda or pixi
+
+The [`esa-snap-s1tbx-gpt`](https://anaconda.org/channels/sarforge/packages/esa-snap-s1tbx-gpt/overview)
+package installs `gpt` with the radar toolboxes and puts it on your `PATH`
+whenever the environment is active. It is a community package, not published by
+ESA, available for Linux, macOS and Windows.
+
+```{.bash}
+pixi workspace channel add sarforge
+pixi add "esa-snap-s1tbx-gpt 14.*"
+```
+
+```{.bash}
+conda install -c sarforge -c conda-forge "esa-snap-s1tbx-gpt=14"
+```
+
+:::
+
+Use one SNAP version for one study. The versions give slightly different
+results, so a time series that mixes them contains a small artificial step; see
+[SNAP processing](snap-processing.qmd#snap-versions).
+
+## Check that SNAP is found
+
+s1bursts uses the `gpt` in `SNAP_BIN` if that is set, and otherwise the one on
+your `PATH`. Check which one it finds by running this in the environment where
+you installed s1bursts:
+
+```{python}
+from s1bursts import SNAPConfig
+
+config = SNAPConfig()
+print("gpt:", config.resolved_gpt_path)
+print("SNAP version:", config.resolved_snap_version)
+```
+
+If s1bursts cannot find `gpt`, `SNAPConfig()` raises an error that says what to
+set.
+
+## Set up credentials
+
+Downloads need a free [CDSE account](https://dataspace.copernicus.eu/).
+s1bursts reads the account name and password from the environment variables
+`CDSE_USERNAME` and `CDSE_PASSWORD`.
+[Environment variables](environment-variables.qmd) shows how to set them and
+lists the optional settings, including keys for a second download route.

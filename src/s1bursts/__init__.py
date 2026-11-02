@@ -5,10 +5,15 @@ acquisition. Working at that level keeps downloads small and makes dense
 time-series processing of a fixed footprint practical.
 
 This namespace holds what a pipeline is built from: the file manager, the
-search, processing, and compositing services, and the configs they take.
+search, processing, and compositing services, the configs they take, and the
+MGRS grid squares that composites are written on.
 """
 
+from __future__ import annotations
+
 from importlib.metadata import version as _version
+
+from freezebase.mgrs import MGRSGeoBox, MGRSGrid
 
 from s1bursts.burstmap import download_burst_map
 from s1bursts.catalog import BurstCatalog
@@ -39,6 +44,8 @@ __all__ = [
     "GTCConfig",
     "GeocodingConfig",
     "InterferogramConfig",
+    "MGRSGeoBox",
+    "MGRSGrid",
     "RTCConfig",
     "ResolutionWeighter",
     "SNAPConfig",

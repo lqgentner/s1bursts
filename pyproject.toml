@@ -1,6 +1,6 @@
 [project]
 name = "s1bursts"
-description = "Sentinel-1 SLC burst download, SAR and InSAR processing, built on CDSE and ESA SNAP GPT."
+description = "Sentinel-1 download, processing and compositing made easy."
 authors = [
   { name = "Luis Gentner" , email = "luis.gentner@geo.uzh.ch"},
 ]
@@ -60,6 +60,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/lqgentner/s1bursts"
+Documentation = "https://lqgentner.github.io/s1bursts/"
 Repository = "https://github.com/lqgentner/s1bursts"
 Issues = "https://github.com/lqgentner/s1bursts/issues"
 Changelog = "https://github.com/lqgentner/s1bursts/blob/main/CHANGELOG.md"
@@ -83,6 +84,14 @@ dev = [
 validation = [
     "asf-search>=8",
     "hyp3-sdk>=7",
+]
+# Documentation toolchain. `great-docs` renders the site via Quarto,
+# installed separately.
+docs = [
+    "great-docs[svg]>=0.17",
+    "matplotlib>=3.11.2",
+    "pyarrow>=26.0.0",
+    "python-dotenv>=1.2.2",
 ]
 
 [build-system]
