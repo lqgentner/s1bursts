@@ -1781,6 +1781,69 @@ class TestRunGpt:
         with pytest.raises(SnapProcessingError, match="something went wrong in the graph"):
             self._invoke(client, tmp_path)
 
+    # Printed by SNAP 14.0.0's gpt for an SLC zip that lost its last bytes.
+    _UNREADABLE_SLC = (
+        "WARNING: org.esa.snap.engine_utilities.util.ZipUtils: unable to read zip file "
+        "{path}: zip END header not found\n"
+        "Error: [NodeId: ReadOp@secondary] No product reader found for file '{path}'.\n"
+        "org.esa.snap.core.gpf.graph.GraphException: [NodeId: ReadOp@secondary] "
+        "No product reader found for file '{path}'.\n"
+        "\tat org.esa.snap.core.gpf.graph.NodeContext.initTargetProduct(NodeContext.java:73)\n"
+    )
+
+    def _failing_with(self, gpt_client: Callable[[str], SNAPClient], output: str) -> SNAPClient:
+        return gpt_client(f"cat >&2 <<'EOF'\n{output}EOF\nexit 1")
+
+    @pytest.mark.parametrize("directory", ["slc", "o'brien"])
+    def test_an_unreadable_input_slc_is_reported_as_possibly_truncated(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+        directory: str,
+    ) -> None:
+        """Skip-if-exists would otherwise keep handing the same broken SLC to SNAP."""
+        primary, secondary = tmp_path / directory / "a.zip", tmp_path / directory / "b.zip"
+        client = self._failing_with(gpt_client, self._UNREADABLE_SLC.format(path=secondary))
+
+        with pytest.raises(SnapProcessingError) as excinfo:
+            client._run_gpt(
+                graph=tmp_path / "graph.xml",
+                source_files={"primary": primary, "secondary": secondary},
+                target_file=tmp_path / "out.tif",
+                snap_userdir=tmp_path / "userdir",
+            )
+
+        message = str(excinfo.value)
+        assert f"No product reader found for file '{secondary}'" in message
+        assert message.endswith(
+            f"\nThe input SLC '{secondary}' may be truncated or corrupt: "
+            "delete it and download it again."
+        )
+        assert str(primary) not in message
+
+    @pytest.mark.parametrize(
+        "output",
+        [
+            pytest.param("Error: No valid orbit file found\n", id="other-failure"),
+            pytest.param(
+                _UNREADABLE_SLC.format(path="/elsewhere/dem.zip"),
+                id="unreadable-file-that-is-no-input",
+            ),
+        ],
+    )
+    def test_other_failures_carry_no_hint(
+        self,
+        gpt_client: Callable[[str], SNAPClient],
+        tmp_path: Path,
+        output: str,
+    ) -> None:
+        client = self._failing_with(gpt_client, output)
+
+        with pytest.raises(SnapProcessingError) as excinfo:
+            self._invoke(client, tmp_path)
+
+        assert "truncated" not in str(excinfo.value)
+
 
 class TestStageSlc:
     def test_local_slc_is_used_in_place(self, client: SNAPClient, tmp_path: Path) -> None:

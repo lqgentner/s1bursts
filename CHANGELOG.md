@@ -645,6 +645,20 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - Comparing or hashing per-burst products no longer looks up the relative orbit,
   so it works without the burst-ID map. The burst ID already identifies a burst,
   so the orbit adds nothing.
+- An SLC that the S3 endpoint extracts into a local `slc_dir` appears at its
+  final path only once it is complete. It is moved to a hidden temporary name
+  beside that path, flushed to disk and then renamed into place. The temporary
+  file is removed if the move fails, and one that a killed run left behind
+  is removed by the next extraction of the same SLC once it is over an hour
+  old, so that another run's download in progress is kept. Previously the
+  move was a copy whenever the system temp directory was on another file
+  system, so a kill or a full disk partway through left a truncated zip that
+  later downloads skipped as finished.
+- When SNAP cannot read an input SLC, the `SnapProcessingError` message says
+  that the SLC may be truncated or corrupt and should be deleted and
+  downloaded again, since otherwise every download skips it. It names the
+  SLC's location in `slc_dir`, also for a remote `slc_dir`, whose SLCs SNAP
+  reads from a temporary copy.
 
 ## [0.7.0] - 2026-10-26
 

@@ -47,7 +47,7 @@ from s1bursts.snap_graph import NODATA_SENTINEL, GTCConfig, RTCConfig
 from s1bursts.summary import ErrorResult, OkResult, OperationResult
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Mapping
 
     from upath import UPath
 
@@ -328,6 +328,28 @@ def _describe_exit(returncode: int) -> str:
     return f"exit {returncode} ({name}{hint})"
 
 
+# What GPT's ReadOp says, in SNAP 13 and 14, of a source file no reader accepts.
+# A SAFE zip cut short has lost its central directory, so a truncated SLC fails
+# here, before any zip error reaches the Error: line. The path runs to the
+# closing "'.", so a path holding an apostrophe is read whole.
+_NO_READER = re.compile(r"No product reader found for file '(.+)'\.$", re.MULTILINE)
+
+
+def _unreadable_input_hint(
+    output: str,
+    source_files: Mapping[str, Path],
+    source_locations: Mapping[str, Path | UPath],
+) -> str:
+    """Return a hint naming where each input SLC that GPT found no reader for is kept."""
+    unreadable = {Path(path).name for path in _NO_READER.findall(output)}
+    return "".join(
+        f"\nThe input SLC '{source_locations.get(name, path)}' may be truncated or corrupt: "
+        "delete it and download it again."
+        for name, path in source_files.items()
+        if path.name in unreadable
+    )
+
+
 def _decode(output: str | bytes | None) -> str | None:
     """Decode captured output, which ``TimeoutExpired`` holds as bytes even in text mode."""
     if isinstance(output, bytes):
@@ -604,8 +626,13 @@ class SNAPClient:
         target_file: Path,
         snap_userdir: Path,
         process_params: dict[str, str] | None = None,
+        source_locations: Mapping[str, Path | UPath] | None = None,
     ) -> Path:
-        """Run SNAP GPT with given parameters."""
+        """Run SNAP GPT with given parameters.
+
+        ``source_locations`` maps a source name to where its SLC is kept, which
+        a read-failure hint names instead of the staged copy GPT read.
+        """
         commands = [str(self.config.resolved_gpt_path), str(graph)]
 
         for source_name, source_file in source_files.items():
@@ -656,6 +683,8 @@ class SNAPClient:
             # Preserve SNAP's cause; CalledProcessError reports only the exit code.
             detail = _extract_gpt_error(e.stdout, e.stderr) or "<no output captured>"
             msg = f"GPT processing failed with {_describe_exit(e.returncode)}: {detail}"
+            output = "\n".join(part for part in (e.stdout, e.stderr) if part)
+            msg += _unreadable_input_hint(output, source_files, source_locations or {})
             raise SnapProcessingError(
                 msg,
                 returncode=e.returncode,
@@ -891,6 +920,7 @@ class SNAPClient:
                     self._run_gpt(
                         graph=graph_file,
                         source_files={"source": source_file},
+                        source_locations={"source": self.manager.get_slc_path(burst)},
                         snap_userdir=snap_userdir,
                         process_params={
                             "swath": product.sub_swath,
@@ -1004,6 +1034,10 @@ class SNAPClient:
                             "primary": primary_file,
                             "secondary": secondary_file,
                         },
+                        source_locations={
+                            "primary": self.manager.get_slc_path(pair.primary),
+                            "secondary": self.manager.get_slc_path(pair.secondary),
+                        },
                         snap_userdir=snap_userdir,
                         process_params={
                             "swath": product.sub_swath,
@@ -1116,6 +1150,10 @@ class SNAPClient:
                         source_files={
                             "primary": primary_file,
                             "secondary": secondary_file,
+                        },
+                        source_locations={
+                            "primary": self.manager.get_slc_path(pair.primary),
+                            "secondary": self.manager.get_slc_path(pair.secondary),
                         },
                         snap_userdir=snap_userdir,
                         process_params={

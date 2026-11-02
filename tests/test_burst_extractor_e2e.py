@@ -14,10 +14,13 @@ golden record.
 from __future__ import annotations
 
 from decimal import InvalidOperation
+import errno
 from itertools import count
 import json
+import os
 from pathlib import Path
 import re
+import time
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -27,6 +30,7 @@ import pytest
 import requests
 from upath import UPath
 
+from s1bursts.burst import Burst
 import s1bursts.burst_extractor as extractor
 from s1bursts.burst_extractor import (
     _glob_annotation_xml,
@@ -36,6 +40,7 @@ from s1bursts.burst_extractor import (
 )
 from s1bursts.config import CDSES3Settings
 from s1bursts.errors import BurstDownloadError, BurstNotFoundError, ConfigurationError
+from s1bursts.filemanager import FileManager
 from tests.fixtures.safe_product import ProductSpec, SyntheticProduct, build_product
 from tests.safe_conformance import check_burst_safe, digest, read_burst_safe
 
@@ -276,6 +281,75 @@ class TestDestination:
         extract()
 
         assert list(scratch.iterdir()) == []
+
+    def test_a_move_cut_short_leaves_nothing_at_the_final_path(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A copy across file systems that fails partway must not leave a truncated SLC."""
+        # Previously the truncated copy stayed at the final path, and skip-if-exists trusted it.
+        fm = FileManager(tmp_path / "data")
+        target = fm.slc_dir / "S1_SLC_066A_030346_IW1_VV_20220105.zip"
+        staged: list[Path] = []
+
+        def _move_cut_short(src: str | Path, dst: str | Path) -> None:
+            staged.append(Path(dst))
+            Path(dst).write_bytes(Path(src).read_bytes()[:100])
+            # While the partial file exists, it must not pass for an SLC.
+            assert fm.find(Burst) == []
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(extractor.shutil, "move", _move_cut_short)
+        with pytest.raises(OSError, match="No space left on device"):
+            extract(save_path=target)
+
+        assert [path.parent for path in staged] == [fm.slc_dir]
+        assert list(fm.slc_dir.iterdir()) == []
+
+    def test_the_slc_is_flushed_to_disk_before_it_is_renamed_into_place(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        target = tmp_path / "out" / "burst.zip"
+        synced_before_rename: list[bool] = []
+        fsync = os.fsync
+
+        def _fsync(fd: int) -> None:
+            synced_before_rename.append(not target.exists())
+            fsync(fd)
+
+        monkeypatch.setattr(extractor.os, "fsync", _fsync)
+        extract(save_path=target)
+
+        assert synced_before_rename == [True]
+        assert target.exists()
+
+    def test_removes_what_a_killed_run_left_staged_for_the_same_slc(
+        self,
+        extract: Callable[..., tuple[SyntheticProduct, Path]],
+        tmp_path: Path,
+    ) -> None:
+        out = tmp_path / "out"
+        out.mkdir()
+        stale = out / ".burst.zip.0123456789abcdef.tmp"
+        in_progress = out / ".burst.zip.fedcba9876543210.tmp"
+        other = out / ".other.zip.0123456789abcdef.tmp"
+        old = time.time() - extractor._STALE_STAGED_SLC_AGE_S - 60
+        for path in (stale, in_progress, other):
+            path.write_bytes(b"cut short")
+        for path in (stale, other):
+            os.utime(path, (old, old))
+
+        extract(save_path=out / "burst.zip")
+
+        # A fresh file may be another run's download, still being written.
+        assert sorted(path.name for path in out.iterdir()) == sorted(
+            [in_progress.name, other.name, "burst.zip"]
+        )
 
 
 class TestGoldenRecord:
