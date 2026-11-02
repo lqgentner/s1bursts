@@ -404,8 +404,8 @@ class TestS3Lookup:
     @pytest.mark.parametrize(
         ("body", "match"),
         [
-            ([], "Unexpected CDSE catalogue response"),
-            ({"error": "busy"}, "Unexpected CDSE catalogue response"),
+            ([], "Unexpected CDSE catalog response"),
+            ({"error": "busy"}, "Unexpected CDSE catalog response"),
             ({"value": [{"Name": "x.SAFE"}]}, "has no S3Path"),
             ({"value": ["x.SAFE"]}, "has no S3Path"),
         ],

@@ -132,9 +132,10 @@ burst footprint can also touch a square without a valid pixel in it, and if
 that holds for all products of a square, the call raises an
 `EmptyCompositeError`. Such an error concerns one square and is a
 `CompositeError`, so the loop records it in `failed` and continues with the
-next square. An error that every square would meet, such as a
-`ProductSettingsMismatchError` for composites made with other settings, is not
-a `CompositeError` and stops the loop.
+next square. An error that every square would meet is not a `CompositeError`
+and stops the loop: an `InconsistentInputsError` for products in another UTM
+zone or at another pixel size, or a `ProductSettingsMismatchError` for
+composites made with other settings.
 
 A composite holds one polarization. For VV and VH, run the script once with
 each.

@@ -195,7 +195,7 @@ The area Terrain-Flattening divides beta-0 by is the **local scattering area** (
 
 ### Composite inputs
 
-Differences that would make a composite wrong are refused: a CRS, pixel size or sub-pixel grid offset other than the cell's (the read window is computed in the cell's coordinates against each source's transform, so it would read the wrong pixels), and a mixed DEM raise `InconsistentInputsError`; a mixed polarization or coherence baseline raises `ValueError`, since a composite carries one of each in its name. A mixed SNAP version only degrades consistency and an archive built over several campaigns legitimately holds one, so it is tolerated with a warning and recorded as `N/A`.
+Differences that would make a composite wrong are refused: a CRS, pixel size or sub-pixel grid offset other than the cell's (the read window is computed in the cell's coordinates against each source's transform, so it would read the wrong pixels), a mixed DEM, and a mixed polarization or coherence baseline (a composite carries one of each in its name) raise `InconsistentInputsError`. It is a `ValueError` but deliberately not a `CompositeError`: such inputs fail every cell they are given to, so a loop over cells must stop at them rather than record one failure per cell. A missing input, including an observation without a matching RTC scattering area, is a `CompositeInputError`, since it affects only the cells that observation reaches. A mixed SNAP version only degrades consistency and an archive built over several campaigns legitimately holds one, so it is tolerated with a warning and recorded as `N/A`.
 
 ### Skipping existing products
 

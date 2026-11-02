@@ -161,14 +161,14 @@ def _lookup_s3_path(product_name: str) -> str:
     body = resp.json()
     values = body.get("value") if isinstance(body, dict) else None
     if not isinstance(values, list):
-        msg = f"Unexpected CDSE catalogue response for product '{product_name}': {body!r:.200}"
+        msg = f"Unexpected CDSE catalog response for product '{product_name}': {body!r:.200}"
         raise BurstDownloadError(msg)
     if not values:
         msg = f"Product '{product_name}' not found in CDSE catalog."
         raise BurstNotFoundError(msg)
     s3_path = values[0].get("S3Path") if isinstance(values[0], dict) else None
     if not isinstance(s3_path, str):
-        msg = f"The CDSE catalogue entry of product '{product_name}' has no S3Path."
+        msg = f"The CDSE catalog entry of product '{product_name}' has no S3Path."
         raise BurstDownloadError(msg)
     return s3_path
 
