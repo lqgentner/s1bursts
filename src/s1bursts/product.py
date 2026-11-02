@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol, Self, get_args, override
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, get_args, override
 
 from freezebase.mgrs import mgrs_to_crs
 from pandas import Timestamp
@@ -61,24 +61,30 @@ def _check_pass_direction(value: object) -> None:
         raise ValueError(msg)
 
 
-class QaMetric(StrEnum):
-    """Quality-assurance metric carried by an auxiliary composite product."""
+class Layer(StrEnum):
+    """One file of a composite product: its measurement or one of its quality layers.
 
-    NUM = "NUM"
+    A quality layer adds its value to the composite's file name as a token,
+    such as ``S1_RTC_LRW_QA-NUM_…``; the measurement file carries no token.
+    """
+
+    MEASUREMENT = "MEASUREMENT"
+    """The composite's values: backscatter or coherence."""
+    QA_NUM = "QA-NUM"
     """Number of input products contributing to each composite pixel.
 
     On an LRW composite this counts the products carrying a non-zero
     resolution weight, the CEOS-ARD Contributing Observations Image (SAR PFS
-    v1.3.1, item 2.21). Pass-composites are unweighted, so there it counts the
+    v1.3.1, item 2.21). Pass composites are unweighted, so there it counts the
     products holding a finite value.
     """
-    CQM = "CQM"
+    QA_CQM = "QA-CQM"
     """Composite local resolution: the reciprocal of the weighted relative area.
 
     Dimensionless; high values mean high (good) local resolution. The CEOS-ARD
     Composite Quality Map Image (SAR PFS v1.3.1, item 2.22), which defines it
     by reference to Small et al. (2022), eq. 6; see
-    :mod:`s1bursts.resolution_weighter`.
+    :mod:`s1bursts.resolution_weighter`. LRW composites only.
     """
 
 
@@ -107,6 +113,9 @@ class BaseProduct(ABC):
                 field_strs.append(f"{f.name}='{value.srs}'")
             elif isinstance(value, Timestamp):
                 field_strs.append(f"{f.name}='{value:%Y-%m-%d}'")
+            elif isinstance(value, frozenset):
+                members = ", ".join(repr(str(member)) for member in sorted(value))
+                field_strs.append(f"{f.name}={{{members}}}")
             else:
                 field_strs.append(f"{f.name}={value!r}")
         return f"{self.__class__.__name__}({', '.join(field_strs)})"
@@ -448,9 +457,25 @@ class InterferogramProduct(CoregisteredProduct):
         return "IFG"
 
 
+_LRW_LAYERS = frozenset({Layer.MEASUREMENT, Layer.QA_NUM, Layer.QA_CQM})
+# Pass composites are unweighted, so there is no resolution to map.
+_PASS_LAYERS = frozenset({Layer.MEASUREMENT, Layer.QA_NUM})
+
+
+def _layer_product_type(product: MGRSTileProduct, layer: Layer) -> str:
+    """Product type of one layer's file: the composite's, plus the token of a QA layer."""
+    if layer is Layer.MEASUREMENT:
+        return product.product_type
+    return f"{product.product_type}_{layer.value}"
+
+
 @dataclass(repr=False, frozen=True)
 class MGRSTileProduct(BaseProduct):
     """Base class for composite products using 10 km x 10 km MGRS grid squares.
+
+    A composite is one product of several files, one per layer: the
+    measurement and its quality layers. The identity fields name all of them;
+    ``layers`` says which ones the product holds.
 
     Parameters
     ----------
@@ -462,12 +487,38 @@ class MGRSTileProduct(BaseProduct):
         End of the compositing period (inclusive).
     polarization
         The polarization.
+    layers
+        The layers the product holds, a non-empty subset of
+        ``supported_layers``. Keyword-only; defaults to the measurement alone.
+
+    Raises
+    ------
+    ValueError
+        If ``layers`` is empty or holds a layer the product type does not have,
+        or a pass composite's ``pass_direction`` is neither ``"Ascending"`` nor
+        ``"Descending"``.
     """
+
+    supported_layers: ClassVar[frozenset[Layer]] = _LRW_LAYERS
+    """Every layer a composite of this type can have."""
 
     mgrs_code: str
     start_date: Timestamp
     end_date: Timestamp
     polarization: Polarization
+    layers: frozenset[Layer] = field(default=frozenset({Layer.MEASUREMENT}), kw_only=True)
+
+    def __post_init__(self) -> None:
+        """Normalize ``layers`` to a frozenset of ``Layer`` and check it."""
+        layers = frozenset(Layer(layer) for layer in self.layers)
+        if not layers:
+            msg = "`layers` must not be empty."
+            raise ValueError(msg)
+        if unsupported := layers - self.supported_layers:
+            names = ", ".join(sorted(layer.name for layer in unsupported))
+            msg = f"{type(self).__name__} has no layer {names}."
+            raise ValueError(msg)
+        object.__setattr__(self, "layers", layers)
 
     @property
     def crs(self) -> CRS:
@@ -493,6 +544,9 @@ class RTCLRWComposite(MGRSTileProduct):
         End of the compositing period (inclusive).
     polarization
         The polarization.
+    layers
+        The layers the product holds: the measurement, ``QA-NUM`` and
+        ``QA-CQM``. Keyword-only; defaults to the measurement alone.
     """
 
     @property
@@ -518,6 +572,9 @@ class CohLRWComposite(MGRSTileProduct):
         The polarization.
     baseline_days
         Temporal baseline in days.
+    layers
+        The layers the product holds: the measurement, ``QA-NUM`` and
+        ``QA-CQM``. Keyword-only; defaults to the measurement alone.
     """
 
     baseline_days: int
@@ -545,7 +602,12 @@ class RTCPassComposite(MGRSTileProduct):
         The polarization.
     pass_direction
         Pass direction.
+    layers
+        The layers the product holds: the measurement and ``QA-NUM``.
+        Keyword-only; defaults to the measurement alone.
     """
+
+    supported_layers: ClassVar[frozenset[Layer]] = _PASS_LAYERS
 
     pass_direction: PassDirection
 
@@ -554,6 +616,48 @@ class RTCPassComposite(MGRSTileProduct):
     def product_type(self) -> str:
         """Get product type identifier."""
         return f"RTC_COMP_{self.pass_direction[0]}"
+
+    def __post_init__(self) -> None:
+        """Check the pass direction, then the layers."""
+        _check_pass_direction(self.pass_direction)
+        super().__post_init__()
+
+
+@dataclass(repr=False, frozen=True)
+class GTCPassComposite(MGRSTileProduct):
+    """Unweighted temporal composite of GTC beta0 for a single pass direction.
+
+    Parameters
+    ----------
+    mgrs_code
+        MGRS grid cell identifier.
+    start_date
+        Start of the compositing period (inclusive).
+    end_date
+        End of the compositing period (inclusive).
+    polarization
+        The polarization.
+    pass_direction
+        Pass direction.
+    layers
+        The layers the product holds: the measurement and ``QA-NUM``.
+        Keyword-only; defaults to the measurement alone.
+    """
+
+    supported_layers: ClassVar[frozenset[Layer]] = _PASS_LAYERS
+
+    pass_direction: PassDirection
+
+    @property
+    @override
+    def product_type(self) -> str:
+        """Get product type identifier."""
+        return f"GTC_COMP_{self.pass_direction[0]}"
+
+    def __post_init__(self) -> None:
+        """Check the pass direction, then the layers."""
+        _check_pass_direction(self.pass_direction)
+        super().__post_init__()
 
 
 @dataclass(repr=False, frozen=True)
@@ -574,7 +678,12 @@ class CohPassComposite(MGRSTileProduct):
         Pass direction.
     baseline_days
         Temporal baseline in days.
+    layers
+        The layers the product holds: the measurement and ``QA-NUM``.
+        Keyword-only; defaults to the measurement alone.
     """
+
+    supported_layers: ClassVar[frozenset[Layer]] = _PASS_LAYERS
 
     pass_direction: PassDirection
     baseline_days: int
@@ -585,170 +694,7 @@ class CohPassComposite(MGRSTileProduct):
         """Get product type identifier."""
         return f"COH_COMP_{self.pass_direction[0]}"
 
-
-@dataclass(repr=False, frozen=True)
-class RTCLRWQA(MGRSTileProduct):
-    """Quality-assurance auxiliary for an RTC LRW composite.
-
-    Parameters
-    ----------
-    mgrs_code
-        MGRS grid cell identifier.
-    start_date
-        Start of the compositing period (inclusive).
-    end_date
-        End of the compositing period (inclusive).
-    polarization
-        The polarization.
-    qa_metric
-        Quality metric stored in the file (number of observations or CQM).
-    """
-
-    qa_metric: QaMetric
-
-    @property
-    @override
-    def product_type(self) -> str:
-        """Get product type identifier."""
-        return f"RTC_LRW_QA-{self.qa_metric.value}"
-
-
-@dataclass(repr=False, frozen=True)
-class CohLRWQA(MGRSTileProduct):
-    """Quality-assurance auxiliary for a coherence LRW composite.
-
-    Parameters
-    ----------
-    mgrs_code
-        MGRS grid cell identifier.
-    start_date
-        Start of the compositing period (inclusive).
-    end_date
-        End of the compositing period (inclusive).
-    polarization
-        The polarization.
-    baseline_days
-        Temporal baseline in days.
-    qa_metric
-        Quality metric stored in the file (number of observations or CQM).
-    """
-
-    baseline_days: int
-    qa_metric: QaMetric
-
-    @property
-    @override
-    def product_type(self) -> str:
-        """Get product type identifier."""
-        return f"COH_LRW_QA-{self.qa_metric.value}"
-
-
-@dataclass(repr=False, frozen=True)
-class RTCPassQA(MGRSTileProduct):
-    """Contributing-observations auxiliary for an RTC pass-composite.
-
-    Parameters
-    ----------
-    mgrs_code
-        MGRS grid cell identifier.
-    start_date
-        Start of the compositing period (inclusive).
-    end_date
-        End of the compositing period (inclusive).
-    polarization
-        The polarization.
-    pass_direction
-        Pass direction.
-    """
-
-    pass_direction: PassDirection
-
-    @property
-    @override
-    def product_type(self) -> str:
-        """Get product type identifier."""
-        return f"RTC_COMP_{self.pass_direction[0]}_QA-NUM"
-
-
-@dataclass(repr=False, frozen=True)
-class GTCPassComposite(MGRSTileProduct):
-    """Unweighted temporal composite of GTC beta0 for a single pass direction.
-
-    Parameters
-    ----------
-    mgrs_code
-        MGRS grid cell identifier.
-    start_date
-        Start of the compositing period (inclusive).
-    end_date
-        End of the compositing period (inclusive).
-    polarization
-        The polarization.
-    pass_direction
-        Pass direction.
-    """
-
-    pass_direction: PassDirection
-
-    @property
-    @override
-    def product_type(self) -> str:
-        """Get product type identifier."""
-        return f"GTC_COMP_{self.pass_direction[0]}"
-
-
-@dataclass(repr=False, frozen=True)
-class GTCPassQA(MGRSTileProduct):
-    """Contributing-observations auxiliary for a GTC pass-composite.
-
-    Parameters
-    ----------
-    mgrs_code
-        MGRS grid cell identifier.
-    start_date
-        Start of the compositing period (inclusive).
-    end_date
-        End of the compositing period (inclusive).
-    polarization
-        The polarization.
-    pass_direction
-        Pass direction.
-    """
-
-    pass_direction: PassDirection
-
-    @property
-    @override
-    def product_type(self) -> str:
-        """Get product type identifier."""
-        return f"GTC_COMP_{self.pass_direction[0]}_QA-NUM"
-
-
-@dataclass(repr=False, frozen=True)
-class CohPassQA(MGRSTileProduct):
-    """Contributing-observations auxiliary for a coherence pass-composite.
-
-    Parameters
-    ----------
-    mgrs_code
-        MGRS grid cell identifier.
-    start_date
-        Start of the compositing period (inclusive).
-    end_date
-        End of the compositing period (inclusive).
-    polarization
-        The polarization.
-    pass_direction
-        Pass direction.
-    baseline_days
-        Temporal baseline in days.
-    """
-
-    pass_direction: PassDirection
-    baseline_days: int
-
-    @property
-    @override
-    def product_type(self) -> str:
-        """Get product type identifier."""
-        return f"COH_COMP_{self.pass_direction[0]}_QA-NUM"
+    def __post_init__(self) -> None:
+        """Check the pass direction, then the layers."""
+        _check_pass_direction(self.pass_direction)
+        super().__post_init__()

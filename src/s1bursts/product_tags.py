@@ -22,21 +22,17 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 
 from s1bursts.product import (
-    RTCLRWQA,
     CoherenceProduct,
     CohLRWComposite,
-    CohLRWQA,
     CohPassComposite,
-    CohPassQA,
     GTCPassComposite,
-    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
-    QaMetric,
+    Layer,
     RTCLRWComposite,
     RTCPassComposite,
-    RTCPassQA,
     RTCProduct,
+    _layer_product_type,
 )
 from s1bursts.snap_graph import (
     BackscatterConfig,
@@ -218,6 +214,7 @@ def _tile(
     *,
     family: str,
     acquisitions: Acquisitions | None = None,
+    layer: Layer = Layer.MEASUREMENT,
 ) -> dict[str, str]:
     """Identity, date window and polarization, shared by every composite.
 
@@ -231,7 +228,7 @@ def _tile(
     return {
         "METADATA_VOCABULARY": METADATA_VOCABULARY,
         **_pipeline(),
-        "PRODUCT_TYPE": product.product_type,
+        "PRODUCT_TYPE": _layer_product_type(product, layer),
         "PRODUCT_FAMILY": family,
         "PRODUCT_LEVEL": _LEVEL_COMPOSITE,
         "SOURCE_DATA_PRODUCT_LEVEL": _LEVEL_BURST,
@@ -637,7 +634,12 @@ def coh_pass_metadata(
 
 
 def qa_metadata(
-    product: RTCLRWQA | CohLRWQA | RTCPassQA | CohPassQA | GTCPassQA,
+    product: RTCLRWComposite
+    | CohLRWComposite
+    | RTCPassComposite
+    | GTCPassComposite
+    | CohPassComposite,
+    layer: Layer,
     *,
     aggregation: Aggregation,
     n_observations: int,
@@ -646,7 +648,7 @@ def qa_metadata(
     source_tags: Mapping[str, str] | None = None,
     acquisitions: Acquisitions | None = None,
 ) -> RasterMetadata:
-    """Metadata for a QA auxiliary: contributing observations or composite quality map.
+    """Metadata for a QA layer: contributing observations or composite quality map.
 
     Neither layer carries a backscatter convention or a conversion equation: a
     per-pixel observation count has no dB scaling, and the CQM declares its own.
@@ -654,7 +656,9 @@ def qa_metadata(
     Parameters
     ----------
     product
-        The QA product being written.
+        The composite whose layer is being written.
+    layer
+        The QA layer being written, ``Layer.QA_NUM`` or ``Layer.QA_CQM``.
     aggregation
         Temporal aggregation actually applied to the parent composite.
     n_observations
@@ -674,27 +678,35 @@ def qa_metadata(
     -------
     RasterMetadata
         Tags, band description and unit for the QA layer.
+
+    Raises
+    ------
+    ValueError
+        If ``layer`` is not a QA layer of ``product``.
     """
+    if layer is Layer.MEASUREMENT or layer not in product.supported_layers:
+        msg = f"{type(product).__name__} has no QA layer {layer.name}."
+        raise ValueError(msg)
     # Pass composites carry only a contributing-observations layer, and are
     # unweighted, so neither the CQM branch nor the LRW tags apply to them.
-    weighted = isinstance(product, RTCLRWQA | CohLRWQA)
-    coherence = isinstance(product, CohLRWQA | CohPassQA)
-    metric = product.qa_metric if isinstance(product, RTCLRWQA | CohLRWQA) else QaMetric.NUM
+    weighted = isinstance(product, RTCLRWComposite | CohLRWComposite)
+    coherence = isinstance(product, CohLRWComposite | CohPassComposite)
 
     tags = {
         **_tile(
             product,
             family="Composite Coherence" if coherence else "Composite Backscatter",
             acquisitions=acquisitions,
+            layer=layer,
         ),
         **(_lrw(aggregation, clip_max_resolution) if weighted else _unweighted(aggregation)),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
     }
-    if isinstance(product, RTCPassQA | CohPassQA | GTCPassQA):
+    if isinstance(product, RTCPassComposite | GTCPassComposite | CohPassComposite):
         tags["PASS_DIRECTION"] = product.pass_direction
 
-    if metric is QaMetric.NUM:
+    if layer is Layer.QA_NUM:
         counted = "carrying a non-zero resolution weight" if weighted else "holding a finite value"
         tags |= {
             # Deliberately not called a data mask: PFS item 2.2 asks for three

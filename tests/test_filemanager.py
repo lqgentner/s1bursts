@@ -16,21 +16,17 @@ if TYPE_CHECKING:
 
 from s1bursts.filemanager import _PARSERS, FileManager
 from s1bursts.product import (
-    RTCLRWQA,
     BaseProduct,
     CoherenceProduct,
     CohLRWComposite,
-    CohLRWQA,
     CohPassComposite,
-    CohPassQA,
     GTCPassComposite,
-    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
-    QaMetric,
+    Layer,
+    MGRSTileProduct,
     RTCLRWComposite,
     RTCPassComposite,
-    RTCPassQA,
     RTCProduct,
 )
 
@@ -107,6 +103,7 @@ _PARSE_CASES = [
             "polarization": "VH",
             "start_date": pd.Timestamp("20150706"),
             "end_date": pd.Timestamp("20151001"),
+            "layers": frozenset({Layer.MEASUREMENT}),
         },
         id="rtc-lrw",
     ),
@@ -148,31 +145,31 @@ _PARSE_CASES = [
         id="coh-pass",
     ),
     pytest.param(
-        RTCLRWQA,
+        RTCLRWComposite,
         "S1_RTC_LRW_QA-NUM_32TMS03_VH_20150706_20151001.tif",
         {
             "mgrs_code": "32TMS03",
             "polarization": "VH",
             "start_date": pd.Timestamp("20150706"),
             "end_date": pd.Timestamp("20151001"),
-            "qa_metric": QaMetric.NUM,
+            "layers": frozenset({Layer.QA_NUM}),
         },
         id="rtc-lrw-qa-num",
     ),
     pytest.param(
-        RTCLRWQA,
+        RTCLRWComposite,
         "S1_RTC_LRW_QA-CQM_32TMS03_VH_20150706_20151001.tif",
         {
             "mgrs_code": "32TMS03",
             "polarization": "VH",
             "start_date": pd.Timestamp("20150706"),
             "end_date": pd.Timestamp("20151001"),
-            "qa_metric": QaMetric.CQM,
+            "layers": frozenset({Layer.QA_CQM}),
         },
         id="rtc-lrw-qa-cqm",
     ),
     pytest.param(
-        CohLRWQA,
+        CohLRWComposite,
         "S1_COH12_LRW_QA-NUM_32TMS03_VH_20150706_20150919.tif",
         {
             "mgrs_code": "32TMS03",
@@ -180,12 +177,12 @@ _PARSE_CASES = [
             "start_date": pd.Timestamp("20150706"),
             "end_date": pd.Timestamp("20150919"),
             "baseline_days": 12,
-            "qa_metric": QaMetric.NUM,
+            "layers": frozenset({Layer.QA_NUM}),
         },
         id="coh-lrw-qa-num",
     ),
     pytest.param(
-        RTCPassQA,
+        RTCPassComposite,
         "S1_RTC_COMP_A_QA-NUM_32TMS03_VH_20150706_20151001.tif",
         {
             "mgrs_code": "32TMS03",
@@ -193,11 +190,12 @@ _PARSE_CASES = [
             "start_date": pd.Timestamp("20150706"),
             "end_date": pd.Timestamp("20151001"),
             "pass_direction": "Ascending",
+            "layers": frozenset({Layer.QA_NUM}),
         },
         id="rtc-pass-qa-num",
     ),
     pytest.param(
-        CohPassQA,
+        CohPassComposite,
         "S1_COH12_COMP_D_QA-NUM_32TMS03_VH_20150706_20150919.tif",
         {
             "mgrs_code": "32TMS03",
@@ -206,6 +204,7 @@ _PARSE_CASES = [
             "end_date": pd.Timestamp("20150919"),
             "baseline_days": 12,
             "pass_direction": "Descending",
+            "layers": frozenset({Layer.QA_NUM}),
         },
         id="coh-pass-qa-num",
     ),
@@ -227,27 +226,27 @@ _ROUNDTRIP_CASES = [
     pytest.param(RTCLRWComposite, "S1_RTC_LRW_32TMS03_VH_20150706_20151001.tif", id="rtc-lrw"),
     pytest.param(CohLRWComposite, "S1_COH12_LRW_32TMS03_VH_20150706_20150919.tif", id="coh-lrw"),
     pytest.param(
-        RTCLRWQA,
+        RTCLRWComposite,
         "S1_RTC_LRW_QA-NUM_32TMS03_VH_20150706_20151001.tif",
         id="rtc-lrw-qa-num",
     ),
     pytest.param(
-        RTCLRWQA,
+        RTCLRWComposite,
         "S1_RTC_LRW_QA-CQM_32TMS03_VH_20150706_20151001.tif",
         id="rtc-lrw-qa-cqm",
     ),
     pytest.param(
-        CohLRWQA,
+        CohLRWComposite,
         "S1_COH12_LRW_QA-NUM_32TMS03_VH_20150706_20150919.tif",
         id="coh-lrw-qa-num",
     ),
     pytest.param(
-        RTCPassQA,
+        RTCPassComposite,
         "S1_RTC_COMP_A_QA-NUM_32TMS03_VH_20150706_20151001.tif",
         id="rtc-pass-qa-num",
     ),
     pytest.param(
-        CohPassQA,
+        CohPassComposite,
         "S1_COH12_COMP_D_QA-NUM_32TMS03_VH_20150706_20150919.tif",
         id="coh-pass-qa-num",
     ),
@@ -393,79 +392,167 @@ class TestRoundTrip:
         parsed = fm._parse_filename(prefix_re, spec, filename, prefix_captures)
         assert parsed is not None, f"Failed to parse {filename!r}"
         product = cls.from_dict(parsed)
-        assert fm.get_product_path(product).name == filename
+        [layer] = product.layers if isinstance(product, MGRSTileProduct) else [Layer.MEASUREMENT]
+        assert fm.get_product_path(product, layer).name == filename
 
 
 # ---------------------------------------------------------------------------
-# TestQACollision
+# TestCompositeLayers
 # ---------------------------------------------------------------------------
 
 
-class TestQACollision:
-    """QA filenames must not collide with composite parsers or finders."""
+class TestCompositeLayers:
+    """A composite's QA layers are files of the same product, not products of their own."""
+
+    _COMPOSITE = RTCLRWComposite(
+        mgrs_code="32TMS03",
+        start_date=pd.Timestamp("20150706"),
+        end_date=pd.Timestamp("20151001"),
+        polarization="VH",
+    )
 
     @pytest.fixture
     def fm(self, tmp_path: Path) -> FileManager:
         """FileManager backed by a temporary directory."""
         return FileManager(tmp_path)
 
-    @pytest.mark.parametrize(
-        ("composite_cls", "qa_filename"),
-        [
-            (RTCLRWComposite, "S1_RTC_LRW_QA-NUM_32TMS03_VH_20150706_20151001.tif"),
-            (RTCLRWComposite, "S1_RTC_LRW_QA-CQM_32TMS03_VH_20150706_20151001.tif"),
-            (CohLRWComposite, "S1_COH12_LRW_QA-NUM_32TMS03_VH_20150706_20150919.tif"),
-            (RTCPassComposite, "S1_RTC_COMP_A_QA-NUM_32TMS03_VH_20150706_20151001.tif"),
-            (CohPassComposite, "S1_COH12_COMP_D_QA-NUM_32TMS03_VH_20150706_20150919.tif"),
-        ],
-    )
-    def test_qa_does_not_parse_as_composite(
-        self,
-        fm: FileManager,
-        composite_cls: type[BaseProduct],
-        qa_filename: str,
-    ) -> None:
-        """A QA filename must not parse under its sibling composite spec."""
-        prefix_re, spec, prefix_captures = _PARSERS[composite_cls]
-        assert fm._parse_filename(prefix_re, spec, qa_filename, prefix_captures) is None
+    def test_each_layer_has_its_own_file(self, fm: FileManager) -> None:
+        names = {layer: fm.get_product_path(self._COMPOSITE, layer).name for layer in Layer}
 
-    def test_composite_does_not_parse_as_qa(self, fm: FileManager) -> None:
-        """A plain composite filename must not parse under a QA spec."""
-        prefix_re, spec, prefix_captures = _PARSERS[RTCLRWQA]
-        result = fm._parse_filename(
-            prefix_re,
-            spec,
-            "S1_RTC_LRW_32TMS03_VH_20150706_20151001.tif",
-            prefix_captures,
+        assert names == {
+            Layer.MEASUREMENT: "S1_RTC_LRW_32TMS03_VH_20150706_20151001.tif",
+            Layer.QA_NUM: "S1_RTC_LRW_QA-NUM_32TMS03_VH_20150706_20151001.tif",
+            Layer.QA_CQM: "S1_RTC_LRW_QA-CQM_32TMS03_VH_20150706_20151001.tif",
+        }
+
+    def test_a_layer_may_be_given_by_its_value(self, fm: FileManager) -> None:
+        assert fm.get_product_path(self._COMPOSITE, "QA-NUM") == fm.get_product_path(
+            self._COMPOSITE, Layer.QA_NUM
         )
-        assert result is None
+        assert fm.get_product_path(self._COMPOSITE, "MEASUREMENT") == fm.get_product_path(
+            self._COMPOSITE
+        )
+        assert not fm.product_exists(self._COMPOSITE, "QA-NUM")
+        with pytest.raises(ValueError, match="is not a valid Layer"):
+            fm.get_product_path(self._COMPOSITE, "QA-XYZ")
 
-    def test_find_composites_excludes_qa_files(self, fm: FileManager) -> None:
-        """QA files in comp_dir must not be returned by the composite finder."""
-        (fm.comp_dir / "S1_RTC_LRW_32TMS03_VH_20150706_20151001.tif").touch()
-        (fm.comp_dir / "S1_RTC_LRW_QA-NUM_32TMS03_VH_20150706_20151001.tif").touch()
-        (fm.comp_dir / "S1_RTC_LRW_QA-CQM_32TMS03_VH_20150706_20151001.tif").touch()
-        results = fm.find_rtc_lrw_products()
-        assert len(results) == 1
-        assert all(isinstance(p, RTCLRWComposite) for p in results)
-        assert results[0].mgrs_code == "32TMS03"
+    @pytest.mark.parametrize("direction", ["ascending", "A"])
+    def test_an_unknown_pass_direction_filter_is_refused(
+        self, fm: FileManager, direction: str
+    ) -> None:
+        for find in (
+            fm.find_rtc_pass_composites,
+            fm.find_gtc_pass_composites,
+            fm.find_coh_pass_composites,
+        ):
+            with pytest.raises(ValueError, match="must be 'Ascending' or 'Descending'"):
+                # pyrefly: ignore [bad-argument-type]
+                find(pass_direction=direction)
 
-    def test_find_qa_excludes_composites(self, fm: FileManager) -> None:
-        """The QA finder returns only QA files, not the plain composite."""
-        (fm.comp_dir / "S1_RTC_LRW_32TMS03_VH_20150706_20151001.tif").touch()
-        (fm.comp_dir / "S1_RTC_LRW_QA-NUM_32TMS03_VH_20150706_20151001.tif").touch()
-        (fm.comp_dir / "S1_RTC_LRW_QA-CQM_32TMS03_VH_20150706_20151001.tif").touch()
-        results = fm.find_rtc_lrw_qa()
-        assert len(results) == 2
-        assert {p.qa_metric for p in results} == {QaMetric.NUM, QaMetric.CQM}
+    def test_the_path_does_not_depend_on_the_layers_held(self, fm: FileManager) -> None:
+        with_qa = RTCLRWComposite(
+            **{k: getattr(self._COMPOSITE, k) for k in ("mgrs_code", "start_date", "end_date")},
+            polarization="VH",
+            layers=frozenset(Layer),
+        )
 
-    def test_find_qa_filter_by_metric(self, fm: FileManager) -> None:
-        """The QA finder can filter by a single metric."""
-        (fm.comp_dir / "S1_RTC_LRW_QA-NUM_32TMS03_VH_20150706_20151001.tif").touch()
-        (fm.comp_dir / "S1_RTC_LRW_QA-CQM_32TMS03_VH_20150706_20151001.tif").touch()
-        results = fm.find_rtc_lrw_qa(qa_metric=QaMetric.CQM)
-        assert len(results) == 1
-        assert results[0].qa_metric == QaMetric.CQM
+        assert fm.get_product_path(with_qa) == fm.get_product_path(self._COMPOSITE)
+
+    def test_a_pass_composite_has_no_quality_map_file(self, fm: FileManager) -> None:
+        product = RTCPassComposite(
+            mgrs_code="32TMS03",
+            start_date=pd.Timestamp("20150706"),
+            end_date=pd.Timestamp("20151001"),
+            polarization="VH",
+            pass_direction="Ascending",
+        )
+
+        with pytest.raises(ValueError, match="has no layer QA_CQM"):
+            fm.get_product_path(product, Layer.QA_CQM)
+
+    def test_a_per_burst_product_has_only_its_measurement(self, fm: FileManager) -> None:
+        product = RTCProduct(
+            30343,
+            "IW1",
+            _CRS_32N,
+            pd.Timestamp("20150709"),
+            "VH",
+            pass_direction="Ascending",
+            _rel_orbit_number=15,
+        )
+
+        with pytest.raises(ValueError, match="RTCProduct has no layer QA_NUM"):
+            fm.product_exists(product, Layer.QA_NUM)
+        assert not fm.product_exists(product)
+
+    def test_an_unknown_product_type_is_refused(self, fm: FileManager) -> None:
+        class _Unknown(MGRSTileProduct):
+            @property
+            def product_type(self) -> str:
+                return "UNKNOWN"
+
+        class _UnknownBurst(BaseProduct):
+            @property
+            def product_type(self) -> str:
+                return "UNKNOWN"
+
+        product = _Unknown("32TMS03", pd.Timestamp("20150706"), pd.Timestamp("20151001"), "VH")
+        with pytest.raises(ValueError, match="Unknown product type"):
+            fm.get_product_path(product)
+        with pytest.raises(ValueError, match="Unknown product type"):
+            fm.get_product_path(_UnknownBurst())
+
+    def test_a_quality_map_name_does_not_parse_as_a_pass_composite(self, fm: FileManager) -> None:
+        prefix_re, spec, prefix_captures = _PARSERS[RTCPassComposite]
+        name = "S1_RTC_COMP_A_QA-CQM_32TMS03_VH_20150706_20151001.tif"
+        assert fm._parse_filename(prefix_re, spec, name, prefix_captures) is None
+
+    def test_find_returns_one_composite_holding_every_layer(self, fm: FileManager) -> None:
+        for layer in Layer:
+            fm.get_product_path(self._COMPOSITE, layer).touch()
+
+        [found] = fm.find_rtc_lrw_products(mgrs_code="32TMS03", polarization="VH")
+
+        assert found.layers == set(Layer)
+        assert found == RTCLRWComposite(
+            mgrs_code="32TMS03",
+            start_date=pd.Timestamp("20150706"),
+            end_date=pd.Timestamp("20151001"),
+            polarization="VH",
+            layers=frozenset(Layer),
+        )
+
+    def test_find_reports_the_layers_on_disk(self, fm: FileManager) -> None:
+        fm.get_product_path(self._COMPOSITE).touch()
+        other = RTCLRWComposite(
+            mgrs_code="32TMS04",
+            start_date=pd.Timestamp("20150706"),
+            end_date=pd.Timestamp("20151001"),
+            polarization="VH",
+        )
+        fm.get_product_path(other, Layer.QA_NUM).touch()
+
+        found = fm.find_rtc_lrw_products()
+
+        assert [(p.mgrs_code, p.layers) for p in found] == [
+            ("32TMS03", {Layer.MEASUREMENT}),
+            ("32TMS04", {Layer.QA_NUM}),
+        ]
+
+    def test_find_does_not_mix_composite_types(self, fm: FileManager) -> None:
+        coherence = CohLRWComposite(
+            mgrs_code="32TMS03",
+            start_date=pd.Timestamp("20150706"),
+            end_date=pd.Timestamp("20151001"),
+            polarization="VH",
+            baseline_days=12,
+        )
+        fm.get_product_path(coherence, Layer.QA_CQM).touch()
+
+        assert fm.find_rtc_lrw_products() == []
+        assert fm.find_coh_pass_composites() == []
+        [found] = fm.find_coh_lrw_products(baseline_days=12)
+        assert found.layers == {Layer.QA_CQM}
 
     def test_tightened_pol_still_parses_composites(self, fm: FileManager) -> None:
         """The tightened polarization pattern still parses VV/VH composites."""
@@ -666,18 +753,11 @@ def test_gtc_pass_composite_path_round_trip(tmp_path: Path) -> None:
     assert fm.find_gtc_pass_composites(pass_direction="Descending") == []
     assert fm.find_rtc_pass_composites() == []
 
-    qa = GTCPassQA(
-        mgrs_code="32TMS25",
-        start_date=pd.Timestamp("2019-01-01"),
-        end_date=pd.Timestamp("2019-01-31"),
-        polarization="VV",
-        pass_direction="Ascending",
-    )
-    qa_path = fm.get_product_path(qa)
+    qa_path = fm.get_product_path(product, Layer.QA_NUM)
     assert qa_path.name == "S1_GTC_COMP_A_QA-NUM_32TMS25_VV_20190101_20190131.tif"
     qa_path.touch()
-    assert fm.find_gtc_pass_qa(pass_direction="Ascending") == [qa]
-    assert fm.find_gtc_pass_composites() == [product]
+    [found] = fm.find_gtc_pass_composites(pass_direction="Ascending")
+    assert found.layers == {Layer.MEASUREMENT, Layer.QA_NUM}
 
 
 class TestStringPaths:

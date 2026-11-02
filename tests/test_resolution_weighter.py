@@ -21,14 +21,12 @@ from s1bursts import product_tags
 from s1bursts.errors import EmptyCompositeError
 from s1bursts.filemanager import FileManager
 from s1bursts.product import (
-    RTCLRWQA,
     CoherenceProduct,
     GTCPassComposite,
     GTCProduct,
-    QaMetric,
+    Layer,
     RTCLRWComposite,
     RTCPassComposite,
-    RTCPassQA,
     RTCProduct,
 )
 from s1bursts.resolution_weighter import ResolutionWeighter
@@ -912,8 +910,8 @@ class TestComposeReturns:
         # different code, so no single ignore comment fits both.
         vars(weighter).update(_load_band=fake_load, _input_tags=lambda _product: {})
 
-    def test_rtc_lrw_without_qa_returns_bare_composite(self, tmp_path: Path) -> None:
-        """``write_qa=False`` returns just the composite (unchanged)."""
+    def test_rtc_lrw_without_qa_holds_the_measurement(self, tmp_path: Path) -> None:
+        """``write_qa=False`` returns a composite holding only its measurement."""
         fm, weighter, geobox = self._setup(tmp_path)
         p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
         power = {
@@ -924,13 +922,15 @@ class TestComposeReturns:
         self._patch_load(weighter, power, area)
 
         # Stubs stand in for real RTC products.
-        # pyrefly: ignore [no-matching-overload]
+        # pyrefly: ignore [bad-argument-type]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
         assert isinstance(result, RTCLRWComposite)
+        assert result.layers == {Layer.MEASUREMENT}
         assert fm.get_product_path(result).exists()
+        assert not fm.product_exists(result, Layer.QA_NUM)
 
-    def test_rtc_lrw_with_qa_returns_nested_tuple(self, tmp_path: Path) -> None:
-        """``write_qa=True`` returns ``(composite, (qa_num, qa_cqm))`` and writes the files."""
+    def test_rtc_lrw_with_qa_holds_every_layer(self, tmp_path: Path) -> None:
+        """``write_qa=True`` returns one composite holding its QA layers and writes them."""
         fm, weighter, geobox = self._setup(tmp_path)
         p1, p2 = _rtc_stub(10, 1), _rtc_stub(20, 13)
         power = {
@@ -941,21 +941,16 @@ class TestComposeReturns:
         self._patch_load(weighter, power, area)
 
         # Stubs stand in for real RTC products.
-        # pyrefly: ignore [no-matching-overload]
-        composite, (qa_num, qa_cqm) = weighter.compose_rtc_lrw(
-            [p1, p2],
-            geobox,
-            aggregation="mean",
-            write_qa=True,
-        )
+        # pyrefly: ignore [bad-argument-type]
+        composite = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean", write_qa=True)
         assert isinstance(composite, RTCLRWComposite)
-        assert qa_num.qa_metric is QaMetric.NUM
-        assert qa_cqm.qa_metric is QaMetric.CQM
-        assert fm.get_product_path(qa_num).exists()
-        assert fm.get_product_path(qa_cqm).exists()
+        assert composite.layers == set(Layer)
+        assert fm.get_product_path(composite, Layer.QA_NUM).exists()
+        assert fm.get_product_path(composite, Layer.QA_CQM).exists()
+        assert fm.find_rtc_lrw_products() == [composite]
 
     def test_rtc_pass_without_qa_returns_dict_of_composites(self, tmp_path: Path) -> None:
-        """``write_qa=False`` returns a dict of bare composites per direction (unchanged)."""
+        """``write_qa=False`` returns a composite per direction holding its measurement."""
         _fm, weighter, geobox = self._setup(tmp_path)
         asc, desc = _rtc_stub(10, 1, "Ascending"), _rtc_stub(11, 2, "Descending")
         power = {
@@ -969,9 +964,10 @@ class TestComposeReturns:
         result = weighter.compose_rtc_by_pass([asc, desc], geobox)
         assert set(result) == {"Ascending", "Descending"}
         assert all(isinstance(v, RTCPassComposite) for v in result.values())
+        assert all(v.layers == {Layer.MEASUREMENT} for v in result.values())
 
-    def test_rtc_pass_with_qa_returns_dict_of_tuples(self, tmp_path: Path) -> None:
-        """``write_qa=True`` returns ``dict[dir, (composite, qa_num)]`` and writes the files."""
+    def test_rtc_pass_with_qa_holds_the_qa_layer(self, tmp_path: Path) -> None:
+        """``write_qa=True`` returns composites holding their QA layer and writes it."""
         fm, weighter, geobox = self._setup(tmp_path)
         asc, desc = _rtc_stub(10, 1, "Ascending"), _rtc_stub(11, 2, "Descending")
         power = {
@@ -981,13 +977,13 @@ class TestComposeReturns:
         self._patch_load(weighter, power)
 
         # Stubs stand in for real RTC products.
-        # pyrefly: ignore [no-matching-overload]
+        # pyrefly: ignore [bad-argument-type]
         result = weighter.compose_rtc_by_pass([asc, desc], geobox, write_qa=True)
-        composite, qa_num = result["Ascending"]
+        composite = result["Ascending"]
         assert isinstance(composite, RTCPassComposite)
-        assert isinstance(qa_num, RTCPassQA)
-        assert qa_num.pass_direction == "Ascending"
-        assert fm.get_product_path(qa_num).exists()
+        assert composite.pass_direction == "Ascending"
+        assert composite.layers == {Layer.MEASUREMENT, Layer.QA_NUM}
+        assert fm.get_product_path(composite, Layer.QA_NUM).exists()
 
 
 class TestSaveStatisticsAndChecksum:
@@ -1004,7 +1000,7 @@ class TestSaveStatisticsAndChecksum:
         TestComposeReturns._patch_load(weighter, power, area)
 
         # Stubs stand in for real RTC products.
-        # pyrefly: ignore [no-matching-overload]
+        # pyrefly: ignore [bad-argument-type]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
 
         with rasterio.open(fm.get_product_path(result)) as ds:
@@ -1025,15 +1021,10 @@ class TestSaveStatisticsAndChecksum:
         TestComposeReturns._patch_load(weighter, power, area)
 
         # Stubs stand in for real RTC products.
-        # pyrefly: ignore [no-matching-overload]
-        _composite, (qa_num, _qa_cqm) = weighter.compose_rtc_lrw(
-            [p1, p2],
-            geobox,
-            aggregation="mean",
-            write_qa=True,
-        )
+        # pyrefly: ignore [bad-argument-type]
+        composite = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean", write_qa=True)
 
-        with rasterio.open(fm.get_product_path(qa_num)) as ds:
+        with rasterio.open(fm.get_product_path(composite, Layer.QA_NUM)) as ds:
             tags = ds.tags(1)
         # Every pixel has p1's contribution, so num_obs is never the uint16
         # nodata sentinel 0 — every one of the 4 pixels is "valid".
@@ -1050,7 +1041,7 @@ class TestSaveStatisticsAndChecksum:
         TestComposeReturns._patch_load(weighter, power, area)
 
         # Stubs stand in for real RTC products.
-        # pyrefly: ignore [no-matching-overload]
+        # pyrefly: ignore [bad-argument-type]
         weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
 
         assert weighter.checksums == {}
@@ -1074,7 +1065,7 @@ class TestSaveStatisticsAndChecksum:
         TestComposeReturns._patch_load(weighter, power, area)
 
         # Stubs stand in for real RTC products.
-        # pyrefly: ignore [no-matching-overload]
+        # pyrefly: ignore [bad-argument-type]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean")
 
         path = fm.get_product_path(result)
@@ -1254,17 +1245,17 @@ class TestComposeRtcLrw:
         for product in products:
             _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(4.0)])
 
-        composite, (num_obs, cqm) = scene.weighter.compose_rtc_lrw(
+        composite = scene.weighter.compose_rtc_lrw(
             products,
             scene.geobox,
             write_qa=True,
         )
 
         assert scene.manager.get_product_path(composite).exists()
-        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_NUM)) as src:
             assert src.dtypes[0] == "uint16"
             assert (src.read(1) == 2).all()
-        assert scene.manager.get_product_path(cqm).exists()
+        assert scene.manager.get_product_path(composite, Layer.QA_CQM).exists()
 
     @pytest.mark.parametrize("aggregation", ["mean", "median", 0.25, 0.75])
     def test_cqm_is_the_weighted_mean_form_under_every_aggregation(
@@ -1283,14 +1274,14 @@ class TestComposeRtcLrw:
         for product, value, area in zip(products, [2.0, 1.0, 9.0], [1.0, 2.0, 10.0], strict=True):
             _write_raster(scene.manager.get_product_path(product), [_full(value), _full(area)])
 
-        _, (_, cqm) = scene.weighter.compose_rtc_lrw(
+        composite = scene.weighter.compose_rtc_lrw(
             products,
             scene.geobox,
             aggregation=aggregation,
             write_qa=True,
         )
 
-        with rasterio.open(scene.manager.get_product_path(cqm)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_CQM)) as src:
             assert src.read(1) == pytest.approx(_full(1.6 / 3.0), rel=1e-6)
 
     def test_counts_only_observed_pixels_in_the_qa_layer(self, scene: _Scene) -> None:
@@ -1301,13 +1292,13 @@ class TestComposeRtcLrw:
         _write_raster(scene.manager.get_product_path(first), [partial, _full(4.0)])
         _write_raster(scene.manager.get_product_path(second), [_full(2.0), _full(4.0)])
 
-        _, (num_obs, _) = scene.weighter.compose_rtc_lrw(
+        composite = scene.weighter.compose_rtc_lrw(
             [first, second],
             scene.geobox,
             write_qa=True,
         )
 
-        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_NUM)) as src:
             counts = src.read(1)
         assert counts[0, 0] == 1
         assert counts[1, 1] == 2
@@ -1325,13 +1316,13 @@ class TestComposeRtcLrw:
         _write_raster(scene.manager.get_product_path(first), [_full(2.0), no_area])
         _write_raster(scene.manager.get_product_path(second), [_full(2.0), _full(4.0)])
 
-        _, (num_obs, _) = scene.weighter.compose_rtc_lrw(
+        composite = scene.weighter.compose_rtc_lrw(
             [first, second],
             scene.geobox,
             write_qa=True,
         )
 
-        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_NUM)) as src:
             counts = src.read(1)
         assert counts[0, 0] == 1
         assert counts[1, 1] == 2
@@ -1498,21 +1489,50 @@ class TestComposeCohLrw:
         with pytest.raises(ValueError, match="No matching RTC scattering area"):
             scene.weighter.compose_coherence_lrw([coh], [], scene.geobox)
 
+    def test_a_missing_qa_layer_rewrites_the_measurement_too(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(scene.manager.get_product_path(product), [_full(3.0), _full(1.0)])
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        scene.manager.get_product_path(composite).write_bytes(b"stale")
+
+        with_qa = scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
+
+        with rasterio.open(scene.manager.get_product_path(with_qa)) as src:
+            assert src.read(1) == pytest.approx(_full(3.0))
+        assert all(scene.manager.product_exists(with_qa, layer) for layer in with_qa.layers)
+
+    def test_skips_an_existing_composite_with_all_its_layers(self, scene: _Scene) -> None:
+        coh = _coh("2022-08-01", "2022-08-13")
+        rtc = _rtc("2022-08-01")
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(4.0)])
+        composite = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, write_qa=True)
+        for layer in composite.layers:
+            scene.manager.get_product_path(composite, layer).write_bytes(b"kept")
+
+        again = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, write_qa=True)
+
+        assert again == composite
+        for layer in composite.layers:
+            assert scene.manager.get_product_path(composite, layer).read_bytes() == b"kept"
+
     def test_writes_the_requested_qa_layers(self, scene: _Scene) -> None:
         coh = _coh("2022-08-01", "2022-08-13")
         rtc = _rtc("2022-08-01")
         _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
         _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(4.0)])
 
-        composite, (num_obs, cqm) = scene.weighter.compose_coherence_lrw(
+        composite = scene.weighter.compose_coherence_lrw(
             [coh],
             [rtc],
             scene.geobox,
             write_qa=True,
         )
 
-        for product in (composite, num_obs, cqm):
-            assert scene.manager.get_product_path(product).exists()
+        assert composite.layers == set(Layer)
+        for layer in composite.layers:
+            assert scene.manager.get_product_path(composite, layer).exists()
 
 
 class TestComposeByPass:
@@ -1555,9 +1575,9 @@ class TestComposeByPass:
 
         result = scene.weighter.compose_coherence_by_pass([product], scene.geobox, write_qa=True)
 
-        composite, num_obs = result[product.pass_direction]
+        composite = result[product.pass_direction]
         assert scene.manager.get_product_path(composite).exists()
-        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_NUM)) as src:
             assert (src.read(1) == 1).all()
 
     def test_coherence_pass_composite_carries_window_and_span(self, scene: _Scene) -> None:
@@ -1569,8 +1589,9 @@ class TestComposeByPass:
             [product], scene.geobox, write_qa=True, time_range=window
         )
 
-        for written in result[product.pass_direction]:
-            with rasterio.open(scene.manager.get_product_path(written)) as src:
+        composite = result[product.pass_direction]
+        for layer in composite.layers:
+            with rasterio.open(scene.manager.get_product_path(composite, layer)) as src:
                 tags = src.tags()
             assert (tags["COMPOSITE_START_DATE"], tags["COMPOSITE_END_DATE"]) == (
                 "2022-07-15",
@@ -1591,6 +1612,27 @@ class TestComposeByPass:
         scene.weighter.compose_rtc_by_pass([product], scene.geobox)
 
         assert path.read_bytes() == b"kept"
+
+    def test_skips_a_coherence_pass_composite_only_once_every_layer_exists(
+        self, scene: _Scene
+    ) -> None:
+        product = _coh("2022-08-01", "2022-08-13")
+        _write_raster(scene.manager.get_product_path(product), [_full(0.4)])
+        [first] = scene.weighter.compose_coherence_by_pass([product], scene.geobox).values()
+        path = scene.manager.get_product_path(first)
+        path.write_bytes(b"stale")
+
+        [again] = scene.weighter.compose_coherence_by_pass(
+            [product], scene.geobox, write_qa=True
+        ).values()
+
+        # Previously kept the measurement and added a QA layer from another run.
+        with rasterio.open(path) as src:
+            assert src.read(1) == pytest.approx(_full(0.4))
+        assert scene.manager.product_exists(again, Layer.QA_NUM)
+        scene.manager.get_product_path(again, Layer.QA_NUM).write_bytes(b"kept")
+        scene.weighter.compose_coherence_by_pass([product], scene.geobox, write_qa=True)
+        assert scene.manager.get_product_path(again, Layer.QA_NUM).read_bytes() == b"kept"
 
 
 def _gtc(date: str, orbit: int = 15, burst_id: int = _ASCENDING_BURST) -> GTCProduct:
@@ -1628,8 +1670,7 @@ class TestComposeGtcByPass:
             [a1, a2, d1], scene.geobox, aggregation="mean", write_qa=True, time_range=window
         )
 
-        asc, asc_qa = result["Ascending"]
-        desc, desc_qa = result["Descending"]
+        asc, desc = result["Ascending"], result["Descending"]
         assert isinstance(asc, GTCPassComposite)
         assert (
             scene.manager.get_product_path(asc).name
@@ -1640,13 +1681,13 @@ class TestComposeGtcByPass:
             assert src.tags()["BACKSCATTER_MEASUREMENT"] == "Beta-0"
             assert src.tags()["CONTRIBUTING_OBSERVATIONS"] == "2"
             assert src.tags()["FIRST_ACQUISITION_DATE"].startswith("2019-01-05")
-        with rasterio.open(scene.manager.get_product_path(asc_qa)) as src:
+        with rasterio.open(scene.manager.get_product_path(asc, Layer.QA_NUM)) as src:
             assert (src.read(1) == 2).all()
         with rasterio.open(scene.manager.get_product_path(desc)) as src:
             values = src.read(1)
             assert np.isnan(values[0, 0])
             assert values[1, 1] == 9.0
-        with rasterio.open(scene.manager.get_product_path(desc_qa)) as src:
+        with rasterio.open(scene.manager.get_product_path(desc, Layer.QA_NUM)) as src:
             counts = src.read(1)
             assert counts[0, 0] == 0
             assert counts[1, 1] == 1
@@ -1743,16 +1784,16 @@ class TestCompositeTags:
         for product in products:
             _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(4.0)])
 
-        _, (num_obs, cqm) = scene.weighter.compose_rtc_lrw(
+        composite = scene.weighter.compose_rtc_lrw(
             products,
             scene.geobox,
             write_qa=True,
         )
 
-        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_NUM)) as src:
             assert src.tags()["QA_LAYER"] == "Contributing Observations Image"
             assert src.descriptions == ("num_obs",)
-        with rasterio.open(scene.manager.get_product_path(cqm)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_CQM)) as src:
             assert src.tags()["QA_LAYER"] == "Composite Quality Map Image"
             assert src.tags()["CQM_CONVERSION_EQ"] == "dB = 10*log10(DN)"
 
@@ -1760,17 +1801,17 @@ class TestCompositeTags:
         products = [_rtc("2022-08-13")]
         _write_raster(scene.manager.get_product_path(products[0]), [_full(2.0), _full(4.0)])
 
-        _, (num_obs, cqm) = scene.weighter.compose_rtc_lrw(
+        composite = scene.weighter.compose_rtc_lrw(
             products,
             scene.geobox,
             write_qa=True,
             cqm_decibel=True,
         )
 
-        with rasterio.open(scene.manager.get_product_path(cqm)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_CQM)) as src:
             assert src.tags()["CQM_SCALING"] == "decibel"
             assert "CQM_CONVERSION_EQ" not in src.tags()
-        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_NUM)) as src:
             assert "CQM_SCALING" not in src.tags()
 
     def test_coherence_composite_inherits_the_estimation_window(self, scene: _Scene) -> None:
@@ -1865,14 +1906,14 @@ class TestCompositeTags:
         _write_raster(scene.manager.get_product_path(ascending), [_full(1.0), _full(1.0)])
 
         result = scene.weighter.compose_rtc_by_pass([ascending], scene.geobox, write_qa=True)
-        composite, num_obs = result["Ascending"]
+        composite = result["Ascending"]
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             tags = src.tags()
             assert tags["PASS_DIRECTION"] == "Ascending"
             assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
             assert "COMPOSITING_METHOD_REFERENCE" not in tags
-        with rasterio.open(scene.manager.get_product_path(num_obs)) as src:
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_NUM)) as src:
             assert src.tags()["QA_LAYER"] == "Contributing Observations Image"
 
 
@@ -2055,28 +2096,26 @@ class TestPerProductProfiles:
             rasterio_profile=profile,
         )
 
-    @staticmethod
-    def _product(qa_metric: QaMetric | None = None) -> RTCLRWComposite | RTCLRWQA:
-        common: dict[str, Any] = {
-            "mgrs_code": "32TMS03",
-            "start_date": Timestamp("2023-07-18"),
-            "end_date": Timestamp("2023-10-15"),
-            "polarization": "VV",
-        }
-        if qa_metric is None:
-            return RTCLRWComposite(**common)
-        return RTCLRWQA(**common, qa_metric=qa_metric)
+    _COMPOSITE = RTCLRWComposite(
+        mgrs_code="32TMS03",
+        start_date=Timestamp("2023-07-18"),
+        end_date=Timestamp("2023-10-15"),
+        polarization="VV",
+    )
+
+    def _profile(self, w: ResolutionWeighter, layer: Layer = Layer.MEASUREMENT) -> dict[str, Any]:
+        return w._profile_for(self._COMPOSITE, layer)
 
     def test_a_flat_profile_applies_to_every_product(self, tmp_path: Path) -> None:
         w = self._weighter(tmp_path, {"compress": "zstd"})
 
-        for product in (self._product(), self._product(QaMetric.NUM)):
-            assert w._profile_for(product)["compress"] == "zstd"
+        for layer in Layer:
+            assert self._profile(w, layer)["compress"] == "zstd"
 
     def test_no_profile_keeps_the_library_default(self, tmp_path: Path) -> None:
         w = self._weighter(tmp_path, None)
 
-        assert w._profile_for(self._product())["compress"] == "deflate"
+        assert self._profile(w)["compress"] == "deflate"
 
     def test_per_product_entry_overrides_the_default(self, tmp_path: Path) -> None:
         w = self._weighter(
@@ -2087,8 +2126,8 @@ class TestPerProductProfiles:
             },
         )
 
-        assert w._profile_for(self._product())["max_z_error"] == 1e-5
-        assert w._profile_for(self._product(QaMetric.NUM))["max_z_error"] == 0
+        assert self._profile(w)["max_z_error"] == 1e-5
+        assert self._profile(w, Layer.QA_NUM)["max_z_error"] == 0
 
     def test_a_per_product_entry_inherits_the_default_codec(self, tmp_path: Path) -> None:
         """A partial override must not restore the library's default codec."""
@@ -2100,12 +2139,12 @@ class TestPerProductProfiles:
             },
         )
 
-        assert w._profile_for(self._product(QaMetric.NUM))["compress"] == "lerc_zstd"
+        assert self._profile(w, Layer.QA_NUM)["compress"] == "lerc_zstd"
 
     def test_a_product_without_an_entry_falls_back_to_the_default(self, tmp_path: Path) -> None:
         w = self._weighter(tmp_path, {"default": {"compress": "lerc_zstd"}})
 
-        assert w._profile_for(self._product(QaMetric.CQM))["compress"] == "lerc_zstd"
+        assert self._profile(w, Layer.QA_CQM)["compress"] == "lerc_zstd"
 
     def test_a_mapping_without_a_default_leaves_others_on_the_library_default(
         self,
@@ -2113,8 +2152,8 @@ class TestPerProductProfiles:
     ) -> None:
         w = self._weighter(tmp_path, {"RTC_LRW": {"compress": "lerc_zstd"}})
 
-        assert w._profile_for(self._product())["compress"] == "lerc_zstd"
-        assert w._profile_for(self._product(QaMetric.NUM))["compress"] == "deflate"
+        assert self._profile(w)["compress"] == "lerc_zstd"
+        assert self._profile(w, Layer.QA_NUM)["compress"] == "deflate"
 
     def test_per_product_codec_reaches_the_written_cog(self, tmp_path: Path) -> None:
         """Exercise the freezebase boundary, not only the profile lookup."""
@@ -2126,10 +2165,11 @@ class TestPerProductProfiles:
                 "RTC_LRW_QA-NUM": {"max_z_error": 0},
             },
         )
-        product = self._product()
+        product = self._COMPOSITE
         weighter._save(
             np.full((_TILE, _TILE), 0.25, dtype=np.float32),
             product,
+            Layer.MEASUREMENT,
             _geobox(),
             product_tags.RasterMetadata(tags={}, band_names=["VV"], units=["natural"]),
         )
@@ -2158,7 +2198,7 @@ class TestComposeTimeRange:
         }
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
-        # pyrefly: ignore [no-matching-overload]
+        # pyrefly: ignore [bad-argument-type]
         result = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean", **kwargs)
         assert isinstance(result, RTCLRWComposite)
         return fm, result
@@ -2224,7 +2264,7 @@ class TestComposeTimeRange:
         area = {id(p1): np.full((2, 2), 2.0, np.float32), id(p2): np.full((2, 2), 4.0, np.float32)}
         TestComposeReturns._patch_load(weighter, power, area)
         window = TimeRange("2020-01-12", "2020-01-24")
-        # pyrefly: ignore [no-matching-overload]
+        # pyrefly: ignore [bad-argument-type]
         product = weighter.compose_rtc_lrw([p1, p2], geobox, aggregation="mean", time_range=window)
         assert isinstance(product, RTCLRWComposite)
         with rasterio.open(fm.get_product_path(product)) as src:
@@ -2241,20 +2281,22 @@ class TestComposeTimeRange:
         power = {id(p): np.full((2, 2), 1.0, np.float32) for p in [*asc, *desc]}
         TestComposeReturns._patch_load(weighter, power)
         window = TimeRange("2020-01-01", "2020-01-31")
-        # pyrefly: ignore [no-matching-overload]
+        # Stubs stand in for real RTC products and the cell.
         result = weighter.compose_rtc_by_pass(
+            # pyrefly: ignore [bad-argument-type]
             [*asc, *desc],
+            # pyrefly: ignore [bad-argument-type]
             geobox,
             aggregation="mean",
             write_qa=True,
             time_range=window,
         )
         spans = {}
-        for direction, (composite, qa_num) in result.items():
-            for product in (composite, qa_num):
-                with rasterio.open(fm.get_product_path(product)) as src:
+        for direction, composite in result.items():
+            for layer in composite.layers:
+                with rasterio.open(fm.get_product_path(composite, layer)) as src:
                     tags = src.tags()
-                spans[(direction, type(product).__name__)] = (
+                spans[(direction, layer)] = (
                     tags["COMPOSITE_START_DATE"],
                     tags["COMPOSITE_END_DATE"],
                     tags["FIRST_ACQUISITION_DATE"],

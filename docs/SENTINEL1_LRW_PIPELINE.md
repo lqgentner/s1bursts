@@ -22,14 +22,12 @@ BaseProduct
 │   └── CoregisteredProduct (two co-registered bursts)
 │       ├── CoherenceProduct (coherence)
 │       └── InterferogramProduct (complex interferogram)
-└── MGRSTileProduct (MGRS 10 km grid cell composite)
-    ├── RTCLRWComposite (LRW intensity composite)
-    ├── CohLRWComposite (LRW coherence composite)
-    ├── RTCPassComposite (pass-direction gamma nought composite)
-    ├── GTCPassComposite (pass-direction beta nought composite)
-    ├── CohPassComposite (pass-direction coherence composite)
-    ├── RTCLRWQA, CohLRWQA (QA-NUM and QA-CQM layers of an LRW composite)
-    └── RTCPassQA, GTCPassQA, CohPassQA (QA-NUM layer of a pass composite)
+└── MGRSTileProduct (MGRS 10 km grid cell composite, holding its layers)
+    ├── RTCLRWComposite (LRW intensity composite; QA-NUM and QA-CQM layers)
+    ├── CohLRWComposite (LRW coherence composite; QA-NUM and QA-CQM layers)
+    ├── RTCPassComposite (pass-direction gamma nought composite; QA-NUM layer)
+    ├── GTCPassComposite (pass-direction beta nought composite; QA-NUM layer)
+    └── CohPassComposite (pass-direction coherence composite; QA-NUM layer)
 ```
 
 ### Key Concepts
@@ -160,7 +158,7 @@ Products are frozen dataclasses holding identity only; `FileManager` derives eve
 
 - `BackscatterProduct` (abstract, `is_terrain_flattened`): `RTCProduct` (`product_type = "RTC"`, bands `gamma0`, `scattering_area`) and `GTCProduct` (`"GTC"`, band `beta0`).
 - `CoregisteredProduct` (abstract, `baseline_days`): `CoherenceProduct` (`"COH"`, band `coherence`) and `InterferogramProduct` (`"IFG"`, bands `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary`).
-- `MGRSTileProduct` (abstract, `crs` from the MGRS code): `RTCLRWComposite` (`"RTC_LRW"`), `CohLRWComposite` (`"COH_LRW"`), `RTCPassComposite` (`"RTC_COMP_{A/D}"`), `GTCPassComposite` (`"GTC_COMP_{A/D}"`), `CohPassComposite` (`"COH_COMP_{A/D}"`), and the QA auxiliaries `RTCLRWQA`, `CohLRWQA` (`qa_metric` is `QaMetric.NUM` or `QaMetric.CQM`), `RTCPassQA`, `GTCPassQA`, `CohPassQA` (always `NUM`).
+- `MGRSTileProduct` (abstract, `crs` from the MGRS code): `RTCLRWComposite` (`"RTC_LRW"`), `CohLRWComposite` (`"COH_LRW"`), `RTCPassComposite` (`"RTC_COMP_{A/D}"`), `GTCPassComposite` (`"GTC_COMP_{A/D}"`), `CohPassComposite` (`"COH_COMP_{A/D}"`). A composite is one product of several files: its identity fields name all of them, and `layers`, a frozenset of `Layer`, says which it holds. `Layer.MEASUREMENT` is the composite itself, `Layer.QA_NUM` and `Layer.QA_CQM` its QA layers; `supported_layers` lists the ones a type can have (pass composites have no `QA_CQM`). A QA layer's file and `PRODUCT_TYPE` tag add its value to the composite's (`RTC_LRW_QA-NUM`), which is also the key of a per-layer `rasterio_profile` entry.
 
 The band description, the band's name inside the SNAP graph and its `LAYER_NAME` band tag are one and the same name. Composites keep the polarization as their band description.
 
@@ -173,8 +171,8 @@ The band description, the band's name inside the SNAP graph and its `LAYER_NAME`
 Deterministic paths and discovery, local or on S3 through `UPath`:
 
 - `FileManager(base_dir, slc_dir=None, prod_dir=None, comp_dir=None)`; the defaults are `base_dir/s1-slc`, `s1-prod`, `s1-comp`.
-- `get_slc_path(burst)`, `get_product_path(product)`, `product_exists(product)`.
-- Discovery by glob and regex: `find_slc_bursts`, `find_rtc_products`, `find_gtc_products`, `find_coherence_products`, `find_interferogram_products` (these four also filter on `pass_direction`), `find_rtc_lrw_products`, `find_coh_lrw_products`, `find_rtc_pass_composites`, `find_gtc_pass_composites`, `find_coh_pass_composites`, `find_rtc_lrw_qa`, `find_coh_lrw_qa`, `find_rtc_pass_qa`, `find_gtc_pass_qa`, `find_coh_pass_qa`. Date filtering is left to a list comprehension over the result.
+- `get_slc_path(burst)`, `get_product_path(product, layer=Layer.MEASUREMENT)`, `product_exists(product, layer=Layer.MEASUREMENT)`; `layer` selects a composite's file and must be the measurement for a per-burst product.
+- Discovery by glob and regex: `find_slc_bursts`, `find_rtc_products`, `find_gtc_products`, `find_coherence_products`, `find_interferogram_products` (these four also filter on `pass_direction`), `find_rtc_lrw_products`, `find_coh_lrw_products`, `find_rtc_pass_composites`, `find_gtc_pass_composites`, `find_coh_pass_composites`. A composite finder returns one product per identity, holding the layers whose files it found. Date filtering is left to a list comprehension over the result.
 
 Every filename is built and parsed by one engine: each product class registers a prefix, an ordered `FieldSpec` list and a suffix in `_PARSERS`, so `get_slc_path(burst).exists()` is the existence check (one HEAD request on S3, no glob).
 
@@ -212,9 +210,9 @@ Results (`summary.py`): `OkResult[T]` (`source`, `result`, `skipped`), `ErrorRes
 
 `ResolutionWeighter(file_manager, *, rasterio_profile=None, max_workers=8, checksum=False)`:
 
-- `compose_rtc_lrw(rtc_products, geobox, *, aggregation="mean", clip_max_resolution=None, decibel=False, write_qa=False, cqm_decibel=False, overwrite=False)` → `RTCLRWComposite`, or `(composite, (qa_num, qa_cqm))` with `write_qa=True`.
+- `compose_rtc_lrw(rtc_products, geobox, *, aggregation="mean", clip_max_resolution=None, decibel=False, write_qa=False, cqm_decibel=False, overwrite=False)` → `RTCLRWComposite`, holding the QA layers too with `write_qa=True`.
 - `compose_coherence_lrw(coh_products, rtc_products, geobox, *, aggregation="mean", clip_max_resolution=None, write_qa=False, cqm_decibel=False, overwrite=False)` → `CohLRWComposite`; the RTC products supply the scattering area of the matching orbit and date.
-- `compose_rtc_by_pass(rtc_products, geobox, *, aggregation="mean", decibel=False, write_qa=False, overwrite=False)` → `dict[PassDirection, RTCPassComposite]`, or `(composite, qa_num)` values with `write_qa=True`.
+- `compose_rtc_by_pass(rtc_products, geobox, *, aggregation="mean", decibel=False, write_qa=False, overwrite=False)` → `dict[PassDirection, RTCPassComposite]`, one composite per pass direction among the inputs, holding the `QA_NUM` layer too with `write_qa=True`.
 - `compose_gtc_by_pass(gtc_products, geobox, *, aggregation="mean", decibel=False, write_qa=False, overwrite=False)` → `dict[PassDirection, GTCPassComposite]`, the same unweighted composite of beta nought; with no scattering area there is nothing to weight by.
 - `compose_coherence_by_pass(coh_products, geobox, *, aggregation="mean", write_qa=False, overwrite=False)` → `dict[PassDirection, CohPassComposite]`.
 
@@ -335,12 +333,14 @@ processor.create_interferograms(pairs, crs=crs)
 from freezebase.mgrs import MGRSGeoBox
 
 from s1bursts import ResolutionWeighter
+from s1bursts.product import Layer
 
 cell = MGRSGeoBox.from_mgrs("32TMT64", resolution=10.0)
 weighter = ResolutionWeighter(file_manager)
 
 rtc_products = file_manager.find_rtc_products(polarization="VV")
-composite, (qa_num, qa_cqm) = weighter.compose_rtc_lrw(rtc_products, cell, write_qa=True)
+composite = weighter.compose_rtc_lrw(rtc_products, cell, write_qa=True)
+cqm_path = file_manager.get_product_path(composite, Layer.QA_CQM)
 
 coh_products = file_manager.find_coherence_products(polarization="VV", baseline_days=12)
 weighter.compose_coherence_lrw(coh_products, rtc_products, cell)

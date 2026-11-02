@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from collections import defaultdict
+from dataclasses import asdict, dataclass, replace
 import logging
 from operator import attrgetter, itemgetter
 from pathlib import Path
@@ -15,22 +16,18 @@ import pandas as pd
 
 from s1bursts.burst import Burst
 from s1bursts.product import (
-    RTCLRWQA,
     BaseProduct,
     CoherenceProduct,
     CohLRWComposite,
-    CohLRWQA,
     CohPassComposite,
-    CohPassQA,
     CRSInput,
     GTCPassComposite,
-    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
-    QaMetric,
+    Layer,
+    MGRSTileProduct,
     RTCLRWComposite,
     RTCPassComposite,
-    RTCPassQA,
     RTCProduct,
     _check_pass_direction,
 )
@@ -122,6 +119,19 @@ _BACKSCATTER_SPEC = [_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE, _UTM]
 _COREGISTERED_SPEC = [_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE_P, _DATE_S, _UTM]
 _MGRS_BASE_SPEC = [_MGRS, _POL, _SDATE, _EDATE]
 
+# A composite's QA layer adds its token after the type prefix; the measurement adds none.
+_LRW_LAYER_RE = r"(?:_(?P<layer>QA-NUM|QA-CQM))?"
+_UNWEIGHTED_LAYER_RE = r"(?:_(?P<layer>QA-NUM))?"
+_MEASUREMENT_ONLY = frozenset({Layer.MEASUREMENT})
+
+
+def _layers_from_token(token: str | None) -> frozenset[Layer]:
+    """Return the layer that a composite file name's QA token, or its absence, stands for."""
+    return frozenset({Layer(token)}) if token else _MEASUREMENT_ONLY
+
+
+_LAYER_CAPTURE: tuple[str, str, Callable[[str], Any]] = ("layer", "layers", _layers_from_token)
+
 # Maps each metadata class to its parse arguments: (prefix_re, spec, prefix_captures).
 _PARSERS: dict[
     type[_Parseable],
@@ -132,59 +142,29 @@ _PARSERS: dict[
     GTCProduct: ("S1_GTC", _BACKSCATTER_SPEC, None),
     CoherenceProduct: (r"S1_COH\d{2}", _COREGISTERED_SPEC, None),
     InterferogramProduct: (r"S1_IFG\d{2}_CMPLX", _COREGISTERED_SPEC, None),
-    RTCLRWComposite: ("S1_RTC_LRW", _MGRS_BASE_SPEC, None),
+    RTCLRWComposite: (rf"S1_RTC_LRW{_LRW_LAYER_RE}", _MGRS_BASE_SPEC, [_LAYER_CAPTURE]),
     CohLRWComposite: (
-        r"S1_COH(?P<baseline_days>\d{2})_LRW",
+        rf"S1_COH(?P<baseline_days>\d{{2}})_LRW{_LRW_LAYER_RE}",
         _MGRS_BASE_SPEC,
-        [("baseline_days", "baseline_days", int)],
+        [("baseline_days", "baseline_days", int), _LAYER_CAPTURE],
     ),
     RTCPassComposite: (
-        r"S1_RTC_COMP_(?P<orbit_letter>[AD])",
+        rf"S1_RTC_COMP_(?P<orbit_letter>[AD]){_UNWEIGHTED_LAYER_RE}",
         _MGRS_BASE_SPEC,
-        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
+        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__), _LAYER_CAPTURE],
     ),
     GTCPassComposite: (
-        r"S1_GTC_COMP_(?P<orbit_letter>[AD])",
+        rf"S1_GTC_COMP_(?P<orbit_letter>[AD]){_UNWEIGHTED_LAYER_RE}",
         _MGRS_BASE_SPEC,
-        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
+        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__), _LAYER_CAPTURE],
     ),
     CohPassComposite: (
-        r"S1_COH(?P<baseline_days>\d{2})_COMP_(?P<orbit_letter>[AD])",
+        rf"S1_COH(?P<baseline_days>\d{{2}})_COMP_(?P<orbit_letter>[AD]){_UNWEIGHTED_LAYER_RE}",
         _MGRS_BASE_SPEC,
         [
             ("baseline_days", "baseline_days", int),
             ("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__),
-        ],
-    ),
-    RTCLRWQA: (
-        r"S1_RTC_LRW_QA-(?P<qa_metric>NUM|CQM)",
-        _MGRS_BASE_SPEC,
-        [("qa_metric", "qa_metric", QaMetric)],
-    ),
-    CohLRWQA: (
-        r"S1_COH(?P<baseline_days>\d{2})_LRW_QA-(?P<qa_metric>NUM|CQM)",
-        _MGRS_BASE_SPEC,
-        [
-            ("baseline_days", "baseline_days", int),
-            ("qa_metric", "qa_metric", QaMetric),
-        ],
-    ),
-    RTCPassQA: (
-        r"S1_RTC_COMP_(?P<orbit_letter>[AD])_QA-NUM",
-        _MGRS_BASE_SPEC,
-        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
-    ),
-    GTCPassQA: (
-        r"S1_GTC_COMP_(?P<orbit_letter>[AD])_QA-NUM",
-        _MGRS_BASE_SPEC,
-        [("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__)],
-    ),
-    CohPassQA: (
-        r"S1_COH(?P<baseline_days>\d{2})_COMP_(?P<orbit_letter>[AD])_QA-NUM",
-        _MGRS_BASE_SPEC,
-        [
-            ("baseline_days", "baseline_days", int),
-            ("orbit_letter", "pass_direction", _PASS_DIRECTION.__getitem__),
+            _LAYER_CAPTURE,
         ],
     ),
 }
@@ -195,6 +175,12 @@ def _checked_pass_direction(value: PassDirection | None) -> PassDirection | None
     if value is not None:
         _check_pass_direction(value)
     return value
+
+
+def _pass_letter(value: PassDirection | None) -> str:
+    """Return the composite file name letter of a pass direction, or a wildcard for any."""
+    checked = _checked_pass_direction(value)
+    return checked[0] if checked is not None else "?"
 
 
 # A per-burst product named before the pass direction joined the relative orbit.
@@ -665,22 +651,57 @@ class FileManager:
         )
         return self._find_products(self.prod_dir, pattern, InterferogramProduct)
 
-    # ============ LRW Product Operations ============
+    # ============ Composite Operations ============
 
-    def _get_rtc_lrw_path(self, product: RTCLRWComposite) -> Path | UPath:
-        """Generate the file path for an RTC LRW intensity composite product."""
-        return self.comp_dir / self._build_pattern(
-            "S1_RTC_LRW",
-            _MGRS_BASE_SPEC,
-            **asdict(product),
-        )
+    @staticmethod
+    def _composite_prefix(product: MGRSTileProduct) -> str:
+        """Return the file name prefix of a composite's measurement."""
+        match product:
+            case RTCLRWComposite():
+                return "S1_RTC_LRW"
+            case CohLRWComposite():
+                return f"S1_COH{product.baseline_days:02d}_LRW"
+            case RTCPassComposite():
+                return f"S1_RTC_COMP_{product.pass_direction[0]}"
+            case GTCPassComposite():
+                return f"S1_GTC_COMP_{product.pass_direction[0]}"
+            case CohPassComposite():
+                return f"S1_COH{product.baseline_days:02d}_COMP_{product.pass_direction[0]}"
+            case _:
+                msg = f"Unknown product type '{type(product)}'."
+                raise ValueError(msg)
+
+    def _get_composite_path(self, product: MGRSTileProduct, layer: Layer) -> Path | UPath:
+        """Generate the file path of one layer of a composite."""
+        prefix = self._composite_prefix(product)
+        if layer not in product.supported_layers:
+            msg = f"{type(product).__name__} has no layer {layer.name}."
+            raise ValueError(msg)
+        if layer is not Layer.MEASUREMENT:
+            prefix += f"_{layer.value}"
+        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
+
+    def _find_composites[C: MGRSTileProduct](
+        self,
+        prefix: str,
+        cls: type[C],
+        **values: Any,
+    ) -> list[C]:
+        """Find the files of every layer of a composite type, one product per identity."""
+        # The trailing wildcard takes the QA token, so one listing finds every layer.
+        pattern = self._build_pattern(f"{prefix}*", _MGRS_BASE_SPEC, **values)
+        layers: defaultdict[C, set[Layer]] = defaultdict(set)
+        for found in self._find_products(self.comp_dir, pattern, cls):
+            layers[replace(found, layers=_MEASUREMENT_ONLY)] |= found.layers
+        products = [replace(product, layers=frozenset(held)) for product, held in layers.items()]
+        return sorted(products, key=lambda product: self.get_product_path(product).name)
 
     def find_rtc_lrw_products(
         self,
         mgrs_code: str | None = None,
         polarization: str | None = None,
     ) -> list[RTCLRWComposite]:
-        """Find RTC LRW intensity composite products matching criteria.
+        """Find RTC LRW intensity composites matching criteria.
 
         Parameters
         ----------
@@ -692,20 +713,11 @@ class FileManager:
         Returns
         -------
         list[RTCLRWComposite]
-            List of matching RTC LRW products.
+            One composite per identity, holding the layers found on disk.
         """
-        pattern = self._build_pattern(
-            "S1_RTC_LRW",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
+        return self._find_composites(
+            "S1_RTC_LRW", RTCLRWComposite, mgrs_code=mgrs_code, polarization=polarization
         )
-        return self._find_products(self.comp_dir, pattern, RTCLRWComposite)
-
-    def _get_coh_lrw_path(self, product: CohLRWComposite) -> Path | UPath:
-        """Generate the file path for a coherence LRW composite product."""
-        prefix = f"S1_COH{product.baseline_days:02d}_LRW"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
     def find_coh_lrw_products(
         self,
@@ -713,7 +725,7 @@ class FileManager:
         polarization: str | None = None,
         baseline_days: int | None = None,
     ) -> list[CohLRWComposite]:
-        """Find coherence LRW composite products matching criteria.
+        """Find coherence LRW composites matching criteria.
 
         Parameters
         ----------
@@ -727,31 +739,20 @@ class FileManager:
         Returns
         -------
         list[CohLRWComposite]
-            List of matching coherence LRW products.
+            One composite per identity, holding the layers found on disk.
         """
-        bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_COH{bd}_LRW",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
+        bd = f"{baseline_days:02d}" if baseline_days is not None else "??"
+        return self._find_composites(
+            f"S1_COH{bd}_LRW", CohLRWComposite, mgrs_code=mgrs_code, polarization=polarization
         )
-        return self._find_products(self.comp_dir, pattern, CohLRWComposite)
-
-    # ============ Pass-Composite Product Operations ============
-
-    def _get_rtc_pass_composite_path(self, product: RTCPassComposite) -> Path | UPath:
-        """Generate the file path for an RTC pass-composite product."""
-        prefix = f"S1_RTC_COMP_{product.pass_direction[0]}"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
 
     def find_rtc_pass_composites(
         self,
         mgrs_code: str | None = None,
         polarization: str | None = None,
-        pass_direction: str | None = None,
+        pass_direction: PassDirection | None = None,
     ) -> list[RTCPassComposite]:
-        """Find RTC pass-composite products matching criteria.
+        """Find RTC pass composites matching criteria.
 
         Parameters
         ----------
@@ -765,29 +766,25 @@ class FileManager:
         Returns
         -------
         list[RTCPassComposite]
-            List of matching RTC pass-composite products.
-        """
-        od = pass_direction[0] if pass_direction is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_RTC_COMP_{od}",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
-        )
-        return self._find_products(self.comp_dir, pattern, RTCPassComposite)
+            One composite per identity, holding the layers found on disk.
 
-    def _get_gtc_pass_composite_path(self, product: GTCPassComposite) -> Path | UPath:
-        """Generate the file path for a GTC pass-composite product."""
-        prefix = f"S1_GTC_COMP_{product.pass_direction[0]}"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
+        Raises
+        ------
+        ValueError
+            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
+        """
+        od = _pass_letter(pass_direction)
+        return self._find_composites(
+            f"S1_RTC_COMP_{od}", RTCPassComposite, mgrs_code=mgrs_code, polarization=polarization
+        )
 
     def find_gtc_pass_composites(
         self,
         mgrs_code: str | None = None,
         polarization: str | None = None,
-        pass_direction: str | None = None,
+        pass_direction: PassDirection | None = None,
     ) -> list[GTCPassComposite]:
-        """Find GTC pass-composite products matching criteria.
+        """Find GTC pass composites matching criteria.
 
         Parameters
         ----------
@@ -801,30 +798,26 @@ class FileManager:
         Returns
         -------
         list[GTCPassComposite]
-            List of matching GTC pass-composite products.
-        """
-        od = pass_direction[0] if pass_direction is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_GTC_COMP_{od}",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
-        )
-        return self._find_products(self.comp_dir, pattern, GTCPassComposite)
+            One composite per identity, holding the layers found on disk.
 
-    def _get_coh_pass_composite_path(self, product: CohPassComposite) -> Path | UPath:
-        """Generate the file path for a coherence pass-composite product."""
-        prefix = f"S1_COH{product.baseline_days:02d}_COMP_{product.pass_direction[0]}"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
+        Raises
+        ------
+        ValueError
+            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
+        """
+        od = _pass_letter(pass_direction)
+        return self._find_composites(
+            f"S1_GTC_COMP_{od}", GTCPassComposite, mgrs_code=mgrs_code, polarization=polarization
+        )
 
     def find_coh_pass_composites(
         self,
         mgrs_code: str | None = None,
         polarization: str | None = None,
-        pass_direction: str | None = None,
+        pass_direction: PassDirection | None = None,
         baseline_days: int | None = None,
     ) -> list[CohPassComposite]:
-        """Find coherence pass-composite products matching criteria.
+        """Find coherence pass composites matching criteria.
 
         Parameters
         ----------
@@ -840,273 +833,90 @@ class FileManager:
         Returns
         -------
         list[CohPassComposite]
-            List of matching coherence pass-composite products.
-        """
-        bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
-        od = pass_direction[0] if pass_direction is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_COH{bd}_COMP_{od}",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
-        )
-        return self._find_products(self.comp_dir, pattern, CohPassComposite)
-
-    # ============ QA Auxiliary Product Operations ============
-
-    def _get_rtc_lrw_qa_path(self, product: RTCLRWQA) -> Path | UPath:
-        """Generate the file path for an RTC LRW QA auxiliary product."""
-        prefix = f"S1_RTC_LRW_QA-{product.qa_metric.value}"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
-
-    def _get_coh_lrw_qa_path(self, product: CohLRWQA) -> Path | UPath:
-        """Generate the file path for a coherence LRW QA auxiliary product."""
-        prefix = f"S1_COH{product.baseline_days:02d}_LRW_QA-{product.qa_metric.value}"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
-
-    def _get_rtc_pass_qa_path(self, product: RTCPassQA) -> Path | UPath:
-        """Generate the file path for an RTC pass-composite QA auxiliary product."""
-        prefix = f"S1_RTC_COMP_{product.pass_direction[0]}_QA-NUM"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
-
-    def _get_gtc_pass_qa_path(self, product: GTCPassQA) -> Path | UPath:
-        """Generate the file path for a GTC pass-composite QA auxiliary product."""
-        prefix = f"S1_GTC_COMP_{product.pass_direction[0]}_QA-NUM"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
-
-    def _get_coh_pass_qa_path(self, product: CohPassQA) -> Path | UPath:
-        """Generate the file path for a coherence pass-composite QA auxiliary product."""
-        prefix = f"S1_COH{product.baseline_days:02d}_COMP_{product.pass_direction[0]}_QA-NUM"
-        return self.comp_dir / self._build_pattern(prefix, _MGRS_BASE_SPEC, **asdict(product))
-
-    def find_rtc_lrw_qa(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-        qa_metric: QaMetric | None = None,
-    ) -> list[RTCLRWQA]:
-        """Find RTC LRW QA auxiliary products matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-        qa_metric
-            Filter by quality metric (number of observations or CQM).
-
-        Returns
-        -------
-        list[RTCLRWQA]
-            List of matching RTC LRW QA products.
-        """
-        metric = qa_metric.value if qa_metric is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_RTC_LRW_QA-{metric}",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
-        )
-        return self._find_products(self.comp_dir, pattern, RTCLRWQA)
-
-    def find_coh_lrw_qa(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-        baseline_days: int | None = None,
-        qa_metric: QaMetric | None = None,
-    ) -> list[CohLRWQA]:
-        """Find coherence LRW QA auxiliary products matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-        baseline_days
-            Filter by temporal baseline in days.
-        qa_metric
-            Filter by quality metric (number of observations or CQM).
-
-        Returns
-        -------
-        list[CohLRWQA]
-            List of matching coherence LRW QA products.
-        """
-        bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
-        metric = qa_metric.value if qa_metric is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_COH{bd}_LRW_QA-{metric}",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
-        )
-        return self._find_products(self.comp_dir, pattern, CohLRWQA)
-
-    def find_rtc_pass_qa(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-        pass_direction: str | None = None,
-    ) -> list[RTCPassQA]:
-        """Find RTC pass-composite QA (contributing-observations) products matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-
-        Returns
-        -------
-        list[RTCPassQA]
-            List of matching RTC pass-composite QA products.
-        """
-        od = pass_direction[0] if pass_direction is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_RTC_COMP_{od}_QA-NUM",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
-        )
-        return self._find_products(self.comp_dir, pattern, RTCPassQA)
-
-    def find_gtc_pass_qa(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-        pass_direction: str | None = None,
-    ) -> list[GTCPassQA]:
-        """Find GTC pass-composite QA (contributing-observations) products matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-
-        Returns
-        -------
-        list[GTCPassQA]
-            List of matching GTC pass-composite QA products.
-        """
-        od = pass_direction[0] if pass_direction is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_GTC_COMP_{od}_QA-NUM",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
-        )
-        return self._find_products(self.comp_dir, pattern, GTCPassQA)
-
-    def find_coh_pass_qa(
-        self,
-        mgrs_code: str | None = None,
-        polarization: str | None = None,
-        pass_direction: str | None = None,
-        baseline_days: int | None = None,
-    ) -> list[CohPassQA]:
-        """Find coherence pass-composite QA (contributing-observations) products matching criteria.
-
-        Parameters
-        ----------
-        mgrs_code
-            Filter by MGRS grid cell identifier.
-        polarization
-            Filter by polarization.
-        pass_direction
-            Filter by pass direction (``"Ascending"`` or ``"Descending"``).
-        baseline_days
-            Filter by temporal baseline in days.
-
-        Returns
-        -------
-        list[CohPassQA]
-            List of matching coherence pass-composite QA products.
-        """
-        bd = f"{baseline_days:02d}" if baseline_days is not None else "*"
-        od = pass_direction[0] if pass_direction is not None else "*"
-        pattern = self._build_pattern(
-            f"S1_COH{bd}_COMP_{od}_QA-NUM",
-            _MGRS_BASE_SPEC,
-            mgrs_code=mgrs_code,
-            polarization=polarization,
-        )
-        return self._find_products(self.comp_dir, pattern, CohPassQA)
-
-    # ============ Generic Product Path Getter ============
-
-    def get_product_path(self, product: BaseProduct) -> Path | UPath:  # noqa: C901, PLR0912
-        """Get path for any product type.
-
-        Parameters
-        ----------
-        product
-            Product to get path for.
-
-        Returns
-        -------
-        Path
-            Path to the product file.
+            One composite per identity, holding the layers found on disk.
 
         Raises
         ------
         ValueError
-            If product type is unknown.
+            If ``pass_direction`` is neither ``"Ascending"`` nor ``"Descending"``.
         """
+        bd = f"{baseline_days:02d}" if baseline_days is not None else "??"
+        od = _pass_letter(pass_direction)
+        return self._find_composites(
+            f"S1_COH{bd}_COMP_{od}",
+            CohPassComposite,
+            mgrs_code=mgrs_code,
+            polarization=polarization,
+        )
+
+    # ============ Generic Product Path Getter ============
+
+    def get_product_path(
+        self,
+        product: BaseProduct,
+        layer: Layer | str = Layer.MEASUREMENT,
+    ) -> Path | UPath:
+        """Get the path of a product's file, or of one layer of a composite.
+
+        Parameters
+        ----------
+        product
+            Product to get the path for.
+        layer
+            The layer whose file to locate, as a ``Layer`` or its value such
+            as ``"QA-NUM"``; the measurement by default. The
+            path of a composite's layer does not depend on whether
+            ``product.layers`` holds it. A per-burst product has only its
+            measurement.
+
+        Returns
+        -------
+        Path
+            Path to the file.
+
+        Raises
+        ------
+        ValueError
+            If the product type is unknown, or it has no layer ``layer``.
+        """
+        layer = Layer(layer)
+        if isinstance(product, MGRSTileProduct):
+            return self._get_composite_path(product, layer)
+        if layer is not Layer.MEASUREMENT:
+            msg = f"{type(product).__name__} has no layer {layer.name}."
+            raise ValueError(msg)
         match product:
             case RTCProduct():
-                path = self._get_rtc_path(product)
+                return self._get_rtc_path(product)
             case GTCProduct():
-                path = self._get_gtc_path(product)
+                return self._get_gtc_path(product)
             case CoherenceProduct():
-                path = self._get_coherence_path(product)
+                return self._get_coherence_path(product)
             case InterferogramProduct():
-                path = self._get_interferogram_path(product)
-            case RTCLRWComposite():
-                path = self._get_rtc_lrw_path(product)
-            case CohLRWComposite():
-                path = self._get_coh_lrw_path(product)
-            case RTCPassComposite():
-                path = self._get_rtc_pass_composite_path(product)
-            case GTCPassComposite():
-                path = self._get_gtc_pass_composite_path(product)
-            case CohPassComposite():
-                path = self._get_coh_pass_composite_path(product)
-            case RTCLRWQA():
-                path = self._get_rtc_lrw_qa_path(product)
-            case CohLRWQA():
-                path = self._get_coh_lrw_qa_path(product)
-            case RTCPassQA():
-                path = self._get_rtc_pass_qa_path(product)
-            case GTCPassQA():
-                path = self._get_gtc_pass_qa_path(product)
-            case CohPassQA():
-                path = self._get_coh_pass_qa_path(product)
+                return self._get_interferogram_path(product)
             case _:
                 msg = f"Unknown product type '{type(product)}'."
                 raise ValueError(msg)
-        return path
 
-    def product_exists(self, product: BaseProduct) -> bool:
-        """Check if a product file exists (works for both local and S3).
+    def product_exists(self, product: BaseProduct, layer: Layer | str = Layer.MEASUREMENT) -> bool:
+        """Check if a product's file exists (works for both local and S3).
 
         Parameters
         ----------
         product
             Product to check.
+        layer
+            The layer whose file to check, as a ``Layer`` or its value; the
+            measurement by default.
 
         Returns
         -------
         bool
-            True if the product file exists.
+            True if the file exists.
+
+        Raises
+        ------
+        ValueError
+            If the product type is unknown, or it has no layer ``layer``.
         """
-        return self.get_product_path(product).exists()
+        return self.get_product_path(product, Layer(layer)).exists()

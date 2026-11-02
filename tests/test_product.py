@@ -13,20 +13,16 @@ import rasterio.crs
 
 from s1bursts.burst import Burst, BurstPair
 from s1bursts.product import (
-    RTCLRWQA,
     CoherenceProduct,
     CohLRWComposite,
     CohPassComposite,
-    CohPassQA,
     GTCPassComposite,
-    GTCPassQA,
     GTCProduct,
     InterferogramProduct,
+    Layer,
     MGRSTileProduct,
-    QaMetric,
     RTCLRWComposite,
     RTCPassComposite,
-    RTCPassQA,
     RTCProduct,
 )
 
@@ -337,19 +333,41 @@ class TestMGRSTileProducts:
             ).product_type
             == "COH_COMP_D"
         )
-        assert RTCLRWQA(**self.KWARGS, qa_metric=QaMetric.NUM).product_type == "RTC_LRW_QA-NUM"
-        assert (
-            RTCPassQA(**self.KWARGS, pass_direction="Ascending").product_type
-            == "RTC_COMP_A_QA-NUM"
-        )
-        assert (
-            CohPassQA(
+
+    def test_holds_the_measurement_by_default(self) -> None:
+        assert RTCLRWComposite(**self.KWARGS).layers == {Layer.MEASUREMENT}
+
+    def test_the_layers_are_part_of_the_identity(self) -> None:
+        measurement = RTCLRWComposite(**self.KWARGS)
+        with_qa = RTCLRWComposite(**self.KWARGS, layers=frozenset(Layer))
+
+        assert measurement != with_qa
+        assert "layers={'MEASUREMENT', 'QA-CQM', 'QA-NUM'}" in repr(with_qa)
+
+    def test_a_pass_composite_has_no_quality_map(self) -> None:
+        with pytest.raises(ValueError, match="RTCPassComposite has no layer QA_CQM"):
+            RTCPassComposite(
                 **self.KWARGS,
                 pass_direction="Ascending",
-                baseline_days=12,
-            ).product_type
-            == "COH_COMP_A_QA-NUM"
-        )
+                layers=frozenset({Layer.MEASUREMENT, Layer.QA_CQM}),
+            )
+        assert RTCPassComposite.supported_layers == {Layer.MEASUREMENT, Layer.QA_NUM}
+        assert CohLRWComposite.supported_layers == set(Layer)
+
+    @pytest.mark.parametrize("cls", [RTCPassComposite, GTCPassComposite])
+    def test_a_pass_composite_refuses_an_unknown_pass_direction(
+        self, cls: type[RTCPassComposite | GTCPassComposite]
+    ) -> None:
+        with pytest.raises(ValueError, match="must be 'Ascending' or 'Descending'"):
+            # pyrefly: ignore [bad-argument-type]
+            cls(**self.KWARGS, pass_direction="ascending")
+        with pytest.raises(ValueError, match="must be 'Ascending' or 'Descending'"):
+            # pyrefly: ignore [bad-argument-type]
+            CohPassComposite(**self.KWARGS, pass_direction="A", baseline_days=12)
+
+    def test_layers_must_not_be_empty(self) -> None:
+        with pytest.raises(ValueError, match="must not be empty"):
+            RTCLRWComposite(**self.KWARGS, layers=frozenset())
 
     def test_is_frozen(self) -> None:
         product = RTCLRWComposite(**self.KWARGS)
@@ -375,11 +393,3 @@ def test_gtc_pass_composite_product_type() -> None:
     )
     assert product.product_type == "GTC_COMP_D"
     assert product.crs.to_epsg() == 32632
-    qa = GTCPassQA(
-        mgrs_code="32TMS",
-        start_date=Timestamp("2019-01-01"),
-        end_date=Timestamp("2019-01-31"),
-        polarization="VV",
-        pass_direction="Ascending",
-    )
-    assert qa.product_type == "GTC_COMP_A_QA-NUM"

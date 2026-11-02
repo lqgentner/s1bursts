@@ -300,6 +300,47 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
           letter = directions[(int(match[3]), match[4])][0]
           path.rename(path.with_name(f"{match[1]}{letter}{match[2]}"))
   ```
+- **Breaking:** a composite is one product holding its layers: the
+  measurement and its QA layers. Every composite has a keyword-only `layers`
+  field, a frozenset of the new `s1bursts.product.Layer` (`MEASUREMENT`,
+  `QA_NUM`, `QA_CQM`), defaulting to the measurement alone; pass composites
+  have no `QA_CQM`. The QA classes `RTCLRWQA`, `CohLRWQA`, `RTCPassQA`,
+  `GTCPassQA` and `CohPassQA` and the `QaMetric` enum are removed.
+  - `compose_rtc_lrw()` and `compose_coherence_lrw()` always return the
+    composite, and `compose_*_by_pass()` a dict of composites by pass
+    direction; with `write_qa=True` the composite holds the QA layers too.
+    Unless every requested layer exists already, all of them are written, so
+    a composite and its QA layers always come from one run. Before, an
+    existing measurement was kept when only its QA layers were missing.
+  - `FileManager.get_product_path()` and `product_exists()` take a `layer`,
+    the measurement by default, to locate a QA layer's file. A layer's value,
+    such as `"QA-NUM"`, works too.
+  - The `find_*_qa()` methods are removed. The composite finders return one
+    composite per identity, holding the layers whose files they found. That
+    includes a composite whose measurement file is missing and only QA layers
+    are on disk; keep the complete ones with
+    `[c for c in found if Layer.MEASUREMENT in c.layers]`.
+  - The `pass_direction` of a pass composite and of the pass-composite
+    finders must be `"Ascending"` or `"Descending"`; anything else raises
+    `ValueError`, where a finder used to return `[]`.
+  - `product_tags.qa_metadata()` takes the composite and the layer instead of
+    a QA product.
+
+  File names, tags and the keys of a per-layer `rasterio_profile`, such as
+  `"RTC_LRW_QA-NUM"`, are unchanged.
+
+  ```python
+  # before
+  comp, (qa_num, qa_cqm) = weighter.compose_rtc_lrw(rtc, cell, write_qa=True)
+  fm.get_product_path(qa_cqm)
+  comp, qa_num = weighter.compose_rtc_by_pass(rtc, cell, write_qa=True)["Ascending"]
+  fm.find_rtc_lrw_qa(mgrs_code="32TMS03", qa_metric=QaMetric.CQM)
+  # after
+  comp = weighter.compose_rtc_lrw(rtc, cell, write_qa=True)
+  fm.get_product_path(comp, Layer.QA_CQM)
+  comp = weighter.compose_rtc_by_pass(rtc, cell, write_qa=True)["Ascending"]
+  [c for c in fm.find_rtc_lrw_products(mgrs_code="32TMS03") if Layer.QA_CQM in c.layers]
+  ```
 - **Breaking:** every `ResolutionWeighter.compose_*` method now defaults to
   `aggregation="mean"` instead of `"median"`. Pass `aggregation="median"` to
   keep the previous composites.
