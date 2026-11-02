@@ -1,0 +1,236 @@
+---
+title: "From an area to composites"
+guide-section: "How-to Guides"
+---
+
+# From an area to composites
+
+This page takes an area of interest (AOI) all the way to composites on the
+MGRS grid squares that cover it: search, download, process, and compose each
+square. s1bursts provides each of these steps; the loop that joins them is
+yours to write, and there are two ways to order it.
+
+| Order | Searches | Processing | UTM zones |
+|---|---|---|---|
+| [AOI first](#aoi-first) | One for the whole AOI | One batch, with SNAP processes in parallel | All squares must share one |
+| [One zone at a time](#one-zone-at-a-time) | One per UTM zone | One batch per zone | Any number |
+| [Square first](#square-first) | One per square | One small batch per square | Any number |
+
+Start with the AOI first. When the AOI spans several UTM zones, run it once
+per zone. Loop over the squares first when even one zone is too large for one
+search.
+
+## Set up
+
+Both orders start from the same objects. `MGRSGrid` lists the 10 km grid
+squares that the AOI touches, each as an `MGRSGeoBox`. Its `resolution` is the
+pixel size of the composites, so it must equal the `grid_spacing` of the
+products:
+
+```{.python}
+import shapely
+from shapely.geometry import box
+from s1bursts import (
+    BurstCatalog, BurstProcessor, FileManager, MGRSGrid, ResolutionWeighter,
+    RTCConfig, SearchQuery, TimeRange,
+)
+
+fm = FileManager("data")
+catalog = BurstCatalog(fm)
+processor = BurstProcessor(fm)
+weighter = ResolutionWeighter(fm)
+
+aoi = box(7.03, 46.06, 7.12, 46.14)
+window = TimeRange("2025-08-01", "2025-08-31")
+config = RTCConfig(grid_spacing=20)
+squares = list(MGRSGrid(aoi, resolution=config.grid_spacing))
+search_area = shapely.union_all([box(*square.geographic_extent.boundingbox) for square in squares])
+```
+
+`MGRSGrid` includes every square that the AOI touches, whole, and each
+composite covers its whole square. So search the squares rather than the AOI:
+a burst that reaches only the part of an edge square outside the AOI would
+otherwise not be found, and that square would be composed from fewer inputs
+without a warning. A later run would then skip the incomplete composite as
+finished.
+
+`search_area` joins the bounding boxes of the squares in longitude and
+latitude. The catalog rejects a square's exact outline, which has hundreds of
+vertices, with HTTP 414, and a bounding box is slightly larger than its square,
+so no burst is missed. `intersecting()` later keeps exactly the bursts that
+reach each square.
+
+## Why the products take the square's zone
+
+A composite is written on its grid square's pixel grid, in the square's UTM
+zone, `square.crs`. It accepts only products on that same grid, so the
+products must be processed with `crs=square.crs`. A product in another zone
+raises an `InconsistentInputsError` when it is composed.
+
+That is why these loops pass a zone and not `crs="auto"`. `"auto"` projects
+each burst in the zone that holds its centre. A burst spans about 85 km across
+the track, so near a zone boundary its centre can lie in the neighbouring
+zone, and its product would then be rejected by the square it was processed
+for.
+
+Near a zone boundary, `MGRSGrid` returns squares from both zones over the same
+ground, since each zone is gridded on its own. `box(5.9, 46.0, 6.1, 46.1)`, for
+example, gives four squares in zone 31, among them 31TGL29, and four in zone
+32, among them 32TKR69, which covers half of 31TGL29. Every loop on this page
+composes all of them, so that ground gets one composite in each zone. Keep the
+squares of one zone if you need only one.
+
+## AOI first
+
+Search the whole AOI once, download and process every burst in one batch, and
+then compose each square from the products that reach it. One batch lets SNAP
+process several bursts in parallel; see
+[Run several jobs at once](processing.qmd#run-several-jobs-at-once).
+
+One batch has one `crs`, so this order needs all squares in one UTM zone.
+Check that, and use the zone of the squares as `crs`:
+
+```{.python}
+zones = {square.crs for square in squares}
+if len(zones) > 1:
+    raise ValueError(f"The AOI spans {len(zones)} UTM zones; run the loop once per zone.")
+crs = squares[0].crs
+
+bursts = catalog.search(SearchQuery(time_range=window, intersects=search_area, polarization="VV"))
+catalog.download(bursts).raise_on_failure()
+rtc = processor.create_backscatter(bursts, crs=crs, config=config).raise_on_failure().products
+```
+
+Each square needs only the products whose bursts reach it.
+`intersecting()` selects those bursts from the search result, and a product
+belongs to a burst footprint by its `burst_id` and `sub_swath`:
+
+```{.python}
+for square in squares:
+    footprints = {(b.burst_id, b.sub_swath) for b in bursts.intersecting(square)}
+    square_rtc = [p for p in rtc if (p.burst_id, p.sub_swath) in footprints]
+    weighter.compose_rtc_lrw(square_rtc, square, write_qa=True, time_range=window)
+```
+
+Passing every product to every square would give the same composites, since a
+product that misses the square contributes nothing. Selecting them first saves
+reading each product once per square.
+
+## One zone at a time
+
+An AOI across a zone boundary needs one `crs` per zone. Group the squares by
+their zone and run the AOI-first loop once for each group. Each zone still gets
+one search and one batch, so SNAP keeps processing in parallel:
+
+```{.python}
+from collections import defaultdict
+
+zones = defaultdict(list)
+for square in squares:
+    zones[square.crs].append(square)
+
+for crs, zone_squares in zones.items():
+    zone_area = shapely.union_all([box(*s.geographic_extent.boundingbox) for s in zone_squares])
+    bursts = catalog.search(SearchQuery(time_range=window, intersects=zone_area, polarization="VV"))
+    catalog.download(bursts).raise_on_failure()
+    rtc = processor.create_backscatter(bursts, crs=crs, config=config).raise_on_failure().products
+    for square in zone_squares:
+        footprints = {(b.burst_id, b.sub_swath) for b in bursts.intersecting(square)}
+        square_rtc = [p for p in rtc if (p.burst_id, p.sub_swath) in footprints]
+        weighter.compose_rtc_lrw(square_rtc, square, write_qa=True, time_range=window)
+```
+
+A burst near the boundary is found by both searches. It is downloaded once,
+and processed once per zone.
+
+## Square first
+
+Loop over the squares, and run the whole chain for each one: search with the
+square's bounding box, keep the bursts that reach the square, download,
+process in the square's zone, and compose:
+
+```{.python}
+for square in squares:
+    bursts = catalog.search(SearchQuery(
+        time_range=window, intersects=box(*square.geographic_extent.boundingbox),
+        polarization="VV",
+    )).intersecting(square)
+    catalog.download(bursts).raise_on_failure()
+    summary = processor.create_backscatter(bursts, crs=square.crs, config=config)
+    rtc = summary.raise_on_failure().products
+    weighter.compose_rtc_lrw(rtc, square, write_qa=True, time_range=window)
+```
+
+Each search stays small, and each square can lie in another zone. Neighbouring
+squares share most of their bursts, but each burst is downloaded and processed
+only once per zone: the later squares find its files and skip them. The price
+is parallelism, because each batch hands SNAP only the few bursts not processed
+yet.
+
+## Add coherence
+
+Coherence follows the same pattern, with pairs instead of bursts. A pair that
+starts at the end of the window ends after it, so search beyond the window by
+the baseline, and keep the bursts and the pairs that start within it. The RTC
+products of the same dates supply the weights:
+
+```{.python}
+from datetime import timedelta
+
+from s1bursts import CoherenceConfig
+
+found = catalog.search(SearchQuery(
+    time_range=TimeRange(window.start, window.end + timedelta(days=12)),
+    intersects=search_area, polarization="VV",
+))
+bursts = found.within(window)
+pairs = found.find_pairs(baseline=12).starting_within(window)
+catalog.download([*bursts, *pairs.unpair()]).raise_on_failure()
+
+rtc = processor.create_backscatter(bursts, crs=crs, config=config).raise_on_failure().products
+coh = processor.create_coherences(
+    pairs, crs=crs, config=CoherenceConfig(grid_spacing=config.grid_spacing),
+).raise_on_failure().products
+
+for square in squares:
+    footprints = {(b.burst_id, b.sub_swath) for b in bursts.intersecting(square)}
+    square_rtc = [p for p in rtc if (p.burst_id, p.sub_swath) in footprints]
+    square_coh = [p for p in coh if (p.burst_id, p.sub_swath) in footprints]
+    weighter.compose_coherence_lrw(square_coh, square_rtc, square, time_range=window)
+```
+
+For both polarizations, run the loop once with `polarization="VV"` and once
+with `"VH"`: a composite holds one polarization.
+
+## Keep going past a failing square
+
+A square can fail for reasons of its own data. A square on the edge of the AOI
+may be reached by no burst at all, so it has no products, and an empty list is
+a wrong call that raises a `ValueError`; skip such a square. A burst footprint
+can also touch a square without a valid pixel in it, which raises an
+`EmptyCompositeError`. Errors like this one are a `CompositeError`, so a loop
+can record them and continue with the next square:
+
+```{.python}
+from s1bursts.errors import CompositeError
+
+failed = {}
+for square in squares:
+    footprints = {(b.burst_id, b.sub_swath) for b in bursts.intersecting(square)}
+    square_rtc = [p for p in rtc if (p.burst_id, p.sub_swath) in footprints]
+    if not square_rtc:
+        continue  # no burst reaches the square
+    try:
+        weighter.compose_rtc_lrw(square_rtc, square, write_qa=True, time_range=window)
+    except CompositeError as error:
+        failed[square.mgrs_code] = error
+```
+
+A wrong call raises a `ValueError` instead, and a composite on disk made with
+other settings raises a `ProductSettingsMismatchError`. Neither is a
+`CompositeError`, so both stop the loop, since every other square would meet
+them too. [Compositing](compositing.qmd#errors-in-a-loop-over-squares) lists
+the errors.
+
+Rerunning any of these loops is cheap. Downloads, products and composites that exist
+are skipped, so after a failure only the missing pieces are made.

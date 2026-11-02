@@ -162,7 +162,7 @@ Products are frozen dataclasses holding identity only; `FileManager` derives eve
 
 The band description, the band's name inside the SNAP graph and its `LAYER_NAME` band tag are one and the same name. Composites keep the polarization as their band description.
 
-### Grid cells (`freezebase.mgrs`)
+### Grid cells (`freezebase.mgrs`, re-exported from `s1bursts`)
 
 `MGRSGeoBox` extends `odc.geo.GeoBox` with an `mgrs_code`; `MGRSGeoBox.from_mgrs("32TMT64", resolution=10.0)` builds one, and `MGRSGrid(filter_geometry=aoi)` iterates over every 10 km square a WGS 84 geometry intersects. Every `compose_*` call takes its target geobox explicitly, so one `ResolutionWeighter` serves any number of cells.
 
@@ -288,9 +288,7 @@ config = SNAPConfig(
 ### Select part of a search
 
 ```python
-from freezebase.mgrs import MGRSGeoBox
-
-from s1bursts import TimeRange
+from s1bursts import MGRSGeoBox, TimeRange
 
 window = TimeRange("2022-06-01", "2022-08-31")
 cell = MGRSGeoBox.from_mgrs("32TMT64", resolution=10.0)
@@ -347,9 +345,7 @@ processor.create_interferograms(pairs, crs=crs)
 ### Composite an MGRS cell
 
 ```python
-from freezebase.mgrs import MGRSGeoBox
-
-from s1bursts import ResolutionWeighter
+from s1bursts import MGRSGeoBox, ResolutionWeighter
 from s1bursts.product import CoherenceProduct, Layer, RTCProduct
 
 cell = MGRSGeoBox.from_mgrs("32TMT64", resolution=10.0)

@@ -59,6 +59,7 @@ nav_icons:
     Processing with SNAP: workflow
     Using an external DEM: mountain
     Compositing: layers
+    From an area to composites: map
     Storing products on S3: cloud
     Contributing: wrench
 
@@ -118,9 +119,12 @@ reference:
 
     - title: Compositing
       desc: >-
-        Locally resolution weighted and per-pass 10 km MGRS grid-square composites.
+        Locally resolution weighted and per-pass composites on the 10 km
+        squares of the MGRS grid, re-exported from freezebase.
       contents:
         - resolution_weighter.ResolutionWeighter
+        - MGRSGrid
+        - MGRSGeoBox
 
     - title: Single-burst products
       desc: >-

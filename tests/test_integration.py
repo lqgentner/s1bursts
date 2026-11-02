@@ -31,6 +31,8 @@ from s1bursts import (
     FileManager,
     GTCConfig,
     InterferogramConfig,
+    MGRSGeoBox,
+    ResolutionWeighter,
     SearchQuery,
     SNAPConfig,
     TimeRange,
@@ -38,6 +40,7 @@ from s1bursts import (
 from s1bursts.config import get_settings
 from s1bursts.dem import _get_transformer
 from s1bursts.errors import ConfigurationError
+from s1bursts.product import Layer, RTCLRWComposite
 from s1bursts.snap_client import (
     EXTERNAL_DEM_FIXED_IN,
     _resolve_gpt_path,
@@ -554,6 +557,72 @@ class TestSnapProcessing:
         ):
             assert np.array_equal(np.isfinite(band), valid), f"{name} has a different extent"
             assert (band[valid] >= 0).all(), f"{name} has negative samples"
+
+
+# The MGRS cell over the Aletsch glacier below Konkordiaplatz, inside the
+# footprint of BURST_ID.
+COMPOSITE_CELL = "32TMS24"
+
+
+class TestComposite:
+    @requires_cdse_credentials
+    @requires_snap
+    def test_composes_one_cell_from_snap_products(
+        self,
+        file_manager: FileManager,
+        downloaded_pair: BurstPairCollection,
+    ) -> None:
+        """Select a cell's bursts, process them in its zone, and compose it.
+
+        The pair's two acquisitions keep it to two GPT runs, one of which the
+        RTC test above may already have made, while still giving the composite
+        more than one observation to weigh.
+        """
+        cell = MGRSGeoBox.from_mgrs(COMPOSITE_CELL)
+        crs = cell.crs
+        assert crs is not None
+        bursts = downloaded_pair.unpair().intersecting(cell)
+        assert len(bursts) == 2
+        processor = BurstProcessor(
+            file_manager,
+            SNAPConfig(max_workers=1, max_ram_gb=6),
+            show_progress=False,
+            continue_on_error=False,
+        )
+        rtc = processor.create_backscatter(bursts, crs=crs).raise_on_failure().products
+
+        weighter = ResolutionWeighter(file_manager)
+        window = TimeRange(bursts.df.date.min(), bursts.df.date.max())
+        composite = weighter.compose_rtc_lrw(rtc, cell, write_qa=True, time_range=window)
+        by_pass = weighter.compose_rtc_by_pass(rtc, cell, time_range=window)
+
+        assert composite.layers == {Layer.MEASUREMENT, Layer.QA_NUM, Layer.QA_CQM}
+        assert file_manager.find(RTCLRWComposite, mgrs_code=COMPOSITE_CELL) == [composite]
+        assert set(by_pass) == {"Ascending"}
+        layers = {}
+        for layer in composite.layers:
+            with rasterio.open(file_manager.get_product_path(composite, layer)) as src:
+                assert src.crs.to_epsg() == crs.epsg
+                assert src.transform == cell.affine
+                assert src.shape == tuple(cell.shape)
+                layers[layer] = src.read(1)
+        with rasterio.open(file_manager.get_product_path(by_pass["Ascending"])) as src:
+            ascending = src.read(1)
+
+        gamma0 = layers[Layer.MEASUREMENT]
+        num = layers[Layer.QA_NUM]
+        cqm = layers[Layer.QA_CQM]
+        valid = num > 0
+        # The cell lies inside the burst, so both dates reach nearly all of it.
+        assert (num == 2).mean() > 0.9
+        assert set(np.unique(num)) <= {0, 1, 2}
+        assert np.isfinite(gamma0[valid]).all()
+        assert (gamma0[valid] > 0).all()
+        assert np.isnan(gamma0[~valid]).all()
+        assert (cqm[valid] > 0).all()
+        # One orbit sees both dates alike, so weighting them barely moves the
+        # result from their plain mean.
+        assert np.median(np.abs(gamma0[valid] / ascending[valid] - 1)) < 0.05
 
 
 class TestVerticalDatumGrids:

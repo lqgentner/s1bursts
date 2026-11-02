@@ -39,6 +39,31 @@ jobs:
       - name: Build site
         run: uv run great-docs build
 
+      # Great Docs links every documented object to its source in this
+      # repository, so the classes re-exported from freezebase point at the
+      # copy in .venv, which is not on GitHub. Point them at freezebase's own
+      # repository, at the tag of the version the lockfile installs.
+      - name: Link re-exported classes to freezebase
+        run: |
+          uv run python - <<'EOF'
+          import re
+          from importlib.metadata import version
+          from pathlib import Path
+
+          pattern = re.compile(
+              r"https://github\.com/lqgentner/s1bursts/blob/[^/\"]+/"
+              r"\.venv/lib/python[^/]+/site-packages/freezebase/"
+          )
+          target = (
+              f"https://github.com/lqgentner/freezebase/blob/v{version('freezebase')}"
+              "/src/freezebase/"
+          )
+          for page in Path("great-docs/_site").rglob("*.html"):
+              text = page.read_text(encoding="utf-8")
+              if pattern.search(text):
+                  page.write_text(pattern.sub(target, text), encoding="utf-8")
+          EOF
+
       # Great Docs renders every favicon from one source and ignores the
       # `favicon.apple_touch` key its config template documents, so the
       # home-screen icon, which has room for the full design, is redrawn here.

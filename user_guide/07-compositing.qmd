@@ -11,13 +11,12 @@ so results from different bursts, orbits and dates line up pixel for pixel.
 
 ## Get the grid squares
 
-`MGRSGrid` from [freezebase](https://github.com/lqgentner/freezebase) lists the
-grid squares that overlap an area. Its `resolution` is the pixel size of the
+`MGRSGrid` lists the grid squares that overlap an area. Its `resolution` is the pixel size of the
 composite and must equal the `grid_spacing` the products were processed with:
 
 ```{.python}
-from freezebase.mgrs import MGRSGrid
 from shapely.geometry import box
+from s1bursts import MGRSGrid
 
 aoi = box(7.03, 46.06, 7.12, 46.14)
 squares = list(MGRSGrid(aoi, resolution=20))
@@ -32,6 +31,8 @@ names it.
 Do not process products for a composite with `crs="auto"`. That takes each
 burst's own zone, and a burst whose centre lies in the neighbouring zone would
 be projected there, not in the zone of the square.
+[From an area to composites](area-to-composites.qmd) shows the whole loop from
+an area to the composites of its squares.
 
 ## Compose backscatter
 
