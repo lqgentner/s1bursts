@@ -42,7 +42,6 @@ Each product has its own method and settings object:
 |---|---|---|---|
 | `create_backscatter()` | Bursts | `RTCConfig` or `GTCConfig` | Backscatter of each acquisition |
 | `create_coherences()` | Pairs | `CoherenceConfig` | Coherence between two acquisitions |
-| `create_interferograms()` | Pairs | `InterferogramConfig` | Complex interferogram and the intensity of both acquisitions |
 
 The settings objects share most fields. The one you are most likely to change
 is the pixel size, `grid_spacing`, which is 10 m by default; a smaller pixel
@@ -94,12 +93,9 @@ The product holds the coherence magnitude: the absolute value of the complex
 correlation between the two acquisitions, estimated over a small window of
 neighboring pixels set by `CoherenceConfig(window=...)`. A larger window gives
 smoother values at a coarser resolution. The phase of the correlation is not
-kept; the interferogram below holds the interferometric phase.
-
-`create_interferograms()` takes the same pairs and writes the complex
-interferogram, whose angle is the interferometric phase, together with the
-intensity of both acquisitions. s1bursts does not unwrap the phase, so turning
-it into displacement needs other software.
+kept, and s1bursts makes no interferograms; ASF's
+[HyP3 burst InSAR](https://hyp3-docs.asf.alaska.edu/guides/burst_insar_product_guide)
+products cover the same bursts with wrapped and unwrapped phase.
 
 ## Run several jobs at once
 

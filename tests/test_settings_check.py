@@ -21,14 +21,14 @@ from s1bursts.errors import (
     ProductSettingsMismatchError,
     S1BurstsError,
 )
-from s1bursts.product import CoherenceProduct, InterferogramProduct, RTCProduct
+from s1bursts.product import CoherenceProduct, RTCProduct
 from s1bursts.settings_check import (
     _BurstSkip,
     _check_burst_product,
     _warn_other_snap,
     _warn_unchecked,
 )
-from s1bursts.snap_graph import CoherenceConfig, InterferogramConfig, RTCConfig
+from s1bursts.snap_graph import CoherenceConfig, RTCConfig
 
 if TYPE_CHECKING:
     from s1bursts.snap_graph import BackscatterConfig
@@ -49,8 +49,8 @@ def _rtc() -> RTCProduct:
     )
 
 
-def _pair[P: (CoherenceProduct, InterferogramProduct)](cls: type[P]) -> P:
-    return cls(
+def _coherence() -> CoherenceProduct:
+    return CoherenceProduct(
         burst_id=30346,
         sub_swath="IW1",
         crs=_UTM32,
@@ -83,8 +83,8 @@ def _write(path: Path, tags: dict[str, str] | None) -> Path:
 
 def _made_with(
     tmp_path: Path,
-    product: RTCProduct | CoherenceProduct | InterferogramProduct,
-    config: BackscatterConfig | CoherenceConfig | InterferogramConfig,
+    product: RTCProduct | CoherenceProduct,
+    config: BackscatterConfig | CoherenceConfig,
     snap_version: tuple[int, ...] | None = _SNAP_14,
 ) -> Path:
     """Write the file ``config`` would have produced, tags included."""
@@ -94,8 +94,8 @@ def _made_with(
 
 def _check(
     path: Path,
-    product: RTCProduct | CoherenceProduct | InterferogramProduct,
-    config: BackscatterConfig | CoherenceConfig | InterferogramConfig,
+    product: RTCProduct | CoherenceProduct,
+    config: BackscatterConfig | CoherenceConfig,
     snap_version: tuple[int, ...] | None = _SNAP_14,
 ) -> _BurstSkip:
     return _check_burst_product(path, product, config, snap_version=snap_version)
@@ -163,7 +163,7 @@ class TestBurstProducts:
         assert excinfo.value.differences == differences
 
     def test_the_coherence_window_is_compared(self, tmp_path: Path) -> None:
-        product = _pair(CoherenceProduct)
+        product = _coherence()
         path = _made_with(tmp_path, product, CoherenceConfig(window=(10, 2)))
 
         with pytest.raises(ProductSettingsMismatchError, match=r"\(window\)") as excinfo:
@@ -173,15 +173,6 @@ class TestBurstProducts:
             "COHERENCE_WINDOW_RANGE": ("10", "25"),
             "COHERENCE_WINDOW_AZIMUTH": ("2", "5"),
         }
-
-    def test_the_interferogram_phase_removal_is_compared(self, tmp_path: Path) -> None:
-        product = _pair(InterferogramProduct)
-        path = _made_with(tmp_path, product, InterferogramConfig(subtract_topographic_phase=False))
-
-        with pytest.raises(ProductSettingsMismatchError) as excinfo:
-            _check(path, product, InterferogramConfig())
-
-        assert excinfo.value.differences == {"TOPOGRAPHIC_PHASE_REMOVED": ("false", "true")}
 
     def test_settings_the_tags_do_not_record_are_not_compared(self, tmp_path: Path) -> None:
         path = _made_with(tmp_path, _rtc(), RTCConfig(dem_oversampling=2.0))

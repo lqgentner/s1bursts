@@ -28,7 +28,6 @@ from s1bursts.snap_graph import (
     CoherenceConfig,
     GeocodingConfig,
     GTCConfig,
-    InterferogramConfig,
     RTCConfig,
 )
 from s1bursts.time_range import TimeRange
@@ -43,7 +42,6 @@ __all__ = [
     "FileManager",
     "GTCConfig",
     "GeocodingConfig",
-    "InterferogramConfig",
     "MGRSGeoBox",
     "MGRSGrid",
     "RTCConfig",

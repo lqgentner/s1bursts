@@ -121,7 +121,6 @@ reference:
         - snap_graph.RTCConfig
         - snap_graph.GTCConfig
         - snap_graph.CoherenceConfig
-        - snap_graph.InterferogramConfig
         - snap_graph.BackscatterConfig
         - snap_graph.GeocodingConfig
 
@@ -148,7 +147,6 @@ reference:
         - product.RTCProduct
         - product.GTCProduct
         - product.CoherenceProduct
-        - product.InterferogramProduct
 
     - title: Composite products
       desc: >-
@@ -204,7 +202,6 @@ reference:
         - snap_graph.xml_to_mermaid
         - snap_graph.build_backscatter_graph
         - snap_graph.build_coherence_graph
-        - snap_graph.build_interferogram_graph
 
 # Jupyter Kernel
 # --------------

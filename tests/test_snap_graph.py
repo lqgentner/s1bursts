@@ -10,13 +10,12 @@ import pytest
 
 from s1bursts.errors import ConfigurationError
 from s1bursts.snap_graph import (
+    NODATA_SENTINEL,
     BackscatterConfig,
     CoherenceConfig,
     GeocodingConfig,
     GTCConfig,
-    InterferogramConfig,
     RTCConfig,
-    stack_band_suffixes,
     supports_coherence_options,
     xml_to_mermaid,
 )
@@ -105,11 +104,6 @@ GOLDEN_CASES = [
         id="coherence",
     ),
     pytest.param(
-        "S1_SLCtoIfg.xml",
-        InterferogramConfig(),
-        id="interferogram",
-    ),
-    pytest.param(
         "S1_SLCtoRTC-swissALTI3D.xml",
         RTCConfig(dem=_SWISSALTI3D, external_dem_apply_egm=False),
         id="rtc-swissalti3d",
@@ -129,7 +123,7 @@ GOLDEN_CASES = [
 @pytest.mark.parametrize(("fixture", "config"), GOLDEN_CASES)
 def test_dynamic_graph_matches_fixture(
     fixture: str,
-    config: RTCConfig | GTCConfig | CoherenceConfig | InterferogramConfig,
+    config: RTCConfig | GTCConfig | CoherenceConfig,
 ) -> None:
     expected_xml = (FIXTURES / fixture).read_text()
     actual_xml = config.to_xml()
@@ -141,51 +135,9 @@ def test_dynamic_graph_matches_fixture(
 # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# Back-Geocoding band naming, which SNAP 14 changed
-
-
-@pytest.mark.parametrize(
-    ("snap_version", "expected"),
-    [
-        (None, ("mst", "slv1")),
-        ((13, 0, 0), ("mst", "slv1")),
-        ((14, 0, 0), ("ref", "sec1")),
-        ((15, 1), ("ref", "sec1")),
-    ],
-)
-def test_stack_band_suffixes(
-    snap_version: tuple[int, ...] | None,
-    expected: tuple[str, str],
-) -> None:
-    assert stack_band_suffixes(snap_version) == expected
-
-
-@pytest.mark.parametrize(
-    ("snap_version", "present", "absent"),
-    [
-        (None, ("_mst_", "_slv1_"), ("_ref_", "_sec1_")),
-        ((13, 0, 0), ("_mst_", "_slv1_"), ("_ref_", "_sec1_")),
-        ((14, 0, 0), ("_ref_", "_sec1_"), ("_mst_", "_slv1_")),
-    ],
-)
-def test_interferogram_intensity_expressions_follow_the_snap_version(
-    snap_version: tuple[int, ...] | None,
-    present: tuple[str, ...],
-    absent: tuple[str, ...],
-) -> None:
-    """GPT rejects the graph outright when these names are wrong for its version."""
-    xml = InterferogramConfig().to_xml(snap_version=snap_version)
-
-    for fragment in present:
-        assert fragment in xml
-    for fragment in absent:
-        assert fragment not in xml
-
-
 @pytest.mark.parametrize("config", [RTCConfig(), GTCConfig()], ids=["rtc", "gtc"])
 def test_backscatter_graph_ignores_the_snap_version(config: RTCConfig | GTCConfig) -> None:
-    """It names no stack bands and has no version-dependent options."""
+    """It has no version-dependent options."""
     assert config.to_xml(snap_version=(14, 0, 0)) == config.to_xml()
 
 
@@ -207,6 +159,22 @@ def test_supports_coherence_options(
     expected: bool,
 ) -> None:
     assert supports_coherence_options(snap_version) is expected
+
+
+@pytest.mark.parametrize(
+    "config", [RTCConfig(), GTCConfig(), CoherenceConfig()], ids=["rtc", "gtc", "coherence"]
+)
+def test_the_no_data_marker_cannot_match_a_valid_sample(
+    config: RTCConfig | GTCConfig | CoherenceConfig,
+) -> None:
+    """Every band keeps only positive values, so the negative marker is never data."""
+    root = fromstring(config.to_xml())
+    bands = root.findall('./node[@id="ReplaceZerosWithNoData"]/parameters/targetBands/targetBand')
+
+    assert bands
+    for band in bands:
+        source, _, rest = band.findtext("expression", "").partition(" > 0 ? ")
+        assert rest == f"{source} : {NODATA_SENTINEL!r}"
 
 
 def test_coherence_graph_for_snap_14_matches_fixture() -> None:
@@ -281,15 +249,6 @@ def test_backscatter_output_bands_gtc() -> None:
 
 def test_coherence_output_bands() -> None:
     assert CoherenceConfig().output_bands == ["coherence"]
-
-
-def test_interferogram_output_bands() -> None:
-    assert InterferogramConfig().output_bands == [
-        "ifg_real",
-        "ifg_imag",
-        "intensity_primary",
-        "intensity_secondary",
-    ]
 
 
 # ---------------------------------------------------------------------------

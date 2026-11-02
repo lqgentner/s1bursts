@@ -34,7 +34,7 @@ from s1bursts.errors import (
     SnapProcessingError,
 )
 from s1bursts.filemanager import FileManager
-from s1bursts.product import CoherenceProduct, GTCProduct, InterferogramProduct, RTCProduct
+from s1bursts.product import CoherenceProduct, GTCProduct, RTCProduct
 from s1bursts.product_tags import RasterMetadata
 from s1bursts.snap_client import (
     SNAPClient,
@@ -52,7 +52,6 @@ from s1bursts.snap_graph import (
     NODATA_SENTINEL,
     CoherenceConfig,
     GTCConfig,
-    InterferogramConfig,
     RTCConfig,
 )
 from s1bursts.summary import ErrorResult, OkResult
@@ -807,7 +806,9 @@ class TestFinalizeProduct:
         client._finalize_product(
             staging,
             product,
-            metadata=RasterMetadata(tags={}, band_names=["ifg_real", "ifg_imag"], units=["", ""]),
+            metadata=RasterMetadata(
+                tags={}, band_names=["gamma0", "scattering_area"], units=["", ""]
+            ),
             normalize_nodata=True,
         )
 
@@ -879,12 +880,6 @@ class TestRejectsNonUtmCrs:
         with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
             client.create_coherence(pair, crs="EPSG:3035", config=CoherenceConfig())
 
-    def test_interferogram(self, client: SNAPClient) -> None:
-        pair = BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
-
-        with pytest.raises(ValueError, match="must be a WGS 84 / UTM zone"):
-            client.create_interferogram(pair, crs=4326, config=InterferogramConfig())
-
 
 class TestAutoCrs:
     """``crs="auto"`` geocodes each burst or pair in the UTM zone of its footprint."""
@@ -914,13 +909,9 @@ class TestAutoCrs:
 
         with patch.object(client, "_run_gpt"), patch.object(client, "_finalize_product"):
             coherence = client.create_coherence(pair, crs="auto", config=CoherenceConfig())
-            interferogram = client.create_interferogram(
-                pair, crs="auto", config=InterferogramConfig()
-            )
 
         assert isinstance(coherence, OkResult)
-        assert isinstance(interferogram, OkResult)
-        assert coherence.result.crs == interferogram.result.crs == CRS.from_epsg(32631)
+        assert coherence.result.crs == CRS.from_epsg(32631)
 
     def test_a_footprint_outside_the_utm_zones_fails_that_item(self, client: SNAPClient) -> None:
         polar = replace(_make_burst("2022-01-01"), _geometry=shapely.box(10.0, 84.5, 11.0, 85.5))
@@ -931,7 +922,6 @@ class TestAutoCrs:
                 client.create_backscatter(polar, crs="auto", config=GTCConfig()),
                 client.create_backscatter(polar, crs="auto", config=RTCConfig()),
                 client.create_coherence(pair, crs="auto", config=CoherenceConfig()),
-                client.create_interferogram(pair, crs="auto", config=InterferogramConfig()),
             ]
 
         # Previously raised, stopping a batch over every other burst.
@@ -953,8 +943,8 @@ class TestAutoCrs:
 
 def _write_tagged(
     client: SNAPClient,
-    product: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct,
-    config: RTCConfig | GTCConfig | CoherenceConfig | InterferogramConfig,
+    product: RTCProduct | GTCProduct | CoherenceProduct,
+    config: RTCConfig | GTCConfig | CoherenceConfig,
     *,
     snap_version: tuple[int, ...] | None = None,
     tagged: bool = True,
@@ -1020,18 +1010,6 @@ class TestSkipChecksTheSettings:
         _write_tagged(client, product, CoherenceConfig())
 
         result = client.create_coherence(pair, crs=self.CRS_UTM32, config=CoherenceConfig())
-
-        assert isinstance(result, OkResult)
-        assert result.skipped
-
-    def test_a_matching_interferogram_is_skipped(self, client: SNAPClient) -> None:
-        pair = self._pair()
-        product = InterferogramProduct.from_burst_pair(pair, self.CRS_UTM32)
-        _write_tagged(client, product, InterferogramConfig())
-
-        result = client.create_interferogram(
-            pair, crs=self.CRS_UTM32, config=InterferogramConfig()
-        )
 
         assert isinstance(result, OkResult)
         assert result.skipped
@@ -1151,65 +1129,9 @@ class TestCreateCoherence:
         assert result.source is pair
 
 
-class TestCreateInterferogram:
-    CRS_UTM32 = CRS("EPSG:32632")
-
-    def _make_pair(self) -> BurstPair:
-        return BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
-
-    def test_creates_interferogram_product(self, client: SNAPClient) -> None:
-        with (
-            patch.object(client, "_run_gpt") as mock_gpt,
-            patch.object(client, "_finalize_product") as mock_finalize,
-        ):
-            result = client.create_interferogram(
-                self._make_pair(),
-                crs=self.CRS_UTM32,
-                config=InterferogramConfig(),
-            )
-
-        assert isinstance(result, OkResult)
-        assert mock_gpt.call_count == 1
-        metadata = mock_finalize.call_args.kwargs["metadata"]
-        assert metadata.band_names == [
-            "ifg_real",
-            "ifg_imag",
-            "intensity_primary",
-            "intensity_secondary",
-        ]
-
-    def test_write_failure_returns_error_result(self, client: SNAPClient) -> None:
-        pair = self._make_pair()
-
-        with (
-            patch.object(client, "_run_gpt"),
-            patch.object(
-                client,
-                "_finalize_product",
-                side_effect=RasterWriteError("write failed"),
-            ),
-        ):
-            result = client.create_interferogram(
-                pair,
-                crs=self.CRS_UTM32,
-                config=InterferogramConfig(),
-            )
-
-        assert isinstance(result, ErrorResult)
-        assert isinstance(result.error, SnapProcessingError)
-        assert isinstance(result.error.__cause__, RasterWriteError)
-        assert result.source is pair
-
-
-@pytest.mark.parametrize(
-    ("method", "config"),
-    [("create_coherence", CoherenceConfig()), ("create_interferogram", InterferogramConfig())],
-)
 def test_missing_burst_map_for_the_secondary_propagates(
     client: SNAPClient,
     tmp_path: Path,
-    method: str,
-    config: CoherenceConfig | InterferogramConfig,
 ) -> None:
     """A missing burst map affects every pair, so it stops the run."""
     # Previously the FileNotFoundError raised while staging the secondary SLC
@@ -1233,7 +1155,7 @@ def test_missing_burst_map_for_the_secondary_propagates(
         patch.object(client, "_run_gpt") as mock_gpt,
         pytest.raises(BurstMapUnavailableError, match="not downloaded"),
     ):
-        getattr(client, method)(pair, crs=CRS("EPSG:32632"), config=config)
+        client.create_coherence(pair, crs=CRS("EPSG:32632"), config=CoherenceConfig())
 
     mock_gpt.assert_not_called()
 
@@ -1244,12 +1166,10 @@ def _create(client: SNAPClient, method: str) -> ErrorResult | OkResult[Any]:
     if method == "create_backscatter":
         return client.create_backscatter(_make_burst("2022-01-01"), crs, config=RTCConfig())
     pair = BurstPair(_make_burst("2022-01-01"), _make_burst("2022-01-13"))
-    if method == "create_coherence":
-        return client.create_coherence(pair, crs, config=CoherenceConfig())
-    return client.create_interferogram(pair, crs, config=InterferogramConfig())
+    return client.create_coherence(pair, crs, config=CoherenceConfig())
 
 
-_CREATE_METHODS = ["create_backscatter", "create_coherence", "create_interferogram"]
+_CREATE_METHODS = ["create_backscatter", "create_coherence"]
 
 
 @pytest.mark.parametrize("method", _CREATE_METHODS)

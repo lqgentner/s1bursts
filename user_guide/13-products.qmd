@@ -20,7 +20,6 @@ descriptions:
 | RTC backscatter | `gamma0`, `scattering_area` | Linear power; area without units |
 | GTC backscatter | `beta0` | Linear power |
 | Coherence | `coherence` | Magnitude, 0 to 1, without units |
-| Interferogram | `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` | Uncalibrated; intensities in linear power |
 
 Backscatter is stored as linear power, not decibels, in products and
 composites alike. Convert with
@@ -28,10 +27,6 @@ composites alike. Convert with
 decibel of the mean. The `scattering_area` band describes how much ground each
 pixel covers; [Local resolution weighting](resolution-weighting.qmd) explains
 how composites use it.
-
-The interferogram's phase is the angle of the complex number
-`ifg_real + i·ifg_imag`, in radians from −π to π. Its two intensity bands show
-the brightness of each acquisition.
 
 ## Composites
 
@@ -89,7 +84,6 @@ joined by underscores. Each product type has its own pattern:
 | RTC backscatter | `S1_RTC_<orbit><pass>_<burst>_<swath>_<pol>_<date>_<zone>.tif` |
 | GTC backscatter | `S1_GTC_<orbit><pass>_<burst>_<swath>_<pol>_<date>_<zone>.tif` |
 | Coherence | `S1_COH<baseline>_<orbit><pass>_<burst>_<swath>_<pol>_<date1>_<date2>_<zone>.tif` |
-| Interferogram | `S1_IFG<baseline>_CMPLX_<orbit><pass>_<burst>_<swath>_<pol>_<date1>_<date2>_<zone>.tif` |
 | RTC LRW composite | `S1_RTC_LRW[_<qa>]_<square>_<pol>_<start>_<end>.tif` |
 | Coherence LRW composite | `S1_COH<baseline>_LRW[_<qa>]_<square>_<pol>_<start>_<end>.tif` |
 | RTC or GTC pass composite | `S1_RTC_COMP_<pass>[_QA-NUM]_<square>_<pol>_<start>_<end>.tif`, with `GTC` for GTC |

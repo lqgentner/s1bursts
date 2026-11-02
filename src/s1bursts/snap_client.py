@@ -39,7 +39,6 @@ from s1bursts.product import (
     CoherenceProduct,
     CRSInput,
     GTCProduct,
-    InterferogramProduct,
     RTCProduct,
 )
 from s1bursts.settings_check import _skip_existing
@@ -55,7 +54,7 @@ if TYPE_CHECKING:
     from s1bursts.config import SNAPSettings
     from s1bursts.filemanager import FileManager
     from s1bursts.product_tags import RasterMetadata
-    from s1bursts.snap_graph import CoherenceConfig, InterferogramConfig
+    from s1bursts.snap_graph import CoherenceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -493,13 +492,12 @@ class SNAPConfig:
         self.resolved_gpt_path = _resolve_gpt_path(self.bin, snap_settings)
         logger.debug("Resolved SNAP GPT executable: %s", self.resolved_gpt_path)
 
-        # Graph band names depend on it; see `stack_band_suffixes`.
+        # The coherence graph's options and every product's tags depend on it.
         self.resolved_snap_version = snap_version(self.resolved_gpt_path)
         if self.resolved_snap_version is None:
             logger.warning(
-                "Could not determine the SNAP version of '%s'; assuming the band naming "
-                "of SNAP 13 and earlier. Interferogram processing will fail if this "
-                "installation is SNAP 14 or newer.",
+                "Could not determine the SNAP version of '%s'; products will record it "
+                "as unknown, and the Coherence options of SNAP 14 are unavailable.",
                 self.resolved_gpt_path,
             )
         else:
@@ -510,8 +508,8 @@ class SNAPConfig:
             if self.resolved_snap_version[:2] not in SUPPORTED_SNAP_VERSIONS:
                 logger.warning(
                     "SNAP %s has not been tested with this version of s1bursts, which is "
-                    "tested against %s. Processing may still work; graph band names are "
-                    "chosen for the closest known naming.",
+                    "tested against %s. Processing may still work; graphs are built for "
+                    "the closest tested version.",
                     ".".join(str(part) for part in self.resolved_snap_version),
                     ", ".join(f"{major}.{minor}" for major, minor in SUPPORTED_SNAP_VERSIONS),
                 )
@@ -857,7 +855,7 @@ class SNAPClient:
         ProductSettingsMismatchError
             If the product exists, ``overwrite`` is ``False``, and the product
             records other settings than ``config``: grid spacing, DEM,
-            multilook, coherence window or the interferogram's phase removal.
+            multilook or coherence window.
         OSError or RasterioError
             If the product exists, ``overwrite`` is ``False``, and it cannot
             be read to check its settings.
@@ -878,11 +876,11 @@ class SNAPClient:
         msg = f"`config` must be an RTCConfig or a GTCConfig, received '{type(config).__name__}'."
         raise TypeError(msg)
 
-    def _existing[P: RTCProduct | GTCProduct | CoherenceProduct | InterferogramProduct](
+    def _existing[P: RTCProduct | GTCProduct | CoherenceProduct](
         self,
         source: Burst | BurstPair,
         product: P,
-        config: RTCConfig | GTCConfig | CoherenceConfig | InterferogramConfig,
+        config: RTCConfig | GTCConfig | CoherenceConfig,
         *,
         overwrite: bool,
     ) -> OkResult[P] | None:
@@ -1008,7 +1006,7 @@ class SNAPClient:
         ProductSettingsMismatchError
             If the product exists, ``overwrite`` is ``False``, and the product
             records other settings than ``config``: grid spacing, DEM,
-            multilook, coherence window or the interferogram's phase removal.
+            multilook or coherence window.
         OSError or RasterioError
             If the product exists, ``overwrite`` is ``False``, and it cannot
             be read to check its settings.
@@ -1031,123 +1029,6 @@ class SNAPClient:
             graph_file = _write_graph(
                 tmp_dir,
                 "coherence",
-                config.to_xml(snap_version=self.config.resolved_snap_version),
-            )
-            with snap_worker_userdir(self.config.resolved_auxdata_path, tmp_dir) as snap_userdir:
-                try:
-                    primary_file = self._stage_slc(pair.primary, tmp_dir)
-                    secondary_file = self._stage_slc(pair.secondary, tmp_dir)
-                    self._run_gpt(
-                        graph=graph_file,
-                        source_files={
-                            "primary": primary_file,
-                            "secondary": secondary_file,
-                        },
-                        source_locations={
-                            "primary": self.manager.get_slc_path(pair.primary),
-                            "secondary": self.manager.get_slc_path(pair.secondary),
-                        },
-                        snap_userdir=snap_userdir,
-                        process_params={
-                            "swath": product.sub_swath,
-                            "polarization": product.polarization,
-                            "date1": product.date_primary.strftime("%d%b%Y"),
-                            "date2": product.date_secondary.strftime("%d%b%Y"),
-                            "crs": get_epsg_string(product.crs),
-                        },
-                        target_file=staging_file,
-                    )
-                    self._finalize_product(
-                        staging_file,
-                        product_path,
-                        metadata=product_tags.burst_metadata(
-                            product,
-                            config,
-                            snap_version=self.config.resolved_snap_version,
-                        ),
-                        normalize_nodata=config.replace_zeros_with_nan,
-                    )
-                except _ITEM_ERRORS as e:
-                    return _item_failure(pair, e)
-
-        logger.info("Successfully created '%s'", product_path.name)
-        return OkResult(source=pair, result=product)
-
-    def create_interferogram(
-        self,
-        pair: BurstPair,
-        crs: CRSInput | Literal["auto"],
-        *,
-        config: InterferogramConfig,
-        overwrite: bool = False,
-    ) -> OperationResult[InterferogramProduct]:
-        """Compute the interferogram from a burst pair.
-
-        Parameters
-        ----------
-        pair
-            Burst pair to process.
-        crs
-            The coordinate reference system of the geocoded output, a WGS 84 /
-            UTM zone, north or south, which product file names record. Given as
-            a CRS object, an authority string such as ``"EPSG:32632"`` or an
-            EPSG code, or ``"auto"`` to process each pair in the UTM zone
-            that holds its footprint (``utm_zone``). Use ``"auto"`` for
-            pairs processed on their own, such as a time series, and the
-            target cell's ``crs`` for products meant for a composite: an input
-            in another zone than the cell raises ``InconsistentInputsError``
-            when composited.
-        config
-            Graph-shape configuration.
-        overwrite
-            Whether to overwrite an existing product. Without it, an existing
-            product is returned as skipped, after checking that the settings
-            it records match ``config``.
-
-        Returns
-        -------
-        OperationResult
-            Result of the interferogram processing. A skipped product's result
-            records in ``unchecked`` and ``other_snap_version`` what its check
-            could not confirm; such a skip is also logged.
-
-        Raises
-        ------
-        ValueError
-            If ``crs`` is not a WGS 84 / UTM zone. Raised, not recorded,
-            because a wrong ``crs`` would fail every burst. Under ``"auto"``,
-            a footprint outside the UTM zones fails this item alone and is
-            recorded as a ``NoUTMZoneError``.
-        OSError, SnapProcessingError or RasterWriteError
-            If the disk is full, over quota or read-only, which would fail
-            every remaining item alike: an ``OSError`` saying so, or an error
-            caused by one or whose message or GPT output says so.
-        ProductSettingsMismatchError
-            If the product exists, ``overwrite`` is ``False``, and the product
-            records other settings than ``config``: grid spacing, DEM,
-            multilook, coherence window or the interferogram's phase removal.
-        OSError or RasterioError
-            If the product exists, ``overwrite`` is ``False``, and it cannot
-            be read to check its settings.
-        """
-        try:
-            product = InterferogramProduct.from_burst_pair(pair, crs=crs)
-        except NoUTMZoneError as err:
-            return _item_failure(pair, err)
-        product_path = self.manager.get_product_path(product)
-
-        skipped = self._existing(pair, product, config, overwrite=overwrite)
-        if skipped is not None:
-            return skipped
-
-        logger.info("Creating interferogram product: '%s'", product_path.name)
-
-        with tempfile.TemporaryDirectory(prefix="s1bursts-") as tmp:
-            tmp_dir = Path(tmp)
-            staging_file = tmp_dir / product_path.name
-            graph_file = _write_graph(
-                tmp_dir,
-                "interferogram",
                 config.to_xml(snap_version=self.config.resolved_snap_version),
             )
             with snap_worker_userdir(self.config.resolved_auxdata_path, tmp_dir) as snap_userdir:

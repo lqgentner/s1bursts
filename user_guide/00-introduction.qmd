@@ -17,7 +17,7 @@ scenes, are not supported.
 ## Products
 
 Sentinel-1's radar sends microwave pulses to the ground and records their echo,
-by day and night and through clouds. s1bursts creates three products from it:
+by day and night and through clouds. s1bursts creates two products from it:
 
 - **Backscatter** is how much of the pulse returns to the satellite. It depends
   on the roughness, moisture and structure of the surface; wet snow, for
@@ -26,9 +26,6 @@ by day and night and through clouds. s1bursts creates three products from it:
 - **Coherence** compares two acquisitions of the same place, from 0 (unrelated)
   to 1 (unchanged). It drops where the surface melted, moved, grew or was
   disturbed between the two dates. Use it to detect change.
-- **Interferograms** hold the phase difference between two acquisitions and
-  the intensity of each, as input for your own interferometric analysis. s1bursts does not unwrap the
-  phase or estimate displacement.
 
 Backscatter and coherence can then be combined into composites of many
 acquisitions. [Products and bands](products.qmd) describes every product in

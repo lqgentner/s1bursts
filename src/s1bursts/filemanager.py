@@ -36,7 +36,6 @@ from s1bursts.product import (
     CohPassComposite,
     GTCPassComposite,
     GTCProduct,
-    InterferogramProduct,
     Layer,
     MGRSTileProduct,
     RTCLRWComposite,
@@ -209,7 +208,7 @@ _PASS_LAYER = _LRW_LAYER._replace(pattern=r"(?:_QA-NUM)?")
 # Per-product-type field lists
 _SLC_FIELDS = (_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE)
 _BACKSCATTER_FIELDS = (_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE, _UTM)
-_COREGISTERED_FIELDS = (_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE_P, _DATE_S, _UTM)
+_COHERENCE_FIELDS = (_TRACK_ORBIT, _PASS, _BURST, _SWATH, _POL, _DATE_P, _DATE_S, _UTM)
 _MGRS_FIELDS = (_MGRS, _POL, _SDATE, _EDATE)
 
 
@@ -231,8 +230,8 @@ class _BurstProductFilters(_SLCFilters, total=False):
     crs: CRSInput | None
 
 
-class _PairProductFilters(_BurstProductFilters, total=False):
-    """Filters of coherence and interferogram products."""
+class _CoherenceFilters(_BurstProductFilters, total=False):
+    """Filters of coherence products."""
 
     baseline_days: int | None
 
@@ -279,7 +278,7 @@ class _NameFormat(NamedTuple):
 
 _SLC = frozenset(_SLCFilters.__optional_keys__)
 _PER_BURST = frozenset(_BurstProductFilters.__optional_keys__)
-_PAIR = frozenset(_PairProductFilters.__optional_keys__)
+_COHERENCE = frozenset(_CoherenceFilters.__optional_keys__)
 _COMPOSITE = frozenset(_CompositeFilters.__optional_keys__)
 _COH_COMPOSITE = frozenset(_CohCompositeFilters.__optional_keys__)
 _PASS_COMPOSITE = frozenset(_PassCompositeFilters.__optional_keys__)
@@ -296,10 +295,7 @@ _NAME_FORMATS: dict[type, _NameFormat] = {
     RTCProduct: _NameFormat(("S1_RTC", *_BACKSCATTER_FIELDS), _PER_BURST, "prod_dir", _BURST_DATE),
     GTCProduct: _NameFormat(("S1_GTC", *_BACKSCATTER_FIELDS), _PER_BURST, "prod_dir", _BURST_DATE),
     CoherenceProduct: _NameFormat(
-        ("S1_COH", _BASELINE, *_COREGISTERED_FIELDS), _PAIR, "prod_dir", _PAIR_DATE
-    ),
-    InterferogramProduct: _NameFormat(
-        ("S1_IFG", _BASELINE, "_CMPLX", *_COREGISTERED_FIELDS), _PAIR, "prod_dir", _PAIR_DATE
+        ("S1_COH", _BASELINE, *_COHERENCE_FIELDS), _COHERENCE, "prod_dir", _PAIR_DATE
     ),
     RTCLRWComposite: _NameFormat(
         ("S1_RTC_LRW", _LRW_LAYER, *_MGRS_FIELDS), _COMPOSITE, "comp_dir", _PERIOD
@@ -418,7 +414,7 @@ def _merge_layers[C: MGRSTileProduct](found: list[C]) -> list[C]:
 _LEGACY_NAMES = {
     "slc_dir": (re.compile(r"S1_SLC_\d{3}_\d{6}_(?:IW|EW)\d_.*\.zip"), "SLC bursts"),
     "prod_dir": (
-        re.compile(r"S1_(?:RTC|GTC|COH\d{2}|IFG\d{2}_CMPLX)_\d{3}_\d{6}_(?:IW|EW)\d_.*\.tif"),
+        re.compile(r"S1_(?:RTC|GTC|COH\d{2})_\d{3}_\d{6}_(?:IW|EW)\d_.*\.tif"),
         "per-burst products",
     ),
 }
@@ -523,13 +519,13 @@ class FileManager:
         **filters: Unpack[_BurstProductFilters],
     ) -> list[B]: ...
     @overload
-    def find[P: (CoherenceProduct, InterferogramProduct)](
+    def find(
         self,
-        product_type: type[P],
+        product_type: type[CoherenceProduct],
         *,
         time_range: TimeRange | None = None,
-        **filters: Unpack[_PairProductFilters],
-    ) -> list[P]: ...
+        **filters: Unpack[_CoherenceFilters],
+    ) -> list[CoherenceProduct]: ...
     @overload
     def find(
         self,
@@ -585,8 +581,8 @@ class FileManager:
         - ``Burst`` (SLC): ``rel_orbit_number``, ``pass_direction``,
           ``burst_id``, ``sub_swath``, ``polarization``.
         - ``RTCProduct``, ``GTCProduct``: those of ``Burst``, plus ``crs``.
-        - ``CoherenceProduct``, ``InterferogramProduct``: those of
-          ``RTCProduct``, plus ``baseline_days``.
+        - ``CoherenceProduct``: those of ``RTCProduct``, plus
+          ``baseline_days``.
         - ``RTCLRWComposite``: ``mgrs_code``, ``polarization``.
         - ``CohLRWComposite``: ``mgrs_code``, ``polarization``,
           ``baseline_days``.
@@ -609,7 +605,7 @@ class FileManager:
         time_range
             Keep only the products acquired on a day of this window: by
             ``date`` for SLC bursts, RTC and GTC products, by ``date_primary``
-            for coherence and interferogram products, as
+            for coherence products, as
             ``BurstPairCollection.starting_within()`` selects pairs. A
             composite is kept when its whole period, ``start_date`` through
             ``end_date``, lies in the window.

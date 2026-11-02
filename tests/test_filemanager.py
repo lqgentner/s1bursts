@@ -25,7 +25,6 @@ from s1bursts.product import (
     CohPassComposite,
     GTCPassComposite,
     GTCProduct,
-    InterferogramProduct,
     Layer,
     MGRSTileProduct,
     RTCLRWComposite,
@@ -89,21 +88,6 @@ _PARSE_CASES = [
             "pass_direction": "Ascending",
         },
         id="coherence",
-    ),
-    pytest.param(
-        InterferogramProduct,
-        "S1_IFG12_CMPLX_015D_030345_IW1_VH_20150709_20150721_32N.tif",
-        {
-            "burst_id": 30345,
-            "sub_swath": "IW1",
-            "polarization": "VH",
-            "date_primary": pd.Timestamp("20150709"),
-            "date_secondary": pd.Timestamp("20150721"),
-            "crs": _CRS_32N,
-            "rel_orbit_number": 15,
-            "pass_direction": "Descending",
-        },
-        id="interferogram",
     ),
     pytest.param(
         RTCLRWComposite,
@@ -229,9 +213,9 @@ _ROUNDTRIP_CASES = [
         id="coherence",
     ),
     pytest.param(
-        InterferogramProduct,
-        "S1_IFG12_CMPLX_066D_030346_IW1_VV_20220105_20220117_32S.tif",
-        id="interferogram",
+        CoherenceProduct,
+        "S1_COH12_066D_030346_IW1_VV_20220105_20220117_32S.tif",
+        id="coherence-south",
     ),
     pytest.param(RTCLRWComposite, "S1_RTC_LRW_32TMS03_VH_20150706_20151001.tif", id="rtc-lrw"),
     pytest.param(CohLRWComposite, "S1_COH12_LRW_32TMS03_VH_20150706_20150919.tif", id="coh-lrw"),
@@ -831,8 +815,6 @@ class TestFindPerBurstByPassDirection:
         "S1_GTC_066D_030343_IW1_VH_20150709_32N.tif",
         "S1_COH12_015A_030343_IW1_VH_20150709_20150721_32N.tif",
         "S1_COH12_066D_030343_IW1_VH_20150709_20150721_32N.tif",
-        "S1_IFG12_CMPLX_015A_030343_IW1_VH_20150709_20150721_32N.tif",
-        "S1_IFG12_CMPLX_066D_030343_IW1_VH_20150709_20150721_32N.tif",
     ]
 
     @pytest.fixture
@@ -864,16 +846,15 @@ class TestFindPerBurstByPassDirection:
         self, fm: FileManager, direction: str
     ) -> None:
         # Previously returned [] without a hint.
-        for cls in (RTCProduct, GTCProduct, CoherenceProduct, InterferogramProduct):
+        for cls in (RTCProduct, GTCProduct, CoherenceProduct):
             with pytest.raises(ValueError, match="must be one of Ascending, Descending"):
                 _find_unchecked(fm, cls, pass_direction=direction)
 
     def test_other_per_burst_products(self, fm: FileManager) -> None:
         [gtc] = fm.find(GTCProduct, pass_direction="Descending")
         [coh] = fm.find(CoherenceProduct, pass_direction="Ascending", baseline_days=12)
-        [ifg] = fm.find(InterferogramProduct, pass_direction="Descending")
 
-        assert (gtc.rel_orbit_number, coh.rel_orbit_number, ifg.rel_orbit_number) == (66, 15, 66)
+        assert (gtc.rel_orbit_number, coh.rel_orbit_number) == (66, 15)
         assert len(fm.find(RTCProduct)) == 3
 
 

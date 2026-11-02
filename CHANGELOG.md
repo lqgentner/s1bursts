@@ -307,8 +307,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   # after
   processor.create_coherences(pairs, crs="EPSG:32632")  # or crs="auto"
   ```
-- **Breaking:** the file names of SLC bursts and of RTC, GTC, coherence and
-  interferogram products record the pass direction, as `A` or `D` after the
+- **Breaking:** the file names of SLC bursts and of RTC, GTC and coherence
+  products record the pass direction, as `A` or `D` after the
   relative orbit, and every SLC and product path moves. Composite file names
   are unchanged.
 
@@ -324,7 +324,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   argument, which `from_burst()` and `from_burst_pair()` take from the burst
   and `FileManager` reads back from the file name. So `compose_*_by_pass`
   never needs the burst-ID map, also for products found on disk, and
-  `FileManager.find()` filters these four types and SLC bursts on
+  `FileManager.find()` filters these three types and SLC bursts on
   `pass_direction`. The pass direction is part of a product's equality, and
   anything but `"Ascending"` or `"Descending"` raises `ValueError`, in a
   product and in a filter. A burst found with `FileManager.find(Burst)`
@@ -342,7 +342,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `BurstCatalog.download()` downloads an SLC burst again unless its file is
   renamed first. `FileManager` warns once per instance and directory if
   `slc_dir` or `prod_dir` still holds some: when `find()` looks for SLC
-  bursts or one of those four types, and when `get_slc_path()` resolves an
+  bursts or one of those three types, and when `get_slc_path()` resolves an
   SLC path, as every download does. To rename an archive of IW SLC
   bursts and products, look up each burst's pass direction in the burst-ID
   map:
@@ -355,7 +355,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
   download_burst_map(mode="IW")
   directions = create_s1_pass_direction_lut(mode="IW")
-  old_name = re.compile(r"(S1_(?:SLC|RTC|GTC|COH\d{2}|IFG\d{2}_CMPLX)_\d{3})(_(\d{6})_(IW\d)_.*)")
+  old_name = re.compile(r"(S1_(?:SLC|RTC|GTC|COH\d{2})_\d{3})(_(\d{6})_(IW\d)_.*)")
   fm = FileManager("data")
   for path in [*fm.slc_dir.glob("S1_SLC_*.zip"), *fm.prod_dir.glob("S1_*.tif")]:
       if match := old_name.fullmatch(path.name):
@@ -481,7 +481,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   | `find_rtc_products(...)` | `find(RTCProduct, ...)` | those of `Burst`, `crs`, `pass_direction` |
   | `find_gtc_products(...)` | `find(GTCProduct, ...)` | as `RTCProduct` |
   | `find_coherence_products(...)` | `find(CoherenceProduct, ...)` | as `RTCProduct`, `baseline_days` |
-  | `find_interferogram_products(...)` | `find(InterferogramProduct, ...)` | as `CoherenceProduct` |
+  | `find_interferogram_products(...)` | none; the interferogram product is removed, see below | |
   | `find_rtc_lrw_products(...)` | `find(RTCLRWComposite, ...)` | `mgrs_code`, `polarization` |
   | `find_coh_lrw_products(...)` | `find(CohLRWComposite, ...)` | `mgrs_code`, `polarization`, `baseline_days` |
   | `find_rtc_pass_composites(...)` | `find(RTCPassComposite, ...)` | `mgrs_code`, `polarization`, `pass_direction` |
@@ -489,7 +489,7 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   | `find_coh_pass_composites(...)` | `find(CohPassComposite, ...)` | as `RTCPassComposite`, `baseline_days` |
 
   `time_range` keeps SLC bursts, RTC and GTC products acquired on one of its
-  days, coherence and interferogram products whose primary acquisition is,
+  days, coherence products whose primary acquisition is,
   as `BurstPairCollection.starting_within()` does, and composites whose
   whole period, `start_date` through `end_date`, lies within it.
 
@@ -538,8 +538,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `s1bursts.errors.ProductSettingsMismatchError`, naming each differing
   setting with its recorded and requested value; the error carries the file as
   `path` and the settings as `differences`.
-  - Per-burst products compare their `GRID_SPACING`, `DEM`, `MULTILOOK_*`,
-    `COHERENCE_WINDOW_*` and interferogram `*_PHASE_REMOVED` tags; composites
+  - Per-burst products compare their `GRID_SPACING`, `DEM`, `MULTILOOK_*`
+    and `COHERENCE_WINDOW_*` tags; composites
     their grid (CRS, transform and shape) and `COMPOSITING_PARAMETERS`, in
     every requested layer, and refuse a layer stored in decibels. A composite
     is still skipped before any input is read, so what it inherits from its
@@ -604,6 +604,40 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   ResolutionWeighter(fm, rasterio_profile={"target_srs": "EPSG:4326"})
   # after: raises ValueError; drop the option
   ResolutionWeighter(fm, rasterio_profile={})
+  ```
+
+### Removed
+
+- **Breaking:** the interferogram product. It was single-look wrapped phase,
+  geocoded without multilooking or filtering, carried neither coherence nor
+  the perpendicular baseline, and was never validated against an independent
+  processor. For burst interferograms, order
+  [HyP3 burst InSAR](https://hyp3-docs.asf.alaska.edu/guides/burst_insar_product_guide)
+  products, which cover the same ESA burst IDs. Removed with it:
+  `InterferogramConfig`, `InterferogramProduct`,
+  `BurstProcessor.create_interferograms()`, `SNAPClient.create_interferogram()`,
+  `product_tags.interferogram_metadata()`, `build_interferogram_graph()`,
+  `stack_band_suffixes()`, the `FLAT_EARTH_PHASE_REMOVED` and
+  `TOPOGRAPHIC_PHASE_REMOVED` tags, and the `S1_IFG..._CMPLX` file name, which
+  `FileManager.find()` no longer accepts.
+
+  ```python
+  # before
+  processor.create_interferograms(pairs, crs=crs)
+  # after: order the pair from HyP3 by its ASF burst granule names
+  from hyp3_sdk import HyP3
+
+  HyP3().submit_insar_isce_burst_job(primary_granule, secondary_granule, looks="5x1")
+  ```
+- **Breaking:** `s1bursts.product.CoregisteredProduct`, the abstract base of
+  coherence and interferogram products. `CoherenceProduct` now derives from
+  `GeocodedBurst` directly and keeps `baseline_days` and `from_burst_pair()`.
+
+  ```python
+  # before
+  isinstance(product, CoregisteredProduct)
+  # after
+  isinstance(product, CoherenceProduct)
   ```
 
 ### Fixed
