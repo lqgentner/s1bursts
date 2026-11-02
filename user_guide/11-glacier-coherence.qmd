@@ -67,7 +67,6 @@ stays dark, which makes its outline stand out.
 ```{python}
 #| fig-cap: "Coherence of a 12-day pair in winter and in summer 2022. The rectangles are the sample areas on the glacier (white) and off it (cyan)."
 import matplotlib.pyplot as plt
-import rasterio
 from rasterio.warp import transform_bounds
 from rasterio.windows import from_bounds
 from shapely.geometry import box
@@ -81,7 +80,7 @@ products = sorted(coherence.products, key=lambda p: p.date_primary)
 
 fig, axes = plt.subplots(1, 2, figsize=(7.8, 3.7), sharey=True, layout="constrained")
 for ax, product in zip(axes, [products[0], products[7]]):
-    with rasterio.open(fm.get_product_path(product)) as src:
+    with fm.open(product) as src:
         left, bottom, right, top = transform_bounds("EPSG:4326", src.crs, *view)
         coh = src.read(1, window=from_bounds(left, bottom, right, top, src.transform))
         for area, color in areas.values():
@@ -111,7 +110,7 @@ from shapely.geometry import mapping
 
 records = []
 for product in products:
-    with rasterio.open(fm.get_product_path(product)) as src:
+    with fm.open(product) as src:
         for name, (area, _) in areas.items():
             region = transform_geom("EPSG:4326", src.crs, mapping(area))
             values, _ = mask(src, [region], indexes=1, crop=True, filled=False)

@@ -34,6 +34,10 @@ This example writes products and composites to the bucket but keeps the
 downloaded bursts on local disk, which saves storage costs for files you can
 download again. Omit `slc_dir` to store everything in the bucket.
 
+Read products with `fm.open()`, which passes the bucket's endpoint and
+credentials to GDAL. `rasterio.open()` on the path from `get_product_path()`
+does not.
+
 Your bucket is unrelated to CDSE's S3 storage. The `CDSE_S3_*` settings are
 only for [downloading bursts](finding-and-downloading.qmd#when-the-burst-service-fails).
 

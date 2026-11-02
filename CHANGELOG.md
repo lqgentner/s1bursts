@@ -16,6 +16,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   from an area to the composites of its MGRS grid squares needs no `freezebase`
   import: `from s1bursts import MGRSGrid`. They are the classes of
   `freezebase.mgrs`, so existing imports keep working.
+- `FileManager.open(product, layer)` opens a product's file, or one layer of a
+  composite, for reading, on local disk or S3:
+  `with fm.open(composite, Layer.QA_CQM) as src:`. Plain
+  `rasterio.open(fm.get_product_path(...))` does not pass an S3 path's
+  endpoint and credentials to GDAL.
 - `FileManager` accepts strings for local directories, and
   `prepare_dem_for_snap()` a string for `dem`.
 - The `crs` of every `BurstProcessor.create_*` method, and of the products'

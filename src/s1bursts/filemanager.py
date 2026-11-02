@@ -24,7 +24,7 @@ from typing import (
 import warnings
 
 from freezebase.mgrs import mgrs_to_crs
-from freezebase.raster import get_utm_zone_string, utm_zone_to_crs
+from freezebase.raster import get_utm_zone_string, rasterio_open, utm_zone_to_crs
 import pandas as pd
 from pyproj.exceptions import CRSError
 
@@ -53,7 +53,9 @@ from s1bursts.time_range import _check_time_range
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from contextlib import AbstractContextManager
 
+    from rasterio.io import DatasetReader
     from upath import UPath
 
     from s1bursts.product import CRSInput
@@ -752,3 +754,33 @@ class FileManager:
             If the product type is unknown, or it has no layer ``layer``.
         """
         return self.get_product_path(product, Layer(layer)).exists()
+
+    def open(
+        self,
+        product: BaseProduct,
+        layer: Layer | str = Layer.MEASUREMENT,
+    ) -> AbstractContextManager[DatasetReader]:
+        """Open a product's file, or one layer of a composite, for reading.
+
+        Works for both local and S3 storage: an S3 ``UPath`` hands its
+        endpoint and credentials to GDAL, which ``rasterio.open()`` does not.
+
+        Parameters
+        ----------
+        product
+            Product to open.
+        layer
+            The layer whose file to open, as a ``Layer`` or its value such as
+            ``"QA-NUM"``; the measurement by default.
+
+        Returns
+        -------
+        AbstractContextManager[DatasetReader]
+            Context manager yielding the read-only rasterio dataset.
+
+        Raises
+        ------
+        ValueError
+            If the product type is unknown, or it has no layer ``layer``.
+        """
+        return rasterio_open(self.get_product_path(product, layer))

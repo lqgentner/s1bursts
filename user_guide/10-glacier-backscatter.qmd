@@ -65,7 +65,6 @@ much of the terrain around it are far darker than in January.
 #| fig-cap: "RTC backscatter around the Aletsch glacier in January and May 2022. The white rectangle is the sample area of the time series."
 import matplotlib.pyplot as plt
 import numpy as np
-import rasterio
 from rasterio.warp import transform_bounds
 from rasterio.windows import from_bounds
 from shapely.geometry import box
@@ -76,7 +75,7 @@ products = sorted(rtc.products, key=lambda p: p.date)
 
 fig, axes = plt.subplots(1, 2, figsize=(7.8, 3.7), sharey=True, layout="constrained")
 for ax, product in zip(axes, [products[0], products[4]]):
-    with rasterio.open(fm.get_product_path(product)) as src:
+    with fm.open(product) as src:
         left, bottom, right, top = transform_bounds("EPSG:4326", src.crs, *view)
         gamma0 = src.read(1, window=from_bounds(left, bottom, right, top, src.transform))
         x0, y0, x1, y1 = transform_bounds("EPSG:4326", src.crs, *sample.bounds)
@@ -104,7 +103,7 @@ from shapely.geometry import mapping
 
 records = []
 for product in products:
-    with rasterio.open(fm.get_product_path(product)) as src:
+    with fm.open(product) as src:
         region = transform_geom("EPSG:4326", src.crs, mapping(sample))
         values, _ = mask(src, [region], indexes=1, crop=True, filled=False)
     valid = values.compressed()

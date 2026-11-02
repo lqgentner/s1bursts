@@ -69,17 +69,17 @@ checking that it was made with the same settings.
 
 ## Look at the result
 
-Each product is a GeoTIFF that any GIS or raster library can open. This plots
-the backscatter of the first date in decibels above the coherence:
+Each product is a GeoTIFF that any GIS or raster library can open, and
+`fm.open()` opens one with rasterio. This plots the backscatter of the first
+date in decibels above the coherence:
 
 ```{python}
 import matplotlib.pyplot as plt
 import numpy as np
-import rasterio
 
-with rasterio.open(fm.get_product_path(rtc.products[0])) as src:
+with fm.open(rtc.products[0]) as src:
     gamma0 = src.read(1, masked=True)
-with rasterio.open(fm.get_product_path(coherence.products[0])) as src:
+with fm.open(coherence.products[0]) as src:
     coh = src.read(1, masked=True)
 
 fig, (top, bottom) = plt.subplots(2, 1, figsize=(7.8, 4.7), layout="constrained")
