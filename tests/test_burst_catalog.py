@@ -14,11 +14,13 @@ from freezebase.errors import DownloadError
 from pandas import Timestamp
 import pytest
 from requests import HTTPError, Request
+from requests.exceptions import ChunkedEncodingError
 from shapely.geometry import box
+from upath import UPath
 
 from s1bursts.burst import Burst, BurstCollection, BurstPair
 from s1bursts.catalog import BurstCatalog
-from s1bursts.cdse import MAX_PAGE_SIZE, CDSEResponse
+from s1bursts.cdse import MAX_PAGE_SIZE, CDSEAuth, CDSEResponse
 from s1bursts.errors import (
     BurstDownloadError,
     BurstMapUnavailableError,
@@ -34,7 +36,7 @@ from s1bursts.time_range import TimeRange
 from tests.gated_pool import Gate
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Iterator
 
 
 def _make_catalog() -> BurstCatalog:
@@ -1019,3 +1021,70 @@ class TestTokenRequestFailure:
             assert getattr(link, "response", None) is None
             texts = [str(link), repr(link.args), *getattr(link, "__notes__", [])]
             assert not any(password in text for text in texts)
+
+
+class TestInterruptedODataDownload:
+    """A stream cut short never leaves an SLC that a rerun would skip as finished."""
+
+    PAYLOAD = b"PK" + bytes(range(256)) * 64
+
+    def _response(self, *, fail_after: int | None = None) -> MagicMock:
+        """Return a streamed zip response that breaks after ``fail_after`` bytes, if given."""
+        payload = self.PAYLOAD
+
+        def iter_content(**_: object) -> Iterator[bytes]:
+            for start in range(0, len(payload), 1024):
+                if fail_after is not None and start >= fail_after:
+                    msg = "Connection broken: IncompleteRead"
+                    raise ChunkedEncodingError(msg)
+                yield payload[start : start + 1024]
+
+        response = MagicMock()
+        response.is_redirect = False
+        response.headers = {
+            "Content-Type": "application/zip",
+            "content-length": str(len(payload)),
+        }
+        response.iter_content.side_effect = iter_content
+        return response
+
+    def test_a_remote_slc_dir_keeps_no_truncated_slc(self, tmp_path: Path) -> None:
+        """Previously the partial object was committed, and the rerun skipped it."""
+        token = MagicMock()
+        token.json.return_value = {
+            "access_token": "access-1",
+            "refresh_token": "refresh-1",
+            "expires_in": 600,
+            "refresh_expires_in": 3600,
+        }
+        with patch("s1bursts.cdse.requests.post", return_value=token):
+            auth = CDSEAuth(username="user", password="pass")
+        manager = FileManager(tmp_path / "data", slc_dir=UPath(f"memory://{tmp_path.name}/slc"))
+        catalog = BurstCatalog(manager, auth=auth, show_progress=False)
+        burst = Burst(
+            burst_id=297227,
+            sub_swath="IW3",
+            polarization="VV",
+            date=Timestamp("2016-07-24"),
+            cdse_id="cdse-id",
+            _pass_direction="Ascending",
+        )
+        slc = manager.get_slc_path(burst)
+        s3_unavailable = ErrorResult(source=burst, error=BurstDownloadError("S3 unavailable"))
+
+        with (
+            patch.object(catalog, "_download_burst_s3", return_value=s3_unavailable),
+            patch(
+                "requests.Session.request",
+                side_effect=[self._response(fail_after=4096), self._response()],
+            ),
+        ):
+            interrupted = catalog.download(burst)
+            assert len(interrupted.failed_items) == 1
+            assert not slc.exists()
+
+            rerun = catalog.download(burst)
+
+        assert rerun.n_processed == 1
+        assert rerun.n_skipped == 0
+        assert slc.read_bytes() == self.PAYLOAD

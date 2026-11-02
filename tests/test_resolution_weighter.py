@@ -2358,6 +2358,23 @@ class TestPerProductProfiles:
         assert structure["COMPRESSION"] == "LERC_ZSTD"
         assert float(structure["MAX_Z_ERROR"]) == pytest.approx(1e-5)
 
+    def test_a_reprojecting_option_raises_instead_of_being_ignored(self, tmp_path: Path) -> None:
+        """Previously the composite was written on the cell's grid regardless."""
+        manager = FileManager(base_dir=tmp_path)
+        weighter = ResolutionWeighter(manager, rasterio_profile={"target_srs": "EPSG:4326"})
+        product = self._COMPOSITE
+
+        with pytest.raises(ValueError, match="target_srs"):
+            weighter._save(
+                np.full((_TILE, _TILE), 0.25, dtype=np.float32),
+                product,
+                Layer.MEASUREMENT,
+                _geobox(),
+                product_tags.RasterMetadata(tags={}, band_names=["VV"], units=["natural"]),
+            )
+
+        assert not manager.get_product_path(product).exists()
+
 
 class TestComposeTimeRange:
     """``time_range`` names the compositing window instead of the observed span.

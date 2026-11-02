@@ -197,7 +197,10 @@ class BurstCatalog:
             downloaded again; ``FileManager`` warns once when ``slc_dir``
             holds such names.
         max_workers
-            Number of parallel download threads.
+            Number of parallel download threads. Each one stages its burst
+            whole in the system temp directory when extracting from S3 or
+            downloading into a remote ``slc_dir``, which takes about
+            100 to 200 MB of local space per thread.
         endpoint
             Download endpoint to use. If ``None``, uses the
             ``default_endpoint`` specified during initialization. If a
