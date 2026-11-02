@@ -730,9 +730,9 @@ def qa_metadata(
         "QA_LAYER": "Composite Quality Map Image",
         "LAYER_NAME": "cqm",
         "LAYER_DESCRIPTION": (
-            "Composite local resolution: the reciprocal of the local scattering areas A_i, "
-            "aggregated with the composite's weights and statistic; higher is better "
-            "resolved; dimensionless."
+            "Composite local resolution: the reciprocal of the mean of the local scattering "
+            "areas A_i, weighted with the composite's weights W_i whatever its aggregation; "
+            "higher is better resolved; dimensionless."
         ),
     }
     # <CQMdBScaling>: the declaration of a conversion, on linear data.
