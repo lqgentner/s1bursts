@@ -71,8 +71,10 @@ heights, and SNAP would otherwise convert them a second time.
 
 ## Downsample a fine DEM first
 
-A DEM much finer than your products should be downsampled before preparing it,
-by averaging all fine pixels within each coarse one. freezebase's `vrt.warp()`
+SNAP's terrain flattening and terrain correction (geocoding) take much longer
+on a fine DEM grid. So a DEM much finer than your products should be downsampled before
+preparing it, by averaging all fine pixels within each coarse one.
+freezebase's `vrt.warp()`
 averages by default; this reduces the 2 m swissALTI3D to 30 m:
 
 ```{.python}

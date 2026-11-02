@@ -54,10 +54,10 @@ rtc = processor.create_backscatter(
 ).raise_on_failure()
 ```
 
-## Map the glacier
+## Compare January and May
 
-The map shows the glacier in January and in May. The Great Aletsch Glacier
-starts at Konkordiaplatz, where its tributaries meet near the top center, and
+The maps show the glacier in January and in May. The tributaries of the Great
+Aletsch Glacier meet at Konkordiaplatz, near the top center, and the glacier
 flows south-east, then south-west toward its tongue. In May the glacier and
 much of the terrain around it are far darker than in January.
 
@@ -128,18 +128,15 @@ plt.show()
 Backscatter on the glacier stays near −10.5 dB from January to April, drops to
 −18.5 dB on 9 May, and recovers to about −9 dB in August and September. Wet
 snow is a likely cause of the drop: liquid water in the snowpack absorbs much
-of the radar signal, as described in the
-[Copernicus snow product manual](https://land.copernicus.eu/en/technical-library/product-user-manual-high-resolution-snow-products-europe/@@download/file).
+of the radar signal, so wet snow appears dark (Rott, 1984)[^rott].
 From October, values settle around −12 to −13 dB.
-
-A single curve does not establish the cause. Check the dates against
-temperature, snowfall and snow-cover records before drawing conclusions, and
-keep orbit, polarization and processing settings fixed across the series.
-Monthly sampling can also miss short melt or snowfall events, since each month
-contributes a single evening acquisition.
 
 The [next tutorial](glacier-coherence.qmd) computes coherence for the same
 burst.
+
+[^rott]: Rott, H. (1984). Synthetic aperture radar capabilities for snow and
+    glacier monitoring. *Advances in Space Research*, 4(11), 241–246.
+    <https://doi.org/10.1016/0273-1177(84)90418-6>
 
 ```{python}
 #| echo: false

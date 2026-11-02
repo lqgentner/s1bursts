@@ -19,7 +19,7 @@ descriptions:
 |---|---|---|
 | RTC backscatter | `gamma0`, `scattering_area` | Linear power; area without units |
 | GTC backscatter | `beta0` | Linear power |
-| Coherence | `coherence` | 0 to 1, without units |
+| Coherence | `coherence` | Magnitude, 0 to 1, without units |
 | Interferogram | `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` | Uncalibrated |
 | Composite | Same quantity as its inputs | As the inputs |
 | `QA-NUM` | `num_obs` | Number of contributing acquisitions |

@@ -60,7 +60,7 @@ date. In mountains, it also depends on the angle of each slope to the
 satellite: slopes facing the satellite look bright, and slopes facing away look
 dark. By default, s1bursts removes this effect with radiometric terrain
 correction (RTC), following the terrain-flattening method of
-[Small (2011)](https://doi.org/10.1109/TGRS.2011.2120616). RTC divides each
+Small (2011)[^small]. RTC divides each
 pixel by the area of ground that contributed to it, so the remaining
 differences in brightness come from the surface itself. The result is called
 gamma-0.
@@ -90,9 +90,11 @@ pairs = bursts.find_pairs(baseline=12)
 coherence = processor.create_coherences(pairs, crs="auto")
 ```
 
-Coherence is estimated over a small window of neighboring pixels, set by
-`CoherenceConfig(window=...)`. A larger window gives smoother values at a
-coarser resolution.
+The product holds the coherence magnitude: the absolute value of the complex
+correlation between the two acquisitions, estimated over a small window of
+neighboring pixels set by `CoherenceConfig(window=...)`. A larger window gives
+smoother values at a coarser resolution. The phase of the correlation is not
+kept; the interferogram below holds the interferometric phase.
 
 `create_interferograms()` takes the same pairs and writes the complex
 interferogram, whose angle is the interferometric phase, together with the
@@ -145,3 +147,7 @@ rtc = processor.create_backscatter(bursts, crs="auto").raise_on_failure().produc
 
 Pass `continue_on_error=False` to `BurstProcessor` to stop at the first failure
 instead.
+
+[^small]: Small, D. (2011). Flattening gamma: Radiometric terrain correction
+    for SAR imagery. *IEEE Transactions on Geoscience and Remote Sensing*,
+    49(8), 3081–3093. <https://doi.org/10.1109/TGRS.2011.2120616>

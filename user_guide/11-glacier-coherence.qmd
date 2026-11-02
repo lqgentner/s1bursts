@@ -55,15 +55,17 @@ coherence = processor.create_coherences(
 ).raise_on_failure()
 ```
 
-## Map coherence in winter and summer
+## Coherence in winter and summer
 
 The maps compare a winter pair with a summer pair. In January almost the whole
-area is incoherent, because snowfall and wind change the snow surface between
-the two dates. In August the ice-free slopes are highly coherent, while the
-glacier stays dark, which makes its outline stand out.
+area is snow-covered and incoherent. Snow decorrelates quickly: new snow and
+melt change it between the two dates, and wet snow can lose its coherence
+within hours (Strozzi et al., 1999)[^strozzi].
+In August the slopes around the glacier are highly coherent, while the glacier
+stays dark, which makes its outline stand out.
 
 ```{python}
-#| fig-cap: "Coherence of a 12-day pair in winter and in summer 2022. The rectangles are the sample areas on the glacier (white) and on ice-free ground (cyan)."
+#| fig-cap: "Coherence of a 12-day pair in winter and in summer 2022. The rectangles are the sample areas on the glacier (white) and off it (cyan)."
 import matplotlib.pyplot as plt
 import rasterio
 from rasterio.warp import transform_bounds
@@ -73,7 +75,7 @@ from shapely.geometry import box
 view = (7.95, 46.38, 8.15, 46.55)  # lon/lat bounds of the map
 areas = {
     "glacier": (box(8.065, 46.472, 8.072, 46.477), "white"),
-    "ice-free ground": (box(8.104, 46.448, 8.112, 46.453), "tab:cyan"),
+    "no glacier": (box(8.104, 46.448, 8.112, 46.453), "tab:cyan"),
 }
 products = sorted(coherence.products, key=lambda p: p.date_primary)
 
@@ -97,10 +99,10 @@ plt.show()
 ## Follow coherence through the year
 
 The time series takes the median coherence of each pair within the two
-rectangles, one on the glacier and one on an ice-free slope east of it.
+rectangles, one on the glacier and one on a slope east of it without glacier.
 
 ```{python}
-#| fig-cap: "Median coherence of one 12-day pair per month in 2022, on the glacier and on ice-free ground."
+#| fig-cap: "Median coherence of one 12-day pair per month in 2022, on the glacier and off it."
 import numpy as np
 import pandas as pd
 from rasterio.mask import mask
@@ -132,17 +134,27 @@ plt.show()
 ## Interpret the result
 
 On the glacier, coherence stays near 0.12 all year. Values this low mean that
-the two acquisitions are essentially unrelated; an estimate from a finite window
-of pixels cannot reach exactly 0. The glacier flows, and its surface melts or
-gains new snow, so 12 days are too long for it to stay coherent.
+the two acquisitions are essentially unrelated. They do not reach 0, because
+the coherence magnitude estimated from a finite window of pixels is biased
+toward higher values, most strongly where coherence is low (Touzi et al.,
+1999)[^touzi]. The glacier flows, and its surface melts or gains new snow, so
+12 days are too long for it to stay coherent.
 
-On the ice-free ground, coherence follows the snow cover. It is low from
+Off the glacier, coherence follows the snow cover. It is low from
 November to May, rises in June, and stays between 0.57 and 0.74 until October,
-when the snow returns. Summer coherence therefore separates ice-free ground
-from glacier ice, even where both look similar in backscatter.
+when the snow returns. Summer coherence therefore separates the glacier from
+the terrain around it, even where both look similar in backscatter.
 
 Shorter baselines keep more coherence. In 2022 only Sentinel-1A was operating,
 so 12 days is the shortest baseline available for these dates.
+
+[^strozzi]: Strozzi, T., Wegmüller, U., & Mätzler, C. (1999). Mapping wet
+    snowcovers with SAR interferometry. *International Journal of Remote
+    Sensing*, 20(12), 2395–2403. <https://doi.org/10.1080/014311699212083>
+
+[^touzi]: Touzi, R., Lopes, A., Bruniquel, J., & Vachon, P. W. (1999). Coherence
+    estimation for SAR imagery. *IEEE Transactions on Geoscience and Remote
+    Sensing*, 37(1), 135–149. <https://doi.org/10.1109/36.739146>
 
 ```{python}
 #| echo: false

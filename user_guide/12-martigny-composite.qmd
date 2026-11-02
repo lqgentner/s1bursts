@@ -6,12 +6,11 @@ freeze: true
 
 # Local resolution weighted composite of Martigny
 
-This tutorial runs the whole pipeline, from search to composites, for a small
-area around Martigny in the Swiss canton of Valais. The town lies on the flat
-floor of the Rhône valley, where the river bends to the north, between steep
-slopes that face in many directions. It compares a composite of the ascending
-orbits, one of the descending orbits, and one that combines both with local
-resolution weighting (LRW).
+This tutorial runs the whole pipeline, from search to composites, for an area
+around Martigny in the Swiss canton of Valais. The town is surrounded by
+mountains, whose steep slopes are challenging terrain for SAR. The tutorial
+compares a composite of the ascending orbits, one of the descending orbits,
+and one that combines both with local resolution weighting (LRW).
 
 ```{python}
 #| include: false
@@ -28,12 +27,10 @@ os.chdir(root / "cache/docs")
 
 ## Find the grid squares and their bursts
 
-The area is a box of about 7 by 9 km around the town. It touches four 10 km
-squares of the MGRS grid, all in UTM zone 32 North. The composites cover these
-squares whole, so the search covers them too, through the union of their
-bounding boxes, as in
-[From an area to composites](area-to-composites.qmd#set-up). It returns every
-VV burst of August 2025 that overlaps them:
+The area touches four 10 km squares of the MGRS grid, all in UTM zone 32
+North. The search covers the squares whole, as in
+[From an area to composites](area-to-composites.qmd#find-the-bursts-of-every-square),
+and returns every VV burst of August 2025 that reaches them:
 
 ```{python}
 import shapely
@@ -61,19 +58,13 @@ bursts.df.groupby(["pass_direction", "rel_orbit_number"]).agg(
 )
 ```
 
-Three relative orbits cover the squares: orbit 88 on ascending passes, in the
-evening, and orbits 66 and 139 on descending passes, in the morning. Each
-orbit was imaged five times in August, by Sentinel-1A and Sentinel-1C in turn.
-Orbit 88 needs two bursts per acquisition to cover the squares, orbit 66
-three, and orbit 139 five, from two neighboring sub-swaths, which makes 50
-bursts in total. The descending orbits contribute twice as many acquisitions
-as the ascending one.
+One ascending and two descending orbits cover the squares, each imaged five
+times in August, with 50 bursts in total.
 
 ## Process the bursts
 
-Since the squares share one zone, all 50 bursts are processed in one batch, in
-that zone, at the 20 m pixel size of the composites. This follows the
-[AOI-first order](area-to-composites.qmd#aoi-first):
+The squares share one zone, so all bursts are processed in one batch in that
+zone, at the 20 m pixel size of the composites:
 
 ```{python}
 #| output: false
@@ -86,9 +77,9 @@ rtc = processor.create_backscatter(
 
 ## Compose every square
 
-Each square is composed from the products whose bursts reach it, twice: once
-per pass direction with `compose_rtc_by_pass()`, and once across both
-directions with `compose_rtc_lrw()`, which also writes the quality layers.
+Each square is composed twice: once per pass direction with
+`compose_rtc_by_pass()`, and once across both directions with
+`compose_rtc_lrw()`, which also writes the quality layers.
 
 ```{python}
 weighter = ResolutionWeighter(fm)
@@ -103,28 +94,16 @@ for square in squares:
 
 ## Compare the viewing directions
 
-Sentinel-1 looks to the right of its track. On ascending passes it flies
-roughly north and looks east, so slopes facing west are turned toward it;
-on descending passes it flies south and looks west, toward slopes facing
-east. A slope turned toward the radar is squeezed into few pixels and seen
-coarsely, and one turned away is stretched over many pixels and seen finely,
-unless it is so steep that the radar cannot see it at all. Such a slope lies
-in radar shadow, and the products of that direction have no value there.
-
-The figure joins the four squares of each composite into one mosaic and shows
-the area of interest. Red marks the pixels without a value, which a pass
-composite has where its direction sees only radar shadow. The rectangles mark
-three sample areas: the valley floor east of the town (white), a slope facing
-north-west (magenta) and one facing north-east (cyan).
+Sentinel-1 looks to the right of its track: east on ascending passes, west on
+descending ones. A slope facing the radar is squeezed into few pixels and seen
+coarsely. A slope facing away is stretched and seen finely, unless it is so
+steep that it lies in radar shadow, where that direction has no value.
 
 ```{python}
-#| fig-cap: "Backscatter composites of August 2025 around Martigny: the five ascending acquisitions (left), the ten descending acquisitions (middle), and all fifteen combined with local resolution weighting (right). Red marks radar shadow, where a composite has no value."
+#| fig-cap: "Backscatter composites of August 2025 in a 4 by 4 km window west of Martigny: the five ascending acquisitions (left), the ten descending acquisitions (middle), and all fifteen combined with LRW (right). White marks radar shadow, where a composite has no value."
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from rasterio.merge import merge
-from rasterio.transform import rowcol
-from rasterio.warp import transform_bounds
 from s1bursts.product import Layer
 
 
@@ -141,149 +120,61 @@ def km_extent(data, transform):
     return [v / 1000 for v in (left, left + transform.a * cols, top + transform.e * rows, top)]
 
 
-crs = squares[0].crs
+view = (346.5, 350.5, 5106, 5110)  # easting and northing in km, UTM zone 32N
 composites = {
     "Ascending": mosaic([c["Ascending"] for c in by_pass]),
     "Descending": mosaic([c["Descending"] for c in by_pass]),
     "LRW": mosaic(lrw),
 }
-areas = {
-    "valley floor": (box(7.100, 46.110, 7.115, 46.120), "white"),
-    "slope facing north-west": (box(7.031, 46.115, 7.038, 46.119), "magenta"),
-    "slope facing north-east": (box(7.043, 46.110, 7.050, 46.114), "cyan"),
-}
-view = transform_bounds("EPSG:4326", crs, *aoi.bounds)
 viridis = plt.get_cmap("viridis").copy()
-viridis.set_bad("tab:red")  # pixels without a value: radar shadow
+viridis.set_bad("white")  # pixels without a value: radar shadow
 
-fig, axes = plt.subplots(1, 3, figsize=(7.6, 3.6), sharey=True, layout="constrained")
+fig, axes = plt.subplots(1, 3, figsize=(7.6, 3.2), sharey=True, layout="constrained")
 for ax, (name, (data, transform)) in zip(axes, composites.items()):
     image = ax.imshow(10 * np.log10(data), extent=km_extent(data, transform),
                       cmap=viridis, vmin=-15, vmax=0)
-    for area, color in areas.values():
-        x0, y0, x1, y1 = transform_bounds("EPSG:4326", crs, *area.bounds)
-        ax.add_patch(plt.Rectangle((x0 / 1000, y0 / 1000), (x1 - x0) / 1000,
-                                   (y1 - y0) / 1000, fill=False, edgecolor=color, linewidth=1.5))
-    ax.set(title=name, xlabel="Easting (km)", xlim=(view[0] / 1000, view[2] / 1000),
-           ylim=(view[1] / 1000, view[3] / 1000))
+    ax.set(title=name, xlabel="Easting (km)", xlim=view[:2], ylim=view[2:])
 axes[0].set_ylabel("Northing (km)")
 fig.colorbar(image, ax=axes, shrink=0.8, label="Gamma-0 (dB)")
 plt.show()
 ```
 
-The median of each composite in the three sample areas puts numbers on the
-comparison. The medians are taken in linear units and converted to decibels
-afterwards, and they skip the pixels without a value:
-
-```{python}
-def median_in(data, transform, area):
-    """Median of a mosaic within a lon/lat rectangle."""
-    x0, y0, x1, y1 = transform_bounds("EPSG:4326", crs, *area.bounds)
-    (top, bottom), (left, right) = rowcol(transform, [x0, x1], [y1, y0])
-    return np.nanmedian(data[top:bottom, left:right])
-
-
-pd.DataFrame({
-    name: {
-        area_name: 10 * np.log10(median_in(data, transform, area))
-        for area_name, (area, _) in areas.items()
-    }
-    for name, (data, transform) in composites.items()
-}).round(1)
-```
-
-How much of each area a composite misses in shadow:
-
-```{python}
-def share_missing(data, transform, area):
-    """Share of a mosaic's pixels without a value within a lon/lat rectangle."""
-    x0, y0, x1, y1 = transform_bounds("EPSG:4326", crs, *area.bounds)
-    (top, bottom), (left, right) = rowcol(transform, [x0, x1], [y1, y0])
-    return np.isnan(data[top:bottom, left:right]).mean()
-
-
-pd.DataFrame({
-    name: {
-        area_name: f"{share_missing(data, transform, area):.1%}"
-        for area_name, (area, _) in areas.items()
-    }
-    for name, (data, transform) in composites.items()
-})
-```
-
-On the valley floor the three composites look alike: the fields, the town and
-the river show the same pattern in each. The ascending composite is 0.8 dB
-brighter there than the descending one, an offset that is close to uniform
-across the floor and comes from the different times of day and incidence
-angles of the two directions rather than from the terrain. The LRW composite
-lies between the two.
-
-On the slopes, the difference between the directions changes with the way
-the slope faces. Each direction smears the slopes turned toward it into
-coarse streaks and reads them brighter, and it loses the steepest slopes
-turned away from it to shadow. The slope facing north-west is 2.5 dB brighter
-in the ascending composite than in the descending one, which has no value on
-22.4 % of it. The slope facing north-east is 1.5 dB brighter in the descending
-composite, and the ascending one has no value on 13.5 % of it.
-
-The LRW composite has a value everywhere: where one direction sees only
-shadow, it takes the pixel from the other. Elsewhere it leans toward the
-direction that sees each slope from behind. On the north-west slope it is
-within 0.4 dB of the descending composite. On the north-east slope it lies
-about midway, although the descending orbits supply two thirds of the
-acquisitions; their squeezed view of that slope gets less weight. Across the
-map, the LRW composite keeps the sharper view of each slope.
+Each pass composite has gaps on the steep slopes facing away from its
+direction, and smears the slopes facing it into coarse streaks. The LRW
+composite has a value everywhere, and on each slope it leans toward the
+direction that sees the slope finely.
 
 ## Read the quality layers
 
-The LRW composite comes with two quality layers. The figure shows them for
-the four squares, with the composite for reference:
+The LRW composite comes with two quality layers, shown here for the same
+window:
 
 ```{python}
-#| fig-cap: "The LRW composite of the four grid squares (left), the number of acquisitions that contributed to each pixel, QA-NUM (middle), and the composite quality, QA-CQM, in decibels (right)."
+#| fig-cap: "The LRW composite (left), the number of acquisitions that contributed to each pixel, QA-NUM (middle), and the composite quality, QA-CQM, in decibels (right)."
 layers = {
     "LRW composite (dB)": (Layer.MEASUREMENT, dict(cmap="viridis", vmin=-15, vmax=0)),
     "QA-NUM": (Layer.QA_NUM, dict(cmap="Blues", vmin=0, vmax=15)),
     "QA-CQM (dB)": (Layer.QA_CQM, dict(cmap="Blues", vmin=-8, vmax=8)),
 }
-fig, axes = plt.subplots(1, 3, figsize=(7.6, 4), sharey=True, layout="constrained")
+fig, axes = plt.subplots(1, 3, figsize=(7.6, 3.8), sharey=True, layout="constrained")
 for ax, (title, (layer, style)) in zip(axes, layers.items()):
     data, transform = mosaic(lrw, layer)
     if layer != Layer.QA_NUM:
         data = 10 * np.log10(data)
     fig.colorbar(ax.imshow(data, extent=km_extent(data, transform), **style), ax=ax,
                  orientation="horizontal")
-    ax.set(title=title, xlabel="Easting (km)")
+    ax.set(title=title, xlabel="Easting (km)", xlim=view[:2], ylim=view[2:])
 axes[0].set_ylabel("Northing (km)")
 plt.show()
 ```
 
-```{python}
-num, _ = mosaic(lrw, Layer.QA_NUM)
-cqm, transform = mosaic(lrw, Layer.QA_CQM)
-floor, _ = areas["valley floor"]
-shares = pd.Series(num.ravel()).value_counts(normalize=True)
-print("Share of pixels by QA-NUM:", {n: f"{shares.get(n, 0):.1%}" for n in (15, 10, 5)})
-print(f"QA-CQM on the valley floor: {median_in(cqm, transform, floor):.2f}")
-```
-
-`QA-NUM` counts the acquisitions that carry weight in each pixel. All fifteen
-contribute almost everywhere, on 94 % of the four squares and on the whole
-valley floor. The exceptions are the steepest slopes, where one direction
-looks into radar shadow and its acquisitions get no weight. Ten acquisitions
-remain where one orbit drops out, on 3.4 % of the squares: the ascending one
-on slopes facing east, or one of the descending ones on slopes facing west.
-On a few very steep slopes facing west, 0.7 % of the squares, both descending
-orbits see shadow and only the five ascending acquisitions remain.
-
-`QA-CQM` rates the combined resolution of each pixel. It is nearly constant
-on the valley floor, about 0.83 (−0.8 dB), since flat ground is seen alike from every
-orbit. It is highest on the slopes facing west, which the ten descending
-acquisitions see from behind and in fine detail, and lowest on the steepest
-slopes, which every acquisition sees squeezed or not at all. A pixel with a
-low `QA-CQM` is reported at the same 20 m as the others but describes the
-ground more coarsely; [Local resolution weighting](resolution-weighting.qmd)
-explains both layers.
+`QA-NUM` counts the acquisitions that contribute to each pixel: all fifteen
+almost everywhere, fewer where one direction sees only radar shadow. `QA-CQM`
+rates the combined resolution of each pixel. It is highest on slopes that some
+orbits see from behind and lowest on the steepest slopes, which every orbit
+sees squeezed or not at all. A pixel with a low `QA-CQM` describes the ground
+more coarsely than its 20 m pixel size suggests.
+[Local resolution weighting](resolution-weighting.qmd) explains both layers.
 
 ```{python}
 #| echo: false
