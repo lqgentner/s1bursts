@@ -933,6 +933,10 @@ class GeocodingConfig(BaseModel):
     dem_name
         Identification written to product metadata for an external DEM. Ignored
         for SNAP's built-in DEMs, whose ``dem`` value is already their name.
+        Set it for an external DEM: without it the products record the DEM as
+        unknown, so a rerun cannot tell whether an existing product was made
+        with the same DEM and skips it unchecked, with a warning. Name each
+        DEM differently, such as by its source and version.
     img_resampling
         Resampling of the image during terrain correction.
     dem_resampling

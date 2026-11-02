@@ -1,6 +1,6 @@
 """Exception hierarchy for the Sentinel-1 pipeline.
 
-The types here separate four kinds of failure, so that batch loops catch only
+The types here separate five kinds of failure, so that batch loops catch only
 the ones worth recording per item and let the rest abort the run, and callers
 can still fail on a batch that finished with failures:
 
@@ -23,6 +23,11 @@ can still fail on a batch that finished with failures:
   next cell may still succeed. A loop over cells catches this base class; an
   invalid argument to ``compose_*`` stays a plain ``ValueError`` and is not
   caught by it.
+- ``ProductSettingsMismatchError`` says that a product to be skipped exists
+  but was made with other settings than requested. Changed settings affect
+  every product of a call, so it stops a batch like an environment-wide
+  failure, and it is not a ``CompositeError``, so a loop over cells does not
+  pass over it.
 
 Every other ``S1BurstsError`` fails the whole call that raised it, as does
 anything that is not one (a plain ``ValueError`` for an invalid argument, a
@@ -43,6 +48,11 @@ import os
 from typing import TYPE_CHECKING, Any, Self
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from pathlib import Path
+
+    from upath import UPath
+
     from s1bursts.summary import ErrorResult, OperationSummary
 
 
@@ -241,6 +251,45 @@ class InconsistentInputsError(CompositeError, ValueError):
 
 class CompositeInputError(CompositeError, OSError):
     """An input product of a cell is missing or cannot be read."""
+
+
+class ProductSettingsMismatchError(S1BurstsError):
+    """An existing product was made with other settings than requested.
+
+    Raised instead of skipping the product when ``overwrite=False``: by
+    ``BurstProcessor.create_*`` and ``SNAPClient.create_*`` for a per-burst
+    product, and by ``ResolutionWeighter.compose_*`` for a composite. Pass
+    ``overwrite=True`` to replace the product, or give the other settings their
+    own ``FileManager`` directories to keep both.
+
+    Parameters
+    ----------
+    *args
+        The message, as for any exception.
+    path
+        The existing file whose settings differ.
+    differences
+        The differing settings, as for the attribute.
+
+    Attributes
+    ----------
+    path
+        The existing file whose settings differ.
+    differences
+        Each differing setting, keyed by the tag or grid property compared,
+        such as ``"GRID_SPACING"`` or ``"TRANSFORM"``, mapped to its recorded
+        and its requested value. ``None`` stands for a tag that is absent.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        path: Path | UPath | None = None,
+        differences: Mapping[str, tuple[str | None, str | None]] | None = None,
+    ) -> None:
+        super().__init__(*args)
+        self.path = path
+        self.differences = dict(differences or {})
 
 
 class TooManyResultsError(S1BurstsError):

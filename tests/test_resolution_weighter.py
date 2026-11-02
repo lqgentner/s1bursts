@@ -23,6 +23,7 @@ from s1bursts.errors import (
     CompositeInputError,
     EmptyCompositeError,
     InconsistentInputsError,
+    ProductSettingsMismatchError,
 )
 from s1bursts.filemanager import FileManager
 from s1bursts.product import (
@@ -1338,11 +1339,29 @@ class TestComposeRtcLrw:
             _write_raster(scene.manager.get_product_path(product), [_full(3.0), _full(1.0)])
         composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
         path = scene.manager.get_product_path(composite)
+        written = path.read_bytes()
+        # A skip reads no input.
+        for product in products:
+            scene.manager.get_product_path(product).unlink()
+
+        assert scene.weighter.compose_rtc_lrw(products, scene.geobox) == composite
+
+        assert path.read_bytes() == written
+
+    def test_an_unreadable_existing_composite_raises(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13")]
+        _write_raster(scene.manager.get_product_path(products[0]), [_full(3.0), _full(1.0)])
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        path = scene.manager.get_product_path(composite)
         path.write_bytes(b"sentinel: not a raster")
 
-        scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        # Previously skipped by its name, which said nothing about its content.
+        with pytest.raises(OSError, match="not recognized") as excinfo:
+            scene.weighter.compose_rtc_lrw(products, scene.geobox)
 
-        assert path.read_bytes() == b"sentinel: not a raster"
+        assert str(path) in excinfo.value.__notes__[0]
+        assert "overwrite=True" in excinfo.value.__notes__[0]
+        assert not isinstance(excinfo.value, CompositeError)
 
     def test_overwrite_replaces_an_existing_composite(self, scene: _Scene) -> None:
         products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
@@ -1524,14 +1543,17 @@ class TestComposeCohLrw:
         _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
         _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(4.0)])
         composite = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, write_qa=True)
-        for layer in composite.layers:
-            scene.manager.get_product_path(composite, layer).write_bytes(b"kept")
+        paths = [scene.manager.get_product_path(composite, layer) for layer in composite.layers]
+        written = [path.read_bytes() for path in paths]
+        # Their settings match, so the skip reads neither input.
+        scene.manager.get_product_path(coh).unlink()
 
-        again = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, write_qa=True)
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")
+            again = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, write_qa=True)
 
         assert again == composite
-        for layer in composite.layers:
-            assert scene.manager.get_product_path(composite, layer).read_bytes() == b"kept"
+        assert [path.read_bytes() for path in paths] == written
 
     def test_writes_the_requested_qa_layers(self, scene: _Scene) -> None:
         coh = _coh("2022-08-01", "2022-08-13")
@@ -1750,11 +1772,12 @@ class TestComposeByPass:
         _write_raster(scene.manager.get_product_path(product), [_full(7.0), _full(1.0)])
         first = scene.weighter.compose_rtc_by_pass([product], scene.geobox)
         path = scene.manager.get_product_path(first[product.pass_direction])
-        path.write_bytes(b"kept")
+        written = path.read_bytes()
+        scene.manager.get_product_path(product).unlink()
 
-        scene.weighter.compose_rtc_by_pass([product], scene.geobox)
+        assert scene.weighter.compose_rtc_by_pass([product], scene.geobox) == first
 
-        assert path.read_bytes() == b"kept"
+        assert path.read_bytes() == written
 
     def test_skips_a_coherence_pass_composite_only_once_every_layer_exists(
         self, scene: _Scene
@@ -1773,9 +1796,10 @@ class TestComposeByPass:
         with rasterio.open(path) as src:
             assert src.read(1) == pytest.approx(_full(0.4))
         assert scene.manager.product_exists(again, Layer.QA_NUM)
-        scene.manager.get_product_path(again, Layer.QA_NUM).write_bytes(b"kept")
+        qa_num = scene.manager.get_product_path(again, Layer.QA_NUM)
+        written = qa_num.read_bytes()
         scene.weighter.compose_coherence_by_pass([product], scene.geobox, write_qa=True)
-        assert scene.manager.get_product_path(again, Layer.QA_NUM).read_bytes() == b"kept"
+        assert qa_num.read_bytes() == written
 
 
 def _gtc(date: str, orbit: int = 15, burst_id: int = _ASCENDING_BURST) -> GTCProduct:
@@ -1911,16 +1935,19 @@ class TestCompositeTags:
     def test_every_composite_defaults_to_the_mean(self, method: Any) -> None:
         assert inspect.signature(method).parameters["aggregation"].default == "mean"
 
-    def test_decibel_composite_says_so_in_the_file(self, scene: _Scene) -> None:
+    def test_a_composite_is_written_in_linear_power(self, scene: _Scene) -> None:
         products = [_rtc("2022-08-13")]
         _write_raster(scene.manager.get_product_path(products[0]), [_full(2.0), _full(4.0)])
 
-        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox, decibel=True)
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
-            assert "BACKSCATTER_CONVENTION" not in src.tags()
-            assert src.tags()["BACKSCATTER_SCALING"] == "decibel"
-            assert src.units == ("dB",)
+            assert src.read(1) == pytest.approx(_full(2.0))
+            assert src.tags()["BACKSCATTER_CONVENTION"] == "Power"
+            assert "BACKSCATTER_SCALING" not in src.tags()
+            assert src.units == ("linear power",)
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_CQM)) as src:
+            assert "CQM_SCALING" not in src.tags()
 
     def test_qa_layers_carry_their_own_vocabulary(self, scene: _Scene) -> None:
         products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
@@ -1939,23 +1966,6 @@ class TestCompositeTags:
         with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_CQM)) as src:
             assert src.tags()["QA_LAYER"] == "Composite Quality Map Image"
             assert src.tags()["CQM_CONVERSION_EQ"] == "dB = 10*log10(DN)"
-
-    def test_cqm_in_decibels_is_tagged_as_converted(self, scene: _Scene) -> None:
-        products = [_rtc("2022-08-13")]
-        _write_raster(scene.manager.get_product_path(products[0]), [_full(2.0), _full(4.0)])
-
-        composite = scene.weighter.compose_rtc_lrw(
-            products,
-            scene.geobox,
-            write_qa=True,
-            cqm_decibel=True,
-        )
-
-        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_CQM)) as src:
-            assert src.tags()["CQM_SCALING"] == "decibel"
-            assert "CQM_CONVERSION_EQ" not in src.tags()
-        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_NUM)) as src:
-            assert "CQM_SCALING" not in src.tags()
 
     def test_coherence_composite_inherits_the_estimation_window(self, scene: _Scene) -> None:
         """The window exists only in ``CoherenceConfig``; the input files are its only route."""
@@ -2479,3 +2489,199 @@ class TestComposeTimeRange:
                 else ("2020-01-09", "2020-01-27")
             )
             assert (first, last) == expected, key
+
+
+class TestSkipChecksTheSettings:
+    """An existing composite is skipped only when its recorded settings match the call."""
+
+    @pytest.fixture
+    def products(self, scene: _Scene) -> list[RTCProduct]:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(scene.manager.get_product_path(product), [_full(3.0), _full(1.0)])
+        return products
+
+    def test_other_compositing_parameters_raise(
+        self, scene: _Scene, products: list[RTCProduct]
+    ) -> None:
+        # Previously returned the composite made with the median, unchanged.
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox, aggregation="median")
+
+        with pytest.raises(ProductSettingsMismatchError) as excinfo:
+            scene.weighter.compose_rtc_lrw(products, scene.geobox)
+
+        assert excinfo.value.path == scene.manager.get_product_path(composite)
+        assert excinfo.value.differences == {
+            "COMPOSITING_PARAMETERS": (
+                "aggregation=median;clip_max_resolution=none",
+                "aggregation=mean;clip_max_resolution=none",
+            )
+        }
+        assert "overwrite=True" in str(excinfo.value)
+        assert not isinstance(excinfo.value, CompositeError | ValueError | OSError)
+
+    def test_a_clip_is_compared_too(self, scene: _Scene, products: list[RTCProduct]) -> None:
+        scene.weighter.compose_rtc_lrw(products, scene.geobox, clip_max_resolution=2.0)
+
+        with pytest.raises(ProductSettingsMismatchError, match="clip_max_resolution=2"):
+            scene.weighter.compose_rtc_lrw(products, scene.geobox, clip_max_resolution=3.0)
+
+    def test_another_grid_raises_before_any_input_is_read(
+        self, scene: _Scene, products: list[RTCProduct]
+    ) -> None:
+        scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        for product in products:
+            scene.manager.get_product_path(product).unlink()
+        finer = MGRSGeoBox(
+            _MGRS_CODE,
+            (2 * _TILE, 2 * _TILE),
+            Affine(5.0, 0.0, 400000.0, 0.0, -5.0, 5200000.0),
+            _UTM32,
+        )
+
+        with pytest.raises(ProductSettingsMismatchError) as excinfo:
+            scene.weighter.compose_rtc_lrw(products, finer)
+
+        assert set(excinfo.value.differences) == {"TRANSFORM", "SHAPE"}
+        assert excinfo.value.differences["SHAPE"] == ("8x8", "16x16")
+
+    def test_another_crs_raises(self, scene: _Scene, products: list[RTCProduct]) -> None:
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        path = scene.manager.get_product_path(composite)
+        with rasterio.open(path, "r+", IGNORE_COG_LAYOUT_BREAK="YES") as dst:
+            dst.crs = CRS.from_epsg(32633)
+
+        with pytest.raises(ProductSettingsMismatchError) as excinfo:
+            scene.weighter.compose_rtc_lrw(products, scene.geobox)
+
+        assert set(excinfo.value.differences) == {"CRS"}
+
+    def test_every_requested_layer_is_checked(
+        self, scene: _Scene, products: list[RTCProduct]
+    ) -> None:
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
+        cqm = scene.manager.get_product_path(composite, Layer.QA_CQM)
+        with rasterio.open(cqm, "r+", IGNORE_COG_LAYOUT_BREAK="YES") as dst:
+            dst.update_tags(CQM_SCALING="decibel")
+
+        # Without the QA layers requested, the CQM file is not looked at.
+        scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        with pytest.raises(ProductSettingsMismatchError) as excinfo:
+            scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
+
+        assert excinfo.value.path == cqm
+        assert excinfo.value.differences == {"CQM_SCALING": ("decibel", None)}
+
+    def test_a_composite_in_decibels_raises(
+        self, scene: _Scene, products: list[RTCProduct]
+    ) -> None:
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        with rasterio.open(
+            scene.manager.get_product_path(composite), "r+", IGNORE_COG_LAYOUT_BREAK="YES"
+        ) as dst:
+            dst.update_tags(BACKSCATTER_SCALING="decibel")
+
+        with pytest.raises(ProductSettingsMismatchError, match="BACKSCATTER_SCALING"):
+            scene.weighter.compose_rtc_lrw(products, scene.geobox)
+
+    def test_a_composite_without_tags_is_skipped_with_one_warning(
+        self, scene: _Scene, products: list[RTCProduct]
+    ) -> None:
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
+        for layer in composite.layers:
+            # As written before s1bursts 0.3.0.
+            _write_raster(scene.manager.get_product_path(composite, layer), [_full(5.0)])
+
+        with pytest.warns(UserWarning, match="Skipped 1 existing product") as record:
+            scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
+
+        assert len(record) == 1
+        # A composite has no DEM of its own to name.
+        assert "dem_name" not in str(record[0].message)
+
+    def test_pass_composites_warn_once_per_call(
+        self, scene: _Scene, products: list[RTCProduct]
+    ) -> None:
+        descending = _rtc("2022-08-14", burst_id=_DESCENDING_BURST)
+        _write_raster(scene.manager.get_product_path(descending), [_full(2.0), _full(1.0)])
+        everything = [*products, descending]
+        composites = scene.weighter.compose_rtc_by_pass(everything, scene.geobox)
+        for composite in composites.values():
+            _write_raster(scene.manager.get_product_path(composite), [_full(5.0)])
+
+        with pytest.warns(UserWarning, match="Skipped 2 existing product") as record:
+            scene.weighter.compose_rtc_by_pass(everything, scene.geobox)
+
+        assert len(record) == 1
+
+    def test_pass_composites_compare_the_aggregation(self, scene: _Scene) -> None:
+        gtc = _gtc("2022-08-13")
+        _write_raster(scene.manager.get_product_path(gtc), [_full(2.0)])
+        scene.weighter.compose_gtc_by_pass([gtc], scene.geobox)
+
+        with pytest.raises(ProductSettingsMismatchError, match="aggregation=median"):
+            scene.weighter.compose_gtc_by_pass([gtc], scene.geobox, aggregation="median")
+
+    def test_the_inherited_dem_is_not_compared(
+        self, scene: _Scene, products: list[RTCProduct]
+    ) -> None:
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        with rasterio.open(
+            scene.manager.get_product_path(composite), "r+", IGNORE_COG_LAYOUT_BREAK="YES"
+        ) as dst:
+            dst.update_tags(DEM="Some other DEM")
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")
+            assert scene.weighter.compose_rtc_lrw(products, scene.geobox) == composite
+
+    def test_a_coherence_lrw_composite_with_other_settings_raises(self, scene: _Scene) -> None:
+        coh, rtc = _coh("2022-08-01", "2022-08-13"), _rtc("2022-08-01")
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(4.0)])
+        scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, clip_max_resolution=2.0)
+
+        with pytest.raises(ProductSettingsMismatchError, match="COMPOSITING_PARAMETERS"):
+            scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox)
+
+    def test_a_coherence_pass_composite_with_other_settings_raises(self, scene: _Scene) -> None:
+        coh = _coh("2022-08-01", "2022-08-13")
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)])
+        scene.weighter.compose_coherence_by_pass([coh], scene.geobox)
+
+        with pytest.raises(ProductSettingsMismatchError, match="aggregation=median"):
+            scene.weighter.compose_coherence_by_pass([coh], scene.geobox, aggregation="median")
+
+    def test_every_pass_direction_is_checked_before_any_is_written(self, scene: _Scene) -> None:
+        ascending = _rtc("2022-08-13")
+        descending = _rtc("2022-08-14", burst_id=_DESCENDING_BURST)
+        for product in (ascending, descending):
+            _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(1.0)])
+        composites = scene.weighter.compose_rtc_by_pass([ascending, descending], scene.geobox)
+        rebuilt = scene.manager.get_product_path(composites["Ascending"])
+        rebuilt.unlink()
+        with rasterio.open(
+            scene.manager.get_product_path(composites["Descending"]),
+            "r+",
+            IGNORE_COG_LAYOUT_BREAK="YES",
+        ) as dst:
+            dst.update_tags(COMPOSITING_PARAMETERS="aggregation=median")
+
+        with pytest.raises(ProductSettingsMismatchError):
+            scene.weighter.compose_rtc_by_pass([ascending, descending], scene.geobox)
+
+        # Previously the ascending composite was written before the descending one was checked.
+        assert not rebuilt.exists()
+
+    def test_directions_stay_in_sorted_order(self, scene: _Scene) -> None:
+        ascending = _rtc("2022-08-13")
+        descending = _rtc("2022-08-14", burst_id=_DESCENDING_BURST)
+        for product in (ascending, descending):
+            _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(1.0)])
+        composites = scene.weighter.compose_rtc_by_pass([ascending, descending], scene.geobox)
+        scene.manager.get_product_path(composites["Ascending"]).unlink()
+
+        again = scene.weighter.compose_rtc_by_pass([ascending, descending], scene.geobox)
+
+        # The existing descending composite is checked first, but listed second.
+        assert list(again) == ["Ascending", "Descending"]

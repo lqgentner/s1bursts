@@ -439,6 +439,77 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   coh = fm.find(CoherenceProduct, baseline_days=12, pass_direction="Ascending")
   lrw = fm.find(CohLRWComposite, mgrs_code="32TMT64", baseline_days=12)
   ```
+- **Breaking:** composites are always written in linear units. The
+  `decibel` argument of `compose_rtc_lrw()`, `compose_rtc_by_pass()` and
+  `compose_gtc_by_pass()` and the `cqm_decibel` argument of
+  `compose_rtc_lrw()` and `compose_coherence_lrw()` are removed, as are the
+  same parameters of `product_tags.rtc_lrw_metadata()`,
+  `rtc_pass_metadata()`, `gtc_pass_metadata()` and `qa_metadata()`. Convert
+  after reading instead; the `BACKSCATTER_CONVERSION_EQ` and
+  `CQM_CONVERSION_EQ` tags state the equation. A composite written in decibels
+  by an earlier version counts as made with other settings, see below.
+
+  ```python
+  # before
+  comp = weighter.compose_rtc_lrw(rtc, cell, decibel=True, write_qa=True, cqm_decibel=True)
+  # after
+  comp = weighter.compose_rtc_lrw(rtc, cell, write_qa=True)
+  with rasterio.open(fm.get_product_path(comp)) as src:
+      power = src.read(1)
+  gamma0_db = 10 * np.log10(np.where(power > 0, power, np.nan))  # NaN where not positive, as before
+  # likewise 10 * np.log10(cqm) for the QA-CQM layer
+  ```
+- **Breaking:** an existing product is skipped only if it records the
+  requested settings. With `overwrite=False`, `BurstProcessor.create_*`,
+  `SNAPClient.create_*` and every `ResolutionWeighter.compose_*` method
+  returned an existing file by its name alone, and names carry no settings:
+  change `grid_spacing`, `multilook`, the DEM, the coherence `window`, the
+  `geobox` grid, `aggregation` or `clip_max_resolution`, rerun, and the old
+  products came back as skipped. Such a rerun now raises the new
+  `s1bursts.errors.ProductSettingsMismatchError`, naming each differing
+  setting with its recorded and requested value; the error carries the file as
+  `path` and the settings as `differences`.
+  - Per-burst products compare their `GRID_SPACING`, `DEM`, `MULTILOOK_*`,
+    `COHERENCE_WINDOW_*` and interferogram `*_PHASE_REMOVED` tags; composites
+    their grid (CRS, transform and shape) and `COMPOSITING_PARAMETERS`, in
+    every requested layer, and refuse a layer stored in decibels. A composite
+    is still skipped before any input is read, so what it inherits from its
+    inputs, such as their DEM, is not compared.
+  - The error is directly an `S1BurstsError`, not a `CompositeError`, so a
+    loop over cells does not pass over it. `BurstProcessor.create_*` check
+    every existing product before submitting any work, so it is raised before
+    any GPT run, also with `continue_on_error=True`, and the pass composites
+    check every direction before building any.
+  - An existing file that cannot be read raises its read error, with a note
+    naming the file and that `overwrite=True` rebuilds it, instead of being
+    skipped.
+  - A product whose settings are not recorded is skipped as before: one
+    written before s1bursts 0.3.0, and a per-burst product whose DEM is
+    external without `dem_name`, on either side. Set
+    `GeocodingConfig.dem_name` for an external DEM so that it can be
+    compared. A product made by another SNAP version than the running one is
+    skipped too, since SNAP 13 and 14 outputs should not be mixed in one time
+    series.
+  - Such a skip is recorded in the new `OkResult` fields `unchecked`
+    (`"untagged"` or `"unknown_dem"`) and `other_snap_version`, counted in
+    the new `OperationSummary` fields `n_unchecked` and
+    `n_other_snap_version`, which `print_summary()` shows, and logged by
+    `SNAPClient.create_*`. `BurstProcessor.create_*` warn once per call for
+    each kind, and `ResolutionWeighter.compose_*` once per call for unchecked
+    composites.
+  - Composites written by 0.7.0 with its default `aggregation="median"`
+    record it, so rerunning them with the new default, the mean, raises. Pass
+    `aggregation="median"` to keep them, or `overwrite=True` to rebuild them.
+
+  ```python
+  # before: the 20 m products came back as skipped
+  processor.create_backscatter(bursts, crs=crs, config=RTCConfig(grid_spacing=10.0))
+  # after: raises ProductSettingsMismatchError: '...tif' exists but was made with other
+  # settings: GRID_SPACING (grid_spacing): recorded '20 m', requested '10 m'. ...
+  processor.create_backscatter(bursts, crs=crs, config=RTCConfig(grid_spacing=10.0), overwrite=True)
+  # or keep both, each in its own directory
+  fm_10m = FileManager("data", prod_dir="data/s1-prod-10m")
+  ```
 - `pyarrow>=17` is a direct dependency, to recognise a corrupt burst-ID map.
   freezebase already required it, so nothing new is installed.
 - The default `SNAP_MAX_RAM_GB` is 8 GB instead of 4 GB to leave more heap for

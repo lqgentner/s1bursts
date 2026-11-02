@@ -150,6 +150,28 @@ class TestOperationSummary:
         summary.print_summary(console=console)
 
         assert "Failed Items:" not in buffer.getvalue()
+        assert "unchecked" not in buffer.getvalue()
+
+    def test_skips_that_could_not_be_confirmed_are_counted_and_shown(self) -> None:
+        buffer = io.StringIO()
+        console = Console(file=buffer, force_jupyter=False, width=120)
+        summary = OperationSummary.from_results(
+            [
+                OkResult(source="a", result="a", skipped=True, unchecked="untagged"),
+                OkResult(source="b", result="b", skipped=True, unchecked="unknown_dem"),
+                OkResult(source="c", result="c", skipped=True, other_snap_version="13.0.0"),
+                OkResult(source="d", result="d", skipped=True),
+            ],
+            start_time=0.0,
+            end_time=1.0,
+        )
+
+        summary.print_summary(console=console)
+
+        assert (summary.n_skipped, summary.n_unchecked, summary.n_other_snap_version) == (4, 2, 1)
+        output = buffer.getvalue()
+        assert "settings unchecked" in output
+        assert "other SNAP version" in output
 
 
 def summary_of(*errors: Exception) -> OperationSummary[str]:
