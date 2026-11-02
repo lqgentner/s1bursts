@@ -16,6 +16,7 @@ import pytest
 import rasterio
 import rasterio.transform
 import shapely
+from upath import UPath
 
 from s1bursts import product_tags
 from s1bursts.burst import Burst, BurstPair
@@ -35,8 +36,6 @@ from tests.gated_pool import Gate
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-    from upath import UPath
 
 
 @pytest.fixture
@@ -689,3 +688,45 @@ class TestSkipSettings:
         assert excinfo.value.__notes__ == [
             "Stopped with 0 of 2 items finished; products already written are kept."
         ]
+
+
+class TestUnreadableSlc:
+    """A SNAP read failure reaches the summary with the SLC's own location."""
+
+    @pytest.fixture
+    def failing_gpt(self, config: SNAPConfig) -> SNAPConfig:
+        """Make the stub gpt fail as SNAP 14 does on a truncated source zip."""
+        script = (
+            "#!/bin/sh\n"
+            'for arg in "$@"; do case "$arg" in -Ssource=*) src="${arg#-Ssource=}";; esac; done\n'
+            'echo "Error: [NodeId: ReadOp@source] '
+            "No product reader found for file '$src'.\" >&2\n"
+            "exit 1\n"
+        )
+        config.resolved_gpt_path.write_text(script)
+        return config
+
+    @pytest.mark.parametrize("remote", [False, True], ids=["local", "remote"])
+    def test_the_hint_names_where_the_slc_is_kept(
+        self,
+        tmp_path: Path,
+        failing_gpt: SNAPConfig,
+        remote: bool,
+    ) -> None:
+        """A remote SLC is read from a staged copy, which is gone once the error is read."""
+        slc_dir = UPath(f"memory://{tmp_path.name}/slc") if remote else tmp_path / "slc"
+        manager = FileManager(tmp_path / "data", slc_dir=slc_dir)
+        burst = _burst("2022-01-05")
+        slc = manager.get_slc_path(burst)
+        slc.parent.mkdir(parents=True, exist_ok=True)
+        slc.write_bytes(b"PK truncated")
+        processor = BurstProcessor(manager, failing_gpt, show_progress=False)
+
+        summary = processor.create_backscatter([burst], crs="EPSG:32632")
+
+        [failure] = summary.failed_items
+        assert isinstance(failure, ErrorResult)
+        assert str(failure.error).endswith(
+            f"\nThe input SLC '{slc}' may be truncated or corrupt: "
+            "delete it and download it again."
+        )

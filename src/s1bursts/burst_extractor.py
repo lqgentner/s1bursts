@@ -27,15 +27,19 @@ The following properties of CDSE burst products are retained:
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+import glob
 import logging
 from operator import itemgetter
+import os
 from pathlib import Path
+from secrets import token_hex
 import shutil
 import tempfile
+import time
 from typing import TYPE_CHECKING
 import warnings
 
@@ -567,6 +571,35 @@ def _zip_safe_dir(safe_dir: Path) -> Path:
     return Path(f"{zip_stem}.zip")
 
 
+# Age after which a staged SLC counts as left behind by a killed run. A copy in
+# progress keeps its mtime fresh, so another run's download is never removed.
+_STALE_STAGED_SLC_AGE_S = 3600
+
+
+def _move_into_place(src: Path, dst: Path) -> None:
+    """Move ``src`` to ``dst`` so that ``dst`` never holds a partial file."""
+    # Across file systems a move is a copy, which a kill or a full disk can cut
+    # short. The staging name is hidden and lacks the .zip suffix, so FileManager
+    # never takes it for an SLC.
+    staged = dst.with_name(f".{dst.name}.{token_hex(8)}.tmp")
+    # A run killed before it could clean up leaves its staged file behind.
+    now = time.time()
+    for stale in dst.parent.glob(f".{glob.escape(dst.name)}.{'[0-9a-f]' * 16}.tmp"):
+        # Renamed into place or removed by its own run since the listing.
+        with suppress(FileNotFoundError):
+            if now - stale.stat().st_mtime > _STALE_STAGED_SLC_AGE_S:
+                stale.unlink()
+    try:
+        shutil.move(src, staged)
+        # Flushed before the rename, so a power loss cannot leave a short file at dst.
+        with staged.open("rb+") as f:
+            os.fsync(f.fileno())
+        staged.replace(dst)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+
+
 def extract_burst_from_s3(  # noqa: PLR0915
     save_path: str | Path | UPath,
     *,
@@ -729,9 +762,11 @@ def extract_burst_from_s3(  # noqa: PLR0915
         # Keep the ESA name inside the caller-named archive.
         save_upath.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(save_upath, Path):
-            shutil.move(zip_path, save_upath)
+            _move_into_place(zip_path, save_upath)
         else:
-            # One verified put: a refused or truncated upload raises here.
+            # One verified put: a refused or truncated upload raises here. An
+            # object store such as S3 creates the object only once the put or
+            # multipart upload completes; a file store such as sftp need not.
             upload_object(zip_path, save_upath)
 
     logger.info("Burst extracted to: %s", save_upath)
