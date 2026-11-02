@@ -1067,6 +1067,7 @@ class TestInterruptedODataDownload:
             polarization="VV",
             date=Timestamp("2016-07-24"),
             cdse_id="cdse-id",
+            _rel_orbit_number=66,
             _pass_direction="Ascending",
         )
         slc = manager.get_slc_path(burst)
