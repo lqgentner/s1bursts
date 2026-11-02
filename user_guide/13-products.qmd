@@ -20,7 +20,7 @@ descriptions:
 | RTC backscatter | `gamma0`, `scattering_area` | Linear power; area without units |
 | GTC backscatter | `beta0` | Linear power |
 | Coherence | `coherence` | Magnitude, 0 to 1, without units |
-| Interferogram | `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` | Uncalibrated |
+| Interferogram | `ifg_real`, `ifg_imag`, `intensity_primary`, `intensity_secondary` | Uncalibrated; intensities in linear power |
 
 Backscatter is stored as linear power, not decibels, in products and
 composites alike. Convert with
@@ -37,7 +37,7 @@ the brightness of each acquisition.
 
 A composite holds one band, the quantity of its inputs: gamma-0, beta-0 or
 coherence, in the same units. Its band description is the polarization, such
-as `VV`.
+as `VV`; the bands of the quality layers are named `num_obs` and `cqm`.
 
 With `write_qa=True`, each quality layer of a composite is written to a file of
 its own:
@@ -55,8 +55,8 @@ explains both.
 Pixels without data are `NaN`, for example outside the burst. Keep them
 missing in statistics and plots rather than replacing them with zero. The one
 exception is the number of observations, an integer layer that marks pixels
-without data as 0. Rasterio returns them masked with
-`src.read(1, masked=True)`.
+without data as 0. Both are declared as the file's no-data value, so
+`src.read(1, masked=True)` masks them.
 
 ## Metadata tags
 
@@ -68,7 +68,7 @@ and the SNAP and s1bursts versions:
 import rasterio
 
 with rasterio.open(fm.get_product_path(product)) as src:
-    print(src.descriptions)
+    print(src.descriptions, src.units)
     print(src.tags())
 ```
 
@@ -110,7 +110,7 @@ has none. The fields are:
 | `<baseline>` | Days between the acquisitions of a pair, two digits | `12` |
 | `<zone>` | UTM zone of the product's CRS | `32N` |
 | `<square>` | MGRS grid square | `32TLS40` |
-| `<start>`, `<end>` | First and last day of the composite's period | `20250801`, `20250831` |
+| `<start>`, `<end>` | First and last day of the `time_range`, or of the acquisitions without one | `20250801`, `20250831` |
 | `<qa>` | Quality layer: `QA-NUM` or `QA-CQM` | `QA-CQM` |
 
 The RTC product of the [Quickstart](quickstart.qmd), burst 30346 in sub-swath

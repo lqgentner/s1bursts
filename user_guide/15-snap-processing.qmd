@@ -14,18 +14,18 @@ SNAP problems s1bursts corrects, and how the supported SNAP versions differ.
 Each product runs through a fixed chain of SNAP operators, called a processing
 graph. s1bursts builds the graph from the product's settings object, so the
 settings decide which steps run and with which parameters. The RTC backscatter
-graph has eight steps:
+graph has eight steps with the default settings:
 
-| Step | What it does | Setting |
+| Step | What it does | Settings |
 |---|---|---|
 | `Apply-Orbit-File` | Replaces the predicted satellite orbit with the precise one | |
 | `ThermalNoiseRemoval` | Removes the instrument's own noise | |
-| `Calibration` | Converts the raw values to radar brightness | |
+| `Calibration` | Converts the raw values to beta-0 radar brightness | |
 | `TOPSAR-Deburst` | Joins the burst into one seamless image | |
-| `Multilook` | Averages neighboring pixels to reduce noise and runtime | `multilook` |
+| `Multilook` | Averages neighboring pixels to reduce noise and runtime | `multilook`; `None` skips it |
 | `Terrain-Flattening` | Corrects brightness for the slope of the terrain; RTC only | `dem_oversampling`, `additional_overlap`, DEM settings |
-| `ReplaceZerosWithNoData` | Marks the empty border of the burst as missing ([why](#corrections-s1bursts-applies)) | `replace_zeros_with_nan` |
-| `Terrain-Correction` | Places every pixel on the map, using the DEM | `grid_spacing`, `img_resampling`, `align_to_standard_grid`, `standard_grid_origin`, DEM settings |
+| `ReplaceZerosWithNoData` | Marks the empty border of the burst as missing ([why](#corrections-s1bursts-applies)) | `replace_zeros_with_nan`; `False` skips it |
+| `Terrain-Correction` | Places every pixel on the map, using the DEM | `grid_spacing`, `img_resampling`, `align_to_standard_grid`, DEM settings |
 
 The DEM settings are `dem`, `dem_resampling` and, for an
 [external DEM](external-dems.qmd), `external_dem_nodata` and
@@ -35,8 +35,10 @@ The GTC graph of `GTCConfig` is the same without `Terrain-Flattening`.
 Coherence compares two acquisitions, so its graph differs. Both acquisitions
 get precise orbits, then `Back-Geocoding` aligns the second onto the first
 pixel by pixel, using the DEM. `Coherence` estimates the similarity of the two
-within a moving window, set by `window`, and the last three steps match the
-backscatter graph. The interferogram graph replaces `Coherence` with
+within a moving window, set by `window`. `TOPSAR-Deburst`,
+`ReplaceZerosWithNoData` and `Terrain-Correction` then run as in the
+backscatter graph; the coherence graph has no noise removal, calibration or
+multilooking. The interferogram graph replaces `Coherence` with
 `Interferogram` and keeps the phase together with each acquisition's
 brightness.
 
@@ -92,7 +94,7 @@ The graph leaves two placeholders, `${source}` for the burst file and `${crs}`
 for the UTM zone. s1bursts fills them in for every burst it processes, which
 is why the UTM zone is passed to the `create_*` methods rather than stored in
 the settings. `CoherenceConfig` and `InterferogramConfig` return their graphs
-the same way.
+the same way, with `${primary}` and `${secondary}` in place of `${source}`.
 
 ### For your SNAP version
 
@@ -113,8 +115,8 @@ s1bursts works around four SNAP problems, so you do not need to:
 
 - **External DEMs are read half a pixel off**
   ([forum report](https://forum.step.esa.int/t/external-dem-is-sampled-half-a-pixel-off/46042)).
-  `prepare_dem_for_snap()` shifts the DEM to compensate, but only for SNAP
-  versions before the 14.0.2 update, which fixed it.
+  `prepare_dem_for_snap()` shifts the DEM to compensate, but only before the
+  14.0.2 update of SNAP's DEM module, which fixed it.
 - **DEM heights use the wrong sea-level model**
   ([forum report](https://forum.step.esa.int/t/copernicus-dem-built-in-path-applies-egm96-while-the-data-is-egm2008/46041)).
   SNAP knows only the EGM96 model, even for DEMs based on another.
@@ -124,10 +126,9 @@ s1bursts works around four SNAP problems, so you do not need to:
   prepare it as an external DEM with `source_crs="EPSG:4326+3855"`.
 - **Burst edges come out too dark**
   ([forum report](https://forum.step.esa.int/t/sentinel-1-slc-terrain-correction-operator-uses-zero-values-in-interpolation-instead-of-treating-them-as-no-data/45336)).
-  SNAP 13 mixes the empty border of the input into the edge pixels during
+  SNAP mixes the empty border of the input into the edge pixels during
   terrain correction, which leaves dark seams along the burst edges.
-  s1bursts marks that border as missing before terrain correction. SNAP 14
-  fixed the problem, so this matters only for SNAP 13.
+  s1bursts marks that border as missing before terrain correction.
 - **Areas without DEM coverage become zeros.** Where the DEM has no data, for
   example over the sea at the edge of a burst, SNAP can write zeros instead of
   missing values. s1bursts turns these into `NaN`.
@@ -143,7 +144,8 @@ every product's `PROCESSING_SOFTWARE_VERSION` tag.
 
 SNAP versions give slightly different results for the same burst, so a time
 series that switches version contains an artificial step. Between SNAP 13 and
-14, backscatter differs by about 0.05 dB and coherence by about 0.004.
+14, backscatter differs by a median of about 0.05 dB and coherence by about
+0.004 on average.
 :::
 
 SNAP 14 also adds two coherence options, exposed as

@@ -7,8 +7,8 @@ guide-section: "Background"
 
 Local resolution weighting (LRW) combines acquisitions pixel by pixel and gives
 more weight to the acquisitions that resolve the terrain more finely at that
-pixel. Small et al. (2022)[^small] introduced it for backscatter; s1bursts
-applies it to backscatter and coherence alike.
+pixel. s1bursts follows Small et al. (2022)[^small] and applies the method to
+backscatter and coherence alike.
 
 ## Why mountains need it
 
@@ -53,8 +53,9 @@ of neighboring bursts counts once.
 Close to radar shadow, $A_i$ approaches zero and $r_i$ grows without bound,
 although the simulated area is least reliable there. `clip_max_resolution`
 sets a cap $r_\text{max}$ and uses $\min(r_i, r_\text{max})$ in place of $r_i$
-in the weights, so that one acquisition cannot dominate such pixels. Without
-it, no cap is applied.
+in the weights, so that one acquisition cannot dominate such pixels. By
+default, no cap is applied. For scale, flat terrain has a local resolution of
+about 0.6 to 1.0.
 
 ## The quality layers
 
