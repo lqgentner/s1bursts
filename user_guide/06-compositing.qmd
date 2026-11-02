@@ -82,9 +82,9 @@ coherence_composite = weighter.compose_coherence_lrw(
 
 With `write_qa=True`, two quality layers are written beside an LRW composite:
 
-- `QA-NUM`, the number of observations: how many acquisitions contributed to
+- The number of observations (`QA-NUM`): how many acquisitions contributed to
   each pixel.
-- `QA-CQM`, the composite quality map: how fine the combined detail of each
+- The composite quality map (`QA-CQM`): how fine the combined detail of each
   pixel is.
 
 The composite lists them in its `layers`, and `get_product_path()` locates each
@@ -109,7 +109,7 @@ Three more methods keep ascending and descending orbits apart:
 
 They return a dictionary of composites keyed by pass direction, `"Ascending"`
 and `"Descending"`. They take a plain average without resolution weights, and
-their only quality layer is `QA-NUM`.
+their only quality layer is the number of observations.
 
 ## Choose how to combine
 

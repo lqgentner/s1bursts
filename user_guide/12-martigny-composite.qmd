@@ -25,15 +25,14 @@ load_dotenv(root / ".env")
 os.chdir(root / "cache/docs")
 ```
 
-## Find the grid squares and their bursts
+## Find the grid square and its bursts
 
-The area touches four 10 km squares of the MGRS grid, all in UTM zone 32
-North. The search covers the squares whole, as in
+The area lies in one 10 km square of the MGRS grid. The search covers the
+square whole, as in
 [From an area to composites](area-to-composites.qmd#find-the-bursts-of-every-square),
-and returns every VV burst of August 2025 that reaches them:
+and keeps the VV bursts of August 2025 that reach it:
 
 ```{python}
-import shapely
 from shapely.geometry import box
 from s1bursts import (
     BurstCatalog, BurstProcessor, FileManager, MGRSGrid, ResolutionWeighter,
@@ -42,13 +41,14 @@ from s1bursts import (
 
 fm = FileManager("data/martigny")
 catalog = BurstCatalog(fm)
-aoi = box(7.03, 46.06, 7.12, 46.14)
+aoi = box(7.01, 46.09, 7.055, 46.125)
 window = TimeRange("2025-08-01", "2025-08-31")
-squares = list(MGRSGrid(aoi, resolution=20))
-print(", ".join(square.mgrs_code for square in squares), {str(square.crs) for square in squares})
+(square,) = MGRSGrid(aoi, resolution=20)  # the area lies in one square
+print(square.mgrs_code, square.crs)
 
-search_area = shapely.union_all([box(*square.geographic_extent.boundingbox) for square in squares])
-bursts = catalog.search(SearchQuery(time_range=window, intersects=search_area, polarization="VV"))
+search_area = box(*square.geographic_extent.boundingbox)
+found = catalog.search(SearchQuery(time_range=window, intersects=search_area, polarization="VV"))
+bursts = found.intersecting(square)
 
 bursts.df.groupby(["pass_direction", "rel_orbit_number"]).agg(
     acquisitions=("date", lambda dates: dates.dt.date.nunique()),
@@ -58,38 +58,36 @@ bursts.df.groupby(["pass_direction", "rel_orbit_number"]).agg(
 )
 ```
 
-One ascending and two descending orbits cover the squares, each imaged five
-times in August, with 50 bursts in total.
+One ascending and two descending orbits cover the square, each imaged five
+times in August, with 35 bursts in total.
 
 ## Process the bursts
 
-The squares share one zone, so all bursts are processed in one batch in that
-zone, at the 20 m pixel size of the composites:
+The bursts are processed in the UTM zone of the square, at the 20 m pixel size
+of the composites:
 
 ```{python}
 #| output: false
 catalog.download(bursts).raise_on_failure()
 processor = BurstProcessor(fm)
 rtc = processor.create_backscatter(
-    bursts, crs=squares[0].crs, config=RTCConfig(grid_spacing=20),
+    bursts, crs=square.crs, config=RTCConfig(grid_spacing=20),
 ).raise_on_failure().products
 ```
 
-## Compose every square
+## Compose the square
 
-Each square is composed twice: once per pass direction with
+The square is composed twice: once per pass direction with
 `compose_rtc_by_pass()`, and once across both directions with
-`compose_rtc_lrw()`, which also writes the quality layers.
+`compose_rtc_lrw()`, which also writes the quality layers. For an area of
+several squares,
+[From an area to composites](area-to-composites.qmd#compose-each-square) loops
+over them.
 
 ```{python}
 weighter = ResolutionWeighter(fm)
-lrw, by_pass = [], []
-for square in squares:
-    footprints = {(b.burst_id, b.sub_swath) for b in bursts.intersecting(square)}
-    square_rtc = [p for p in rtc if (p.burst_id, p.sub_swath) in footprints]
-    lrw.append(weighter.compose_rtc_lrw(square_rtc, square, write_qa=True, time_range=window))
-    by_pass.append(weighter.compose_rtc_by_pass(square_rtc, square, time_range=window))
-    print(f"{square.mgrs_code}: {len(square_rtc)} bursts")
+lrw = weighter.compose_rtc_lrw(rtc, square, write_qa=True, time_range=window)
+by_pass = weighter.compose_rtc_by_pass(rtc, square, time_range=window)
 ```
 
 ## Compare the viewing directions
@@ -103,36 +101,29 @@ steep that it lies in radar shadow, where that direction has no value.
 #| fig-cap: "Backscatter composites of August 2025 in a 4 by 4 km window west of Martigny: the five ascending acquisitions (left), the ten descending acquisitions (middle), and all fifteen combined with LRW (right). White marks radar shadow, where a composite has no value."
 import matplotlib.pyplot as plt
 import numpy as np
-from rasterio.merge import merge
+import rasterio
 from s1bursts.product import Layer
 
 
-def mosaic(composites, layer=Layer.MEASUREMENT):
-    """Join the squares of one layer; return the data and its transform."""
-    data, transform = merge([fm.get_product_path(c, layer) for c in composites])
-    return data[0].astype("float32"), transform
+def read(composite, layer=Layer.MEASUREMENT):
+    """Read one layer of a composite, with its extent in kilometers for imshow."""
+    with rasterio.open(fm.get_product_path(composite, layer)) as src:
+        left, bottom, right, top = (v / 1000 for v in src.bounds)
+        return src.read(1).astype("float32"), [left, right, bottom, top]
 
 
-def km_extent(data, transform):
-    """Return the extent of a mosaic in kilometers, for imshow."""
-    rows, cols = data.shape
-    left, top = transform.c, transform.f
-    return [v / 1000 for v in (left, left + transform.a * cols, top + transform.e * rows, top)]
-
-
-view = (346.5, 350.5, 5106, 5110)  # easting and northing in km, UTM zone 32N
+view = (346, 350, 5106, 5110)  # easting and northing in km, UTM zone 32N
 composites = {
-    "Ascending": mosaic([c["Ascending"] for c in by_pass]),
-    "Descending": mosaic([c["Descending"] for c in by_pass]),
-    "LRW": mosaic(lrw),
+    "Ascending": read(by_pass["Ascending"]),
+    "Descending": read(by_pass["Descending"]),
+    "LRW": read(lrw),
 }
 viridis = plt.get_cmap("viridis").copy()
 viridis.set_bad("white")  # pixels without a value: radar shadow
 
 fig, axes = plt.subplots(1, 3, figsize=(7.6, 3.2), sharey=True, layout="constrained")
-for ax, (name, (data, transform)) in zip(axes, composites.items()):
-    image = ax.imshow(10 * np.log10(data), extent=km_extent(data, transform),
-                      cmap=viridis, vmin=-15, vmax=0)
+for ax, (name, (data, extent)) in zip(axes, composites.items()):
+    image = ax.imshow(10 * np.log10(data), extent=extent, cmap=viridis, vmin=-15, vmax=0)
     ax.set(title=name, xlabel="Easting (km)", xlim=view[:2], ylim=view[2:])
 axes[0].set_ylabel("Northing (km)")
 fig.colorbar(image, ax=axes, shrink=0.8, label="Gamma-0 (dB)")
@@ -150,30 +141,30 @@ The LRW composite comes with two quality layers, shown here for the same
 window:
 
 ```{python}
-#| fig-cap: "The LRW composite (left), the number of acquisitions that contributed to each pixel, QA-NUM (middle), and the composite quality, QA-CQM, in decibels (right)."
+#| fig-cap: "The LRW composite (left), the number of observations (middle), and the composite quality map in decibels (right)."
 layers = {
     "LRW composite (dB)": (Layer.MEASUREMENT, dict(cmap="viridis", vmin=-15, vmax=0)),
-    "QA-NUM": (Layer.QA_NUM, dict(cmap="Blues", vmin=0, vmax=15)),
-    "QA-CQM (dB)": (Layer.QA_CQM, dict(cmap="Blues", vmin=-8, vmax=8)),
+    "Number of observations": (Layer.QA_NUM, dict(cmap="Blues", vmin=0, vmax=15)),
+    "Composite quality map (dB)": (Layer.QA_CQM, dict(cmap="Blues", vmin=-8, vmax=8)),
 }
 fig, axes = plt.subplots(1, 3, figsize=(7.6, 3.8), sharey=True, layout="constrained")
 for ax, (title, (layer, style)) in zip(axes, layers.items()):
-    data, transform = mosaic(lrw, layer)
+    data, extent = read(lrw, layer)
     if layer != Layer.QA_NUM:
         data = 10 * np.log10(data)
-    fig.colorbar(ax.imshow(data, extent=km_extent(data, transform), **style), ax=ax,
-                 orientation="horizontal")
+    fig.colorbar(ax.imshow(data, extent=extent, **style), ax=ax, orientation="horizontal")
     ax.set(title=title, xlabel="Easting (km)", xlim=view[:2], ylim=view[2:])
 axes[0].set_ylabel("Northing (km)")
 plt.show()
 ```
 
-`QA-NUM` counts the acquisitions that contribute to each pixel: all fifteen
-almost everywhere, fewer where one direction sees only radar shadow. `QA-CQM`
-rates the combined resolution of each pixel. It is highest on slopes that some
-orbits see from behind and lowest on the steepest slopes, which every orbit
-sees squeezed or not at all. A pixel with a low `QA-CQM` describes the ground
-more coarsely than its 20 m pixel size suggests.
+The number of observations (`QA-NUM`) counts the acquisitions that contribute
+to each pixel: all fifteen almost everywhere, fewer where one direction sees
+only radar shadow. The composite quality map (`QA-CQM`) rates the combined
+resolution of each pixel. It is highest on slopes that some orbits see from
+behind and lowest on the steepest slopes, which every orbit sees squeezed or
+not at all. A pixel with a low quality describes the ground more coarsely than
+its 20 m pixel size suggests.
 [Local resolution weighting](resolution-weighting.qmd) explains both layers.
 
 ```{python}
