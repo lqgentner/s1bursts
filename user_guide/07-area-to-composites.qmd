@@ -229,7 +229,7 @@ for square in squares:
 A wrong call raises a `ValueError` instead, and a composite on disk made with
 other settings raises a `ProductSettingsMismatchError`. Neither is a
 `CompositeError`, so both stop the loop, since every other square would meet
-them too. [Compositing](compositing.qmd#errors-in-a-loop-over-squares) lists
+them too. The [API reference](../reference/index.qmd#results-and-errors) lists
 the errors.
 
 Rerunning any of these loops is cheap. Downloads, products and composites that exist
