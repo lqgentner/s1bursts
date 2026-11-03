@@ -123,8 +123,10 @@ rerun after an interruption.
 Filenames describe the burst and date, not the settings, so an existing file is
 checked before it is skipped. If it was made with other settings, such as
 another `grid_spacing` or DEM, the call raises a `ProductSettingsMismatchError`
-naming each difference, before SNAP runs. Write each experiment to its own
-`FileManager` directory, or pass `overwrite=True` to replace the old products.
+naming each difference, before SNAP runs. So does a file that does not record
+every setting, such as one written by an earlier s1bursts version. Write each
+experiment to its own `FileManager` directory, or pass `overwrite=True` to
+replace the old products.
 :::
 
 A product made by another SNAP version is skipped without this check, and the

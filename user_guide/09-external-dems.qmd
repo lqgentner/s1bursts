@@ -51,10 +51,10 @@ costs nothing.
 
 ## Use the prepared DEM
 
-Pass the prepared file to the processing settings, together with a short name.
-The name is written into every product's metadata, so you can tell later which
-DEM was used. It also lets a rerun check that an existing product was made with
-the same DEM before skipping it; without a name, that check is left out:
+Pass the prepared file to the processing settings, together with a short name,
+which is required. The name, not the file path, is written into every product's
+metadata, so you can tell later which DEM was used, and a rerun checks it before
+skipping an existing product:
 
 ```{.python}
 from s1bursts import RTCConfig

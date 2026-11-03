@@ -17,7 +17,7 @@ from s1bursts.product import (
     _check_output_crs,
 )
 from s1bursts.product_tags import _software_version
-from s1bursts.settings_check import _skip_existing, _warn_other_snap, _warn_unchecked
+from s1bursts.settings_check import _skip_existing, _warn_other_snap
 from s1bursts.snap_client import SNAPClient, SNAPConfig, _item_failure
 from s1bursts.snap_graph import (
     CoherenceConfig,
@@ -158,11 +158,12 @@ class BurstProcessor:
             every remaining item alike: an ``OSError`` saying so, or an error
             caused by one or whose message or GPT output says so.
         ProductSettingsMismatchError
-            If a product exists with other settings than ``config`` and
-            ``overwrite`` is ``False``. Every product existing when the call
-            starts is checked before any item is processed, so for those it is
-            raised before any GPT run; a product written by another process
-            meanwhile is checked when its item is reached.
+            If a product exists with other settings than ``config``, or
+            without recording all of them, and ``overwrite`` is ``False``.
+            Every product existing when the call starts is checked before any
+            item is processed, so for those it is raised before any GPT run; a
+            product written by another process meanwhile is checked when its
+            item is reached.
         OSError or RasterioError
             If a product exists, ``overwrite`` is ``False``, and it cannot be
             read to check its settings; checked up front in the same way.
@@ -170,11 +171,9 @@ class BurstProcessor:
         Warns
         -----
         UserWarning
-            Once per call, counting the existing products skipped without
-            checking their settings: written before s1bursts 0.3.0, or made
-            with an external DEM without ``dem_name``. Once more if another
-            SNAP version made some of them. The summary counts both, and each
-            skipped result records why.
+            Once per call, counting the existing products skipped although
+            another SNAP version made them. The summary counts them, and each
+            skipped result records the version.
         """
         # Checked once, so an invalid CRS fails before any burst is processed.
         utm_crs = _check_output_crs(crs)
@@ -262,11 +261,12 @@ class BurstProcessor:
             every remaining item alike: an ``OSError`` saying so, or an error
             caused by one or whose message or GPT output says so.
         ProductSettingsMismatchError
-            If a product exists with other settings than ``config`` and
-            ``overwrite`` is ``False``. Every product existing when the call
-            starts is checked before any item is processed, so for those it is
-            raised before any GPT run; a product written by another process
-            meanwhile is checked when its item is reached.
+            If a product exists with other settings than ``config``, or
+            without recording all of them, and ``overwrite`` is ``False``.
+            Every product existing when the call starts is checked before any
+            item is processed, so for those it is raised before any GPT run; a
+            product written by another process meanwhile is checked when its
+            item is reached.
         OSError or RasterioError
             If a product exists, ``overwrite`` is ``False``, and it cannot be
             read to check its settings; checked up front in the same way.
@@ -274,11 +274,9 @@ class BurstProcessor:
         Warns
         -----
         UserWarning
-            Once per call, counting the existing products skipped without
-            checking their settings: written before s1bursts 0.3.0, or made
-            with an external DEM without ``dem_name``. Once more if another
-            SNAP version made some of them. The summary counts both, and each
-            skipped result records why.
+            Once per call, counting the existing products skipped although
+            another SNAP version made them. The summary counts them, and each
+            skipped result records the version.
         """
         cfg = config or CoherenceConfig()
         utm_crs = _check_output_crs(crs)
@@ -364,9 +362,8 @@ class BurstProcessor:
                 raise
 
     def _warn_about_skips[T](self, summary: OperationSummary[T]) -> None:
-        """Warn once about the skips the summary counts as unchecked or of another SNAP."""
+        """Warn once about the skips the summary counts as made by another SNAP version."""
         # Points at the caller of the public create_* method.
-        _warn_unchecked(summary.n_unchecked, stacklevel=3)
         _warn_other_snap(
             summary.n_other_snap_version,
             _software_version(self.config.resolved_snap_version),

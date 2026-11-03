@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from rich.console import Console
 from rich.markup import escape
@@ -21,10 +21,6 @@ MIN_S = 60
 _MAX_MESSAGE_CHARS = 120
 _EXAMPLES_PER_GROUP = 3
 
-# Why an existing product was skipped without checking its settings; see
-# ``OkResult.unchecked``.
-type UncheckedReason = Literal["untagged", "unknown_dem"]
-
 
 @dataclass
 class OkResult[T]:
@@ -38,22 +34,12 @@ class OkResult[T]:
         The resulting product.
     skipped
         Whether the operation was skipped (product already exists).
-    unchecked
-        For a skipped product, why its recorded settings could not be
-        compared with the request, as for the attribute.
     other_snap_version
         For a skipped product, the SNAP version that made it, as for the
         attribute.
 
     Attributes
     ----------
-    unchecked
-        ``None`` if the operation was not skipped or the settings of the
-        existing product matched the request. Otherwise why they could not be
-        compared: ``"untagged"`` for a file written before s1bursts 0.3.0,
-        ``"unknown_dem"`` for an external DEM without ``dem_name``. A
-        product whose settings differ is not skipped but raises
-        ``ProductSettingsMismatchError``.
     other_snap_version
         The SNAP version recorded by a skipped product when it differs from
         the running one, such as ``"13.0.0"``; ``None`` otherwise, also when
@@ -64,7 +50,6 @@ class OkResult[T]:
     source: Any
     result: T
     skipped: bool = False
-    unchecked: UncheckedReason | None = None
     other_snap_version: str | None = None
 
 
@@ -107,9 +92,6 @@ class OperationSummary[T]:
         List of operation results for failed items.
     processing_time
         Total operation time in seconds.
-    n_unchecked
-        Number of skipped items whose settings could not be checked; see
-        ``OkResult.unchecked``.
     n_other_snap_version
         Number of skipped items made by another SNAP version than the running
         one; see ``OkResult.other_snap_version``.
@@ -122,7 +104,6 @@ class OperationSummary[T]:
     products: list[T]
     failed_items: list[ErrorResult]
     processing_time: float = 0.0
-    n_unchecked: int = 0
     n_other_snap_version: int = 0
 
     @property
@@ -171,7 +152,6 @@ class OperationSummary[T]:
             products=[r.result for r in results if isinstance(r, OkResult)],
             failed_items=[r for r in results if isinstance(r, ErrorResult)],
             processing_time=end_time - start_time,
-            n_unchecked=sum(1 for r in results if isinstance(r, OkResult) and r.unchecked),
             n_other_snap_version=sum(
                 1 for r in results if isinstance(r, OkResult) and r.other_snap_version
             ),
@@ -234,8 +214,6 @@ class OperationSummary[T]:
         table.add_row("Total", str(self.n_total))
         table.add_row("Processed", f"[green]{self.n_processed}[/green]")
         table.add_row("Skipped", f"[yellow]{self.n_skipped}[/yellow]")
-        if self.n_unchecked:
-            table.add_row("  settings unchecked", f"[yellow]{self.n_unchecked}[/yellow]")
         if self.n_other_snap_version:
             table.add_row("  other SNAP version", f"[yellow]{self.n_other_snap_version}[/yellow]")
         table.add_row("Failed", f"[red]{self.n_failed}[/red]")

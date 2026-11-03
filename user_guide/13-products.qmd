@@ -56,8 +56,9 @@ without data as 0. Both are declared as the file's no-data value, so
 ## Metadata tags
 
 Each GeoTIFF also carries tags that say how to read it and how it was made.
-They include the units of the stored values, the acquisition dates, the DEM,
-and the SNAP and s1bursts versions:
+They include the units of the stored values, the acquisition dates, every
+processing setting, such as the DEM, the resampling or whether the topographic
+phase was removed, and the SNAP and s1bursts versions:
 
 ```{.python}
 with fm.open(product) as src:
@@ -66,10 +67,10 @@ with fm.open(product) as src:
 ```
 
 These tags make a file understandable on its own, even when separated from the
-code that wrote it. Their names follow the vocabulary of the
-[CEOS-ARD SAR specification](https://ceos.org/ard/), so a term can be looked up
-there. s1bursts borrows the vocabulary only and does not claim conformance with
-the specification.
+code that wrote it. A composite carries each setting its inputs share. Where
+the [CEOS-ARD SAR specification](https://ceos.org/ard/) has a term, the tag
+names use it, so it can be looked up there. s1bursts borrows the vocabulary
+only and does not claim conformance with the specification.
 
 ## Filenames
 

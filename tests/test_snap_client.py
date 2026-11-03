@@ -1014,24 +1014,20 @@ class TestSkipChecksTheSettings:
         assert isinstance(result, OkResult)
         assert result.skipped
 
-    def test_an_untagged_product_is_skipped_and_says_so(
-        self, client: SNAPClient, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    # Previously skipped as "untagged" without checking its settings.
+    def test_an_untagged_product_raises(self, client: SNAPClient) -> None:
         product = GTCProduct.from_burst(_make_burst("2022-01-01"), self.CRS_UTM32)
         _write_tagged(client, product, GTCConfig(), tagged=False)
 
-        with caplog.at_level(logging.WARNING, logger="s1bursts"):
-            result = client.create_backscatter(
+        with (
+            patch.object(client, "_run_gpt") as mock_gpt,
+            pytest.raises(ProductSettingsMismatchError, match="recorded none"),
+        ):
+            client.create_backscatter(
                 _make_burst("2022-01-01"), crs=self.CRS_UTM32, config=GTCConfig()
             )
 
-        assert isinstance(result, OkResult)
-        assert (result.skipped, result.unchecked, result.other_snap_version) == (
-            True,
-            "untagged",
-            None,
-        )
-        assert "without checking its settings (untagged)" in caplog.text
+        mock_gpt.assert_not_called()
 
     def test_another_snap_version_is_recorded_in_the_result(
         self, client: SNAPClient, caplog: pytest.LogCaptureFixture
@@ -1046,7 +1042,7 @@ class TestSkipChecksTheSettings:
             )
 
         assert isinstance(result, OkResult)
-        assert (result.unchecked, result.other_snap_version) == (None, "13.0.0")
+        assert (result.skipped, result.other_snap_version) == (True, "13.0.0")
         assert "made by SNAP 13.0.0 rather than the running 14.0.0" in caplog.text
 
     def test_overwrite_neither_reads_nor_skips_the_existing_product(

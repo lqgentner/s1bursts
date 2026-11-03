@@ -148,7 +148,10 @@ series that switches version contains an artificial step. Between SNAP 13 and
 
 SNAP 14 also adds two coherence options, exposed as
 `CoherenceConfig.correct_coherence_bias` and `remove_local_phase_ramp`. Both
-are off by default and need SNAP 14 or newer.
+are off by default and need SNAP 14 or newer. Products record them in the
+`COHERENCE_BIAS_CORRECTED` and `LOCAL_PHASE_RAMP_REMOVED` tags: `false` under
+SNAP 13, and `N/A` when the SNAP version could not be determined, since SNAP 14
+then applies its own default, which corrects the bias.
 
 ## Validation
 

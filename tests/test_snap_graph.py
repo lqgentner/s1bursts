@@ -105,13 +105,14 @@ GOLDEN_CASES = [
     ),
     pytest.param(
         "S1_SLCtoRTC-swissALTI3D.xml",
-        RTCConfig(dem=_SWISSALTI3D, external_dem_apply_egm=False),
+        RTCConfig(dem=_SWISSALTI3D, dem_name="swissALTI3D", external_dem_apply_egm=False),
         id="rtc-swissalti3d",
     ),
     pytest.param(
         "S1_SLCtoCoh-swissALTI3D.xml",
         CoherenceConfig(
             dem=_SWISSALTI3D,
+            dem_name="swissALTI3D",
             window=(25, 5),
             external_dem_apply_egm=False,
         ),
@@ -258,7 +259,7 @@ def test_coherence_output_bands() -> None:
 
 def test_external_dem_path_emits_external_dem_name() -> None:
     dem = Path("/data/dem/swissalti3d-4326-ellipsoid.tif")
-    cfg = RTCConfig(dem=dem)
+    cfg = RTCConfig(dem=dem, dem_name="swissALTI3D")
     xml = cfg.to_xml()
     root = fromstring(xml)
     dem_names = [el.text for el in root.iter("demName")]
@@ -267,6 +268,24 @@ def test_external_dem_path_emits_external_dem_name() -> None:
     # Every place that emits demName also emits externalDEMFile pointing at
     # the user-provided path.
     assert all(file == str(dem) for file in dem_files)
+
+
+# Previously accepted, and the products recorded the DEM as N/A.
+@pytest.mark.parametrize("config_cls", [RTCConfig, GTCConfig, CoherenceConfig])
+@pytest.mark.parametrize(
+    "dem",
+    [Path("/data/dem/swissalti3d.tif"), "/data/dem/swissalti3d.tif"],
+    ids=["path", "string"],
+)
+def test_an_external_dem_requires_a_name(
+    config_cls: type[RTCConfig | GTCConfig | CoherenceConfig], dem: Path | str
+) -> None:
+    with pytest.raises(ValidationError, match="dem_name is required for an external DEM"):
+        config_cls(dem=dem)
+
+
+def test_a_builtin_dem_needs_no_name() -> None:
+    assert RTCConfig(dem="SRTM 1Sec HGT").dem_name is None
 
 
 def test_builtin_dem_emits_no_external_file() -> None:
@@ -278,7 +297,7 @@ def test_builtin_dem_emits_no_external_file() -> None:
 
 def test_external_dem_string_path_coerced_to_path() -> None:
     dem = "/data/dem/swissalti3d-4326-ellipsoid.tif"
-    cfg = RTCConfig(dem=dem)
+    cfg = RTCConfig(dem=dem, dem_name="swissALTI3D")
     root = fromstring(cfg.to_xml())
     dem_names = [el.text for el in root.iter("demName")]
     dem_files = [el.text for el in root.iter("externalDEMFile")]
@@ -312,6 +331,19 @@ def test_multilook_tuple_inserts_multilook_node() -> None:
 # ---------------------------------------------------------------------------
 # Pydantic validation
 # ---------------------------------------------------------------------------
+
+
+# Previously exposed as CoherenceConfig.square_pixel.
+def test_square_pixel_is_not_a_setting() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CoherenceConfig.model_validate({"square_pixel": True})
+
+
+@pytest.mark.parametrize("snap_version", [None, (13, 0, 0), (14, 0, 0)])
+def test_square_pixel_is_pinned_off(snap_version: tuple[int, ...] | None) -> None:
+    root = fromstring(CoherenceConfig().to_xml(snap_version=snap_version))
+
+    assert [el.text for el in root.iter("squarePixel")] == ["false"]
 
 
 def test_coherence_window_must_be_positive() -> None:

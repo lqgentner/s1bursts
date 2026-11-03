@@ -48,7 +48,7 @@ from s1bursts.product import (
     RTCProduct,
     _layer_product_type,
 )
-from s1bursts.settings_check import _check_composite, _warn_unchecked
+from s1bursts.settings_check import _check_composite
 from s1bursts.time_range import TimeRange, calendar_day
 
 if TYPE_CHECKING:
@@ -253,18 +253,12 @@ class ResolutionWeighter:
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
             If ``overwrite`` is ``False`` and an existing layer file records
-            another grid than ``geobox``, other compositing parameters, or
-            values in decibels. Not a ``CompositeError``: other cells would
+            another grid than ``geobox``, other or no compositing parameters,
+            or values in decibels. Not a ``CompositeError``: other cells would
             meet it too.
         OSError or RasterioError
             If ``overwrite`` is ``False`` and an existing layer file cannot be
             read to check its settings.
-
-        Warns
-        -----
-        UserWarning
-            If an existing composite was skipped without checking its
-            settings, because a file was written before s1bursts 0.3.0.
         """
         rtc_products = list(rtc_products)
         if not rtc_products:
@@ -284,14 +278,13 @@ class ResolutionWeighter:
             layers=RTCLRWComposite.supported_layers if write_qa else _MEASUREMENT_ONLY,
         )
         if not overwrite and self._all_exist(product):
-            checked = _check_composite(
+            _check_composite(
                 self._fm,
                 product,
                 geobox,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
             )
-            _warn_unchecked(0 if checked else 1, stacklevel=2, per_burst=False)
             return product
 
         try:
@@ -434,18 +427,12 @@ class ResolutionWeighter:
             supplies the scattering area of an observation.
         ProductSettingsMismatchError
             If ``overwrite`` is ``False`` and an existing layer file records
-            another grid than ``geobox``, other compositing parameters, or
-            values in decibels. Not a ``CompositeError``: other cells would
+            another grid than ``geobox``, other or no compositing parameters,
+            or values in decibels. Not a ``CompositeError``: other cells would
             meet it too.
         OSError or RasterioError
             If ``overwrite`` is ``False`` and an existing layer file cannot be
             read to check its settings.
-
-        Warns
-        -----
-        UserWarning
-            If an existing composite was skipped without checking its
-            settings, because a file was written before s1bursts 0.3.0.
         """
         coh_products = list(coh_products)
         if not coh_products:
@@ -472,14 +459,13 @@ class ResolutionWeighter:
             layers=CohLRWComposite.supported_layers if write_qa else _MEASUREMENT_ONLY,
         )
         if not overwrite and self._all_exist(product):
-            checked = _check_composite(
+            _check_composite(
                 self._fm,
                 product,
                 geobox,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
             )
-            _warn_unchecked(0 if checked else 1, stacklevel=2, per_burst=False)
             return product
 
         try:
@@ -611,20 +597,14 @@ class ResolutionWeighter:
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
             If ``overwrite`` is ``False`` and an existing layer file records
-            another grid than ``geobox``, other compositing parameters, or
-            values in decibels. Not a ``CompositeError``: other cells would
+            another grid than ``geobox``, other or no compositing parameters,
+            or values in decibels. Not a ``CompositeError``: other cells would
             meet it too.
         OSError or RasterioError
             If ``overwrite`` is ``False`` and an existing layer file cannot be
             read to check its settings.
-
-        Warns
-        -----
-        UserWarning
-            If an existing composite was skipped without checking its
-            settings, because a file was written before s1bursts 0.3.0.
         """
-        composites, n_unchecked = self._compose_backscatter_by_pass(
+        return self._compose_backscatter_by_pass(
             rtc_products,
             geobox,
             name="rtc_products",
@@ -635,8 +615,6 @@ class ResolutionWeighter:
             overwrite=overwrite,
             time_range=time_range,
         )
-        _warn_unchecked(n_unchecked, stacklevel=2, per_burst=False)
-        return composites
 
     def compose_gtc_by_pass(
         self,
@@ -716,20 +694,14 @@ class ResolutionWeighter:
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
             If ``overwrite`` is ``False`` and an existing layer file records
-            another grid than ``geobox``, other compositing parameters, or
-            values in decibels. Not a ``CompositeError``: other cells would
+            another grid than ``geobox``, other or no compositing parameters,
+            or values in decibels. Not a ``CompositeError``: other cells would
             meet it too.
         OSError or RasterioError
             If ``overwrite`` is ``False`` and an existing layer file cannot be
             read to check its settings.
-
-        Warns
-        -----
-        UserWarning
-            If an existing composite was skipped without checking its
-            settings, because a file was written before s1bursts 0.3.0.
         """
-        composites, n_unchecked = self._compose_backscatter_by_pass(
+        return self._compose_backscatter_by_pass(
             gtc_products,
             geobox,
             name="gtc_products",
@@ -740,8 +712,6 @@ class ResolutionWeighter:
             overwrite=overwrite,
             time_range=time_range,
         )
-        _warn_unchecked(n_unchecked, stacklevel=2, per_burst=False)
-        return composites
 
     def _compose_backscatter_by_pass[C: (RTCPassComposite, GTCPassComposite)](
         self,
@@ -755,7 +725,7 @@ class ResolutionWeighter:
         write_qa: bool,
         overwrite: bool,
         time_range: TimeRange | None,
-    ) -> tuple[dict[PassDirection, C], int]:
+    ) -> dict[PassDirection, C]:
         """Per-pass unweighted backscatter composite shared by the RTC and GTC entry points."""
         inputs = list(products)
         if not inputs:
@@ -803,12 +773,11 @@ class ResolutionWeighter:
         metadata: Callable[[C, _PassObservations], RasterMetadata],
         aggregation: Literal["mean", "median"] | float,
         overwrite: bool,
-    ) -> tuple[dict[PassDirection, C], int]:
+    ) -> dict[PassDirection, C]:
         """Composite each pass direction on its own, skipping finished ones before any read.
 
         Every existing direction is checked before any is built, so a
-        mismatch in one writes none. Returns the composites and the number of
-        skipped ones whose settings could not be checked.
+        mismatch in one writes none.
 
         Raises
         ------
@@ -822,9 +791,8 @@ class ResolutionWeighter:
             by_pass[prod.pass_direction].append(prod)
 
         result: dict[PassDirection, C] = {}
-        n_unchecked = 0
         if not overwrite:
-            result, n_unchecked = self._existing_by_pass(by_pass, make, geobox, aggregation)
+            result = self._existing_by_pass(by_pass, make, geobox, aggregation)
         for direction, subset in sorted(by_pass.items()):
             if direction in result:
                 continue
@@ -870,7 +838,7 @@ class ResolutionWeighter:
             msg = f"no input observation has a valid pixel in cell {geobox.mgrs_code}"
             raise EmptyCompositeError(msg)
         # Sorted, as before the existing directions were checked first.
-        return dict(sorted(result.items())), n_unchecked
+        return dict(sorted(result.items()))
 
     def _existing_by_pass[C: (RTCPassComposite, GTCPassComposite, CohPassComposite)](
         self,
@@ -878,17 +846,15 @@ class ResolutionWeighter:
         make: Callable[[PassDirection], C],
         geobox: MGRSGeoBox,
         aggregation: Literal["mean", "median"] | float,
-    ) -> tuple[dict[PassDirection, C], int]:
-        """Check the existing direction composites, returning them and how many went unchecked."""
+    ) -> dict[PassDirection, C]:
+        """Check the existing direction composites and return them."""
         existing: dict[PassDirection, C] = {}
-        n_unchecked = 0
         for direction in sorted(directions):
             product = make(direction)
             if self._all_exist(product):
-                if not _check_composite(self._fm, product, geobox, aggregation=aggregation):
-                    n_unchecked += 1
+                _check_composite(self._fm, product, geobox, aggregation=aggregation)
                 existing[direction] = product
-        return existing, n_unchecked
+        return existing
 
     def compose_coherence_by_pass(
         self,
@@ -970,18 +936,12 @@ class ResolutionWeighter:
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
             If ``overwrite`` is ``False`` and an existing layer file records
-            another grid than ``geobox``, other compositing parameters, or
-            values in decibels. Not a ``CompositeError``: other cells would
+            another grid than ``geobox``, other or no compositing parameters,
+            or values in decibels. Not a ``CompositeError``: other cells would
             meet it too.
         OSError or RasterioError
             If ``overwrite`` is ``False`` and an existing layer file cannot be
             read to check its settings.
-
-        Warns
-        -----
-        UserWarning
-            If an existing composite was skipped without checking its
-            settings, because a file was written before s1bursts 0.3.0.
         """
         coh_products = list(coh_products)
         if not coh_products:
@@ -1015,7 +975,7 @@ class ResolutionWeighter:
                 acquisitions=entry.acquisitions,
             )
 
-        composites, n_unchecked = self._compose_by_pass(
+        return self._compose_by_pass(
             coh_products,
             geobox,
             make=make,
@@ -1023,8 +983,6 @@ class ResolutionWeighter:
             aggregation=aggregation,
             overwrite=overwrite,
         )
-        _warn_unchecked(n_unchecked, stacklevel=2, per_burst=False)
-        return composites
 
     # ------------------------------------------------------------------
     # Private helpers — I/O
@@ -1210,7 +1168,7 @@ class ResolutionWeighter:
     ) -> dict[str, str]:
         """Tags that every per-burst input agrees on.
 
-        The SNAP version and the coherence estimation window exist nowhere at
+        The SNAP version and the processing settings exist nowhere at
         compositing time except in the input files. A key is carried forward
         only where every input states the same value, so a composite spanning
         two SNAP versions stays silent instead of claiming whichever its first
