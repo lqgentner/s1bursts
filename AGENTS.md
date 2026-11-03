@@ -221,6 +221,11 @@ call sites can be updated from the entry alone.
 New backward-compatible functionality is a **minor** bump; a pure bug fix with no new public
 API is a **patch**.
 
+The release PR moves the `## Unreleased` entries under the new version and date, and
+bumps `version` and `date-released` in [`CITATION.cff`](CITATION.cff) to match;
+`tests/test_citation.py` fails until both agree. Zenodo archives every published GitHub
+Release under the concept DOI in `CITATION.cff` and reads its metadata from that file.
+
 ## Code Style Guidelines
 
 ### Docstrings

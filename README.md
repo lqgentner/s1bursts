@@ -2,7 +2,7 @@
 
 <img src="https://raw.githubusercontent.com/lqgentner/s1bursts/main/assets/s1burst-logo.svg" alt="s1bursts" width="360">
 
-*Sentinel-1 download, processing and compositing made easy.*
+*Sentinel-1 download, processing and compositing in Python.*
 
 [![CI](https://github.com/lqgentner/s1bursts/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lqgentner/s1bursts/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/lqgentner/s1bursts/graph/badge.svg?token=V6PEU2U4DW)](https://codecov.io/gh/lqgentner/s1bursts)
@@ -10,6 +10,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/s1bursts.svg)](https://pypi.org/project/s1bursts/)
 [![SNAP](https://img.shields.io/badge/SNAP-13%20%7C%2014-blue)](https://step.esa.int/main/download/snap-download/)
 [![License](https://img.shields.io/pypi/l/s1bursts.svg)](https://github.com/lqgentner/s1bursts/blob/main/LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23918246.svg)](https://doi.org/10.5281/zenodo.23918246)
 [![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
@@ -19,13 +20,8 @@ s1bursts makes Sentinel-1 synthetic aperture radar (SAR) data easy to use from
 Python. It searches and downloads the data from the
 [Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu/) (CDSE),
 processes it with [ESA SNAP](https://step.esa.int/main/toolboxes/snap/) into
-backscatter and coherence, and combines the results into composites on a
-fixed grid.
-
-It works with bursts, the smallest part of a Sentinel-1 scene that can be
-processed on its own. A burst is about 100 MB instead of a 4 GB scene, so you
-download and process only the area you are interested in. This makes dense
-time series of a fixed area practical.
+backscatter and coherence, and composites them on the MGRS grid with local
+resolution weighting.
 
 ## Features
 
@@ -96,6 +92,14 @@ uv run pyrefly check
 
 See the [contributing guide](https://lqgentner.github.io/s1bursts/user-guide/contributing.html)
 for the integration tests and how to build the documentation.
+
+## Citation
+
+If you use s1bursts in your research, please cite it with its DOI,
+[10.5281/zenodo.23918246](https://doi.org/10.5281/zenodo.23918246), which always
+points to the latest release. Zenodo lists a DOI for each version, and
+[`CITATION.cff`](https://github.com/lqgentner/s1bursts/blob/main/CITATION.cff)
+holds the citation metadata.
 
 ## License
 

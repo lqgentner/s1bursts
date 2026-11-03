@@ -1,6 +1,6 @@
 [project]
 name = "s1bursts"
-description = "Sentinel-1 download, processing and compositing made easy."
+description = "Sentinel-1 download, processing and compositing in Python."
 authors = [
   { name = "Luis Gentner" , email = "luis.gentner@geo.uzh.ch"},
 ]

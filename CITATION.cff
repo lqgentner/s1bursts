@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: If you use s1bursts in your research, please cite it as below.
+type: software
+title: "s1bursts: Sentinel-1 download, processing and compositing in Python"
+abstract: >-
+  s1bursts makes Sentinel-1 synthetic aperture radar (SAR) data easy to use from
+  Python. It searches and downloads the data from the Copernicus Data Space
+  Ecosystem (CDSE), processes it with ESA SNAP into backscatter and coherence,
+  and composites them on the MGRS grid with local resolution weighting.
+authors:
+  - given-names: Luis Q.
+    family-names: Gentner
+    affiliation: University of Zurich
+    orcid: https://orcid.org/0009-0006-4453-0881
+# The concept DOI resolves to the latest release on Zenodo. `url` holds it too,
+# because Great Docs builds its citations from `url` and ignores `doi`.
+doi: 10.5281/zenodo.23918246
+url: https://doi.org/10.5281/zenodo.23918246
+repository-code: https://github.com/lqgentner/s1bursts
+license: MIT
+keywords:
+  - Sentinel-1
+  - SAR
+  - InSAR
+  - coherence
+  - backscatter
+  - SNAP
+  - Copernicus
+# Bumped in each release PR; tests/test_citation.py checks them against the
+# newest release in CHANGELOG.md.
+version: 0.8.0
+date-released: 2026-11-03
