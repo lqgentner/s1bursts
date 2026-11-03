@@ -19,6 +19,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - The package summary reads "Sentinel-1 download, processing and compositing
   in Python." instead of "... made easy."
 
+### Fixed
+
+- The warning about files named without their pass direction no longer
+  points to a nonexistent rename recipe.
+
 ## [0.8.0] - 2026-11-03
 
 The first release on PyPI, and the first with a
