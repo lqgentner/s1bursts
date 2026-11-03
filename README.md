@@ -10,6 +10,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/s1bursts.svg)](https://pypi.org/project/s1bursts/)
 [![SNAP](https://img.shields.io/badge/SNAP-13%20%7C%2014-blue)](https://step.esa.int/main/download/snap-download/)
 [![License](https://img.shields.io/pypi/l/s1bursts.svg)](https://github.com/lqgentner/s1bursts/blob/main/LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23918246.svg)](https://doi.org/10.5281/zenodo.23918246)
 [![pyrefly](https://img.shields.io/endpoint?url=https://pyrefly.org/badge.json)](https://github.com/facebook/pyrefly)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
@@ -96,6 +97,14 @@ uv run pyrefly check
 
 See the [contributing guide](https://lqgentner.github.io/s1bursts/user-guide/contributing.html)
 for the integration tests and how to build the documentation.
+
+## Citation
+
+If you use s1bursts in your research, please cite it with its DOI,
+[10.5281/zenodo.23918246](https://doi.org/10.5281/zenodo.23918246), which always
+points to the latest release. Zenodo lists a DOI for each version, and
+[`CITATION.cff`](https://github.com/lqgentner/s1bursts/blob/main/CITATION.cff)
+holds the citation metadata.
 
 ## License
 
