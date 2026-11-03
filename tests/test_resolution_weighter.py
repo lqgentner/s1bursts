@@ -917,7 +917,9 @@ class TestComposeReturns:
         # lookup, which the stubs have no file for. Written through ``vars`` because
         # Pyrefly 1.4 rejects assigning to a method, and 1.3 reports it under a
         # different code, so no single ignore comment fits both.
-        vars(weighter).update(_load_band=fake_load, _input_tags=lambda _product: {})
+        vars(weighter).update(
+            _load_band=fake_load, _read_tags=lambda products: [{} for _ in products]
+        )
 
     def test_rtc_lrw_without_qa_holds_the_measurement(self, tmp_path: Path) -> None:
         """``write_qa=False`` returns a composite holding only its measurement."""
@@ -2316,10 +2318,11 @@ class TestInputConsistency:
         assert tags["COHERENCE_WINDOW_RANGE"] == "25"
 
     def test_rtc_weights_of_mixed_settings_are_refused(self, scene: _Scene) -> None:
-        coh = _coh("2022-08-01", "2022-08-13")
+        cohs = [_coh("2022-08-01", "2022-08-13"), _coh("2022-08-13", "2022-08-25")]
+        for coh in cohs:
+            coh_tags = product_tags.coherence_metadata(coh, CoherenceConfig()).tags
+            _write_raster(scene.manager.get_product_path(coh), [_full(0.5)], tags=coh_tags)
         first, second = _rtc("2022-08-01"), _rtc("2022-08-13")
-        coh_tags = product_tags.coherence_metadata(coh, CoherenceConfig()).tags
-        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)], tags=coh_tags)
         for product, config in ((first, RTCConfig()), (second, RTCConfig(dem_oversampling=2.0))):
             _write_raster(
                 scene.manager.get_product_path(product),
@@ -2328,8 +2331,114 @@ class TestInputConsistency:
             )
 
         with pytest.raises(InconsistentInputsError, match="RTC products supplying") as info:
-            scene.weighter.compose_coherence_lrw([coh], [first, second], scene.geobox)
+            scene.weighter.compose_coherence_lrw(cohs, [first, second], scene.geobox)
         assert "TERRAIN_FLATTENING_OVERSAMPLING: '1', '2'" in str(info.value)
+
+    # Previously an RTC product that weights no observation was compared too.
+    def test_an_unused_rtc_product_is_not_compared(self, scene: _Scene) -> None:
+        coh = _coh("2022-08-01", "2022-08-13")
+        used, unused = _rtc("2022-08-01"), _rtc("2022-09-30")
+        coh_tags = product_tags.coherence_metadata(coh, CoherenceConfig(), snap_version=(14, 0, 0))
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)], tags=coh_tags.tags)
+        _write_raster(
+            scene.manager.get_product_path(used),
+            [_full(1.0), _full(4.0)],
+            tags=_rtc_settings(used),
+        )
+        snap_13 = product_tags.backscatter_metadata(
+            unused, RTCConfig(multilook=None), snap_version=(13, 0, 0)
+        ).tags
+        _write_raster(
+            scene.manager.get_product_path(unused), [_full(1.0), _full(4.0)], tags=snap_13
+        )
+
+        composite = scene.weighter.compose_coherence_lrw([coh], [used, unused], scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            assert src.tags()["PROCESSING_SOFTWARE_VERSION"] == "14.0.0"
+
+    def test_rtc_weights_of_an_unknown_version_record_it_as_unknown(self, scene: _Scene) -> None:
+        coh = _coh("2022-08-01", "2022-08-13")
+        rtc = _rtc("2022-08-01")
+        coh_tags = product_tags.coherence_metadata(coh, CoherenceConfig(), snap_version=(14, 0, 0))
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)], tags=coh_tags.tags)
+        rtc_tags = product_tags.backscatter_metadata(rtc, RTCConfig(), snap_version=None).tags
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(4.0)], tags=rtc_tags)
+
+        composite = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            tags = src.tags()
+        assert tags["PROCESSING_SOFTWARE_VERSION"] == product_tags.UNKNOWN
+        assert tags["COHERENCE_BIAS_CORRECTED"] == "false"
+
+    @pytest.mark.parametrize(
+        "option", ["correct_coherence_bias", "remove_local_phase_ramp"], ids=str
+    )
+    def test_snap_14_options_of_one_version_are_compared(self, scene: _Scene, option: str) -> None:
+        off, on = _coh("2022-08-01", "2022-08-13"), _coh("2022-08-13", "2022-08-25")
+        rtc = [_rtc("2022-08-01"), _rtc("2022-08-13")]
+        for product, config in (
+            (off, CoherenceConfig()),
+            (on, CoherenceConfig.model_validate({option: True})),
+        ):
+            tags = product_tags.coherence_metadata(product, config, snap_version=(14, 0, 0))
+            _write_raster(scene.manager.get_product_path(product), [_full(0.5)], tags=tags.tags)
+        for product in rtc:
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(1.0), _full(4.0)],
+                tags=_rtc_settings(product),
+            )
+
+        tag = product_tags._SETTING_TAGS[option][0]
+        with pytest.raises(InconsistentInputsError, match=f"{tag}: 'false', 'true'"):
+            scene.weighter.compose_coherence_lrw([off, on], rtc, scene.geobox)
+
+    # Previously an absent version matched any, unlike in the skip check.
+    def test_a_missing_snap_version_is_a_difference(self, scene: _Scene) -> None:
+        tagged, untagged = _rtc("2022-08-13"), _rtc("2022-08-25")
+        tags = _rtc_settings(tagged)
+        _write_raster(scene.manager.get_product_path(tagged), [_full(2.0), _full(4.0)], tags=tags)
+        del tags["PROCESSING_SOFTWARE_VERSION"]
+        _write_raster(
+            scene.manager.get_product_path(untagged), [_full(2.0), _full(4.0)], tags=tags
+        )
+
+        with pytest.raises(InconsistentInputsError, match=r"got 14\.0\.0, none"):
+            scene.weighter.compose_rtc_lrw([tagged, untagged], scene.geobox)
+
+    # Previously each direction was checked on its own while it was built.
+    def test_pass_directions_of_two_snap_versions_are_refused(self, scene: _Scene) -> None:
+        ascending = _rtc("2022-08-13", orbit=15, burst_id=_ASCENDING_BURST)
+        descending = _rtc("2022-08-25", orbit=88, burst_id=_DESCENDING_BURST)
+        for product, version in ((ascending, (13, 0, 0)), (descending, (14, 0, 0))):
+            tags = product_tags.backscatter_metadata(product, RTCConfig(), snap_version=version)
+            _write_raster(
+                scene.manager.get_product_path(product), [_full(1.0), _full(1.0)], tags=tags.tags
+            )
+
+        with pytest.raises(InconsistentInputsError, match="same SNAP version"):
+            scene.weighter.compose_rtc_by_pass([ascending, descending], scene.geobox)
+        assert scene.manager.find(RTCPassComposite) == []
+
+    def test_a_mixed_setting_in_one_direction_writes_no_other(self, scene: _Scene) -> None:
+        ascending = _rtc("2022-08-13", orbit=15, burst_id=_ASCENDING_BURST)
+        descending = [
+            _rtc("2022-08-25", orbit=88, burst_id=_DESCENDING_BURST),
+            _rtc("2022-09-06", orbit=88, burst_id=_DESCENDING_BURST),
+        ]
+        configs = [RTCConfig(), RTCConfig(), RTCConfig(multilook=(3, 3))]
+        for product, config in zip([ascending, *descending], configs, strict=True):
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(1.0), _full(1.0)],
+                tags=_rtc_settings(product, config),
+            )
+
+        with pytest.raises(InconsistentInputsError, match="MULTILOOK_RANGE"):
+            scene.weighter.compose_rtc_by_pass([ascending, *descending], scene.geobox)
+        assert scene.manager.find(RTCPassComposite) == []
 
     def test_rtc_weights_are_compared_with_the_coherence_on_the_version_only(
         self, scene: _Scene

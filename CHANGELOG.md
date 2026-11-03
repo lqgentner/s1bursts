@@ -480,11 +480,14 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   silently. An input whose SNAP version could not be determined matches any
   version; where only such an input differs, the composite records `N/A` for
   the version and for `COHERENCE_BIAS_CORRECTED` and
-  `LOCAL_PHASE_RAMP_REMOVED`. The RTC products that weight
+  `LOCAL_PHASE_RAMP_REMOVED`; an input that records no version differs from
+  one that does. The RTC products that weight an observation of
   `compose_coherence_lrw()` are compared among themselves on their settings,
-  and with the coherence products on the SNAP version and the DEM. Inputs
-  written by 0.7.0, which record fewer settings, cannot be combined with
-  newer ones. Composite each SNAP version and set of settings on its own, or
+  and with the coherence products on the SNAP version and the DEM; RTC
+  products that weight none are not compared. The `compose_*_by_pass()`
+  methods compare the inputs of every direction they build with each other,
+  before writing any. Inputs written by 0.7.0, which record fewer settings,
+  cannot be combined with newer ones. Composite each SNAP version and set of settings on its own, or
   rebuild the inputs:
 
   ```python
