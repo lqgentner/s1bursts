@@ -289,8 +289,10 @@ class CompositeInputError(CompositeError, OSError):
 class ProductSettingsMismatchError(S1BurstsError):
     """An existing product was made with other settings than requested.
 
-    Also raised for a product that does not record every requested setting,
-    such as one written by an earlier s1bursts. Raised instead of skipping the
+    Also raised for a per-burst product made by another SNAP version than the
+    running one, unless either version is undetermined, and for a product
+    that does not record every requested setting, such as one written by an
+    earlier s1bursts. Raised instead of skipping the
     product when ``overwrite=False``: by ``BurstProcessor.create_*`` and
     ``SNAPClient.create_*`` for a per-burst product, and by
     ``ResolutionWeighter.compose_*`` for a composite. Pass ``overwrite=True``
@@ -313,7 +315,9 @@ class ProductSettingsMismatchError(S1BurstsError):
     differences
         Each differing setting, keyed by the tag or grid property compared,
         such as ``"GRID_SPACING"`` or ``"TRANSFORM"``, mapped to its recorded
-        and its requested value. ``None`` stands for a tag that is absent.
+        and its requested value; for ``"PROCESSING_SOFTWARE_VERSION"``, the
+        requested value is the running SNAP version. ``None`` stands for a tag
+        that is absent.
     """
 
     def __init__(

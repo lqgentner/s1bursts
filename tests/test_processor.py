@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
-import logging
 from pathlib import Path
 import threading
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
+import warnings
 
 import numpy as np
 from pandas import Timestamp
@@ -521,31 +521,33 @@ class TestSkipSettings:
         assert summary.n_skipped == 2
         assert summary.products == [RTCProduct.from_burst(burst, self.CRS) for burst in bursts]
 
-    def test_other_snap_skips_warn_once_per_call(
-        self, real: BurstProcessor, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        real.config.resolved_max_workers = 2
+    # Previously skipped with one warning per call.
+    def test_another_snap_version_raises_before_any_gpt_run(self, real: BurstProcessor) -> None:
         real.config.resolved_snap_version = (14, 0, 0)
-        bursts = [_burst(f"2022-01-{day:02d}") for day in (5, 17, 29)]
-        self._existing(real, bursts[0], RTCConfig(), snap_version=(13, 0, 0))
-        self._existing(real, bursts[1], RTCConfig(), snap_version=(13, 0, 0))
-        self._existing(real, bursts[2], RTCConfig(), snap_version=(14, 0, 0))
+        missing, existing = _burst("2022-01-05"), _burst("2022-01-17")
+        self._existing(real, existing, RTCConfig(), snap_version=(13, 0, 0))
 
         with (
-            caplog.at_level(logging.INFO, logger="s1bursts"),
-            pytest.warns(UserWarning, match="existing product") as record,
+            patch.object(real.snap_client, "_run_gpt") as mock_gpt,
+            pytest.raises(ProductSettingsMismatchError, match="PROCESSING_SOFTWARE_VERSION"),
         ):
+            real.create_backscatter([missing, existing], crs=self.CRS)
+
+        mock_gpt.assert_not_called()
+
+    def test_an_unknown_snap_version_is_skipped_without_a_warning(
+        self, real: BurstProcessor
+    ) -> None:
+        real.config.resolved_snap_version = (14, 0, 0)
+        bursts = [_burst("2022-01-05"), _burst("2022-01-17")]
+        self._existing(real, bursts[0], RTCConfig(), snap_version=None)
+        self._existing(real, bursts[1], RTCConfig(), snap_version=(14, 0, 0))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
             summary = real.create_backscatter(bursts, crs=self.CRS)
 
-        # One warning, not a log line per product.
-        assert "Skipped '" not in caplog.text
-
-        assert (summary.n_skipped, summary.n_other_snap_version) == (3, 2)
-        messages = [str(warning.message) for warning in record]
-        assert len(messages) == 1
-        assert "Skipped 2 existing product(s) made by another SNAP version" in messages[0]
-        assert "than the running 14.0.0" in messages[0]
-        assert {warning.filename for warning in record} == {__file__}
+        assert summary.n_skipped == 2
 
     # Previously skipped without checking its settings, with a warning.
     def test_an_untagged_product_raises_before_any_gpt_run(self, real: BurstProcessor) -> None:

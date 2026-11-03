@@ -121,8 +121,11 @@ Composites are written in linear units, like the products they combine.
 Convert backscatter to decibels after reading it, as `10 * np.log10(gamma0)`,
 so that the averaging has already happened on linear values.
 
-All inputs of one composite must share a polarization, and coherence inputs
-must share a temporal baseline.
+All inputs of one composite must share a polarization, the processing
+settings and the SNAP version, and coherence inputs must share a temporal
+baseline. A SNAP version that could not be determined matches any. The RTC
+products that weight a coherence composite must share their settings among
+themselves, since they come from another settings object than the coherence.
 
 Like processing, compositing skips a square whose files already exist, after
 checking that they were made on the same grid and with the same settings. Pass

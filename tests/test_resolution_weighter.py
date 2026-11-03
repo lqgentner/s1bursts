@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import inspect
-import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, override
 import warnings as _warnings
@@ -36,6 +35,7 @@ from s1bursts.product import (
     RTCProduct,
 )
 from s1bursts.resolution_weighter import ResolutionWeighter
+from s1bursts.snap_graph import CoherenceConfig, RTCConfig
 from s1bursts.time_range import TimeRange
 
 if TYPE_CHECKING:
@@ -1142,6 +1142,13 @@ def _rtc(date: str, orbit: int = 15, burst_id: int = 30346) -> RTCProduct:
     )
 
 
+def _rtc_settings(product: RTCProduct, config: RTCConfig | None = None) -> dict[str, str]:
+    """Return the tags of an RTC product made with ``config`` under SNAP 14."""
+    return product_tags.backscatter_metadata(
+        product, config or RTCConfig(), snap_version=(14, 0, 0)
+    ).tags
+
+
 def _coh(
     primary: str,
     secondary: str,
@@ -2002,31 +2009,40 @@ class TestCompositeTags:
             assert float(tags["COHERENCE_AVERAGE"]) == pytest.approx(0.5)
             assert src.descriptions == ("VV",)
 
-    def test_provenance_is_only_inherited_where_the_inputs_agree(
-        self,
-        scene: _Scene,
-    ) -> None:
-        """A composite spanning two SNAP versions must not claim either of them."""
-        agree, differ = _rtc("2022-08-13"), _rtc("2022-08-25")
-        _write_raster(
-            scene.manager.get_product_path(agree),
-            [_full(2.0), _full(4.0)],
-            tags={"PROCESSING_SOFTWARE": "ESA SNAP", "PROCESSING_SOFTWARE_VERSION": "13.0.0"},
-        )
-        _write_raster(
-            scene.manager.get_product_path(differ),
-            [_full(2.0), _full(4.0)],
-            tags={"PROCESSING_SOFTWARE": "ESA SNAP", "PROCESSING_SOFTWARE_VERSION": "14.0.0"},
-        )
+    def test_an_unknown_snap_version_is_recorded_as_unknown(self, scene: _Scene) -> None:
+        """An input of an undetermined SNAP version composes, but the version is not claimed."""
+        known, unknown = _rtc("2022-08-13"), _rtc("2022-08-25")
+        for product, version in ((known, "14.0.0"), (unknown, product_tags.UNKNOWN)):
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(2.0), _full(4.0)],
+                tags={"PROCESSING_SOFTWARE": "ESA SNAP", "PROCESSING_SOFTWARE_VERSION": version},
+            )
 
-        composite = scene.weighter.compose_rtc_lrw([agree, differ], scene.geobox)
+        composite = scene.weighter.compose_rtc_lrw([known, unknown], scene.geobox)
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             tags = src.tags()
-            # Unanimous, so it carries forward.
             assert tags["PROCESSING_SOFTWARE"] == "ESA SNAP"
-            # Contested, so the composite states neither rather than picking one.
             assert tags["PROCESSING_SOFTWARE_VERSION"] == product_tags.UNKNOWN
+
+    def test_a_composite_carries_every_setting_of_its_inputs(self, scene: _Scene) -> None:
+        products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
+        for product in products:
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(2.0), _full(4.0)],
+                tags=_rtc_settings(product),
+            )
+
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
+
+        expected = _rtc_settings(products[0])
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            tags = src.tags()
+        assert {key: tags.get(key) for key in product_tags._BURST_SETTING_KEYS} == {
+            key: expected.get(key) for key in product_tags._BURST_SETTING_KEYS
+        }
 
     def test_unanimous_provenance_is_inherited(self, scene: _Scene) -> None:
         products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
@@ -2236,12 +2252,8 @@ class TestInputConsistency:
             scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox)
         assert not isinstance(info.value, CompositeError)
 
-    def test_mixed_snap_versions_are_allowed_but_warned_about(
-        self,
-        scene: _Scene,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """An archive built over several campaigns will legitimately mix these."""
+    # Previously composed with a warning, recording the version as unknown.
+    def test_mixed_snap_versions_are_refused(self, scene: _Scene) -> None:
         first, second = _rtc("2022-08-13"), _rtc("2022-08-25")
         for product, version in ((first, "13.0.0"), (second, "14.0.0")):
             _write_raster(
@@ -2250,29 +2262,110 @@ class TestInputConsistency:
                 tags={"PROCESSING_SOFTWARE_VERSION": version},
             )
 
-        with caplog.at_level(logging.WARNING, logger="s1bursts.resolution_weighter"):
-            composite = scene.weighter.compose_rtc_lrw([first, second], scene.geobox)
+        with pytest.raises(InconsistentInputsError, match="same SNAP version") as info:
+            scene.weighter.compose_rtc_lrw([first, second], scene.geobox)
+        assert "13.0.0, 14.0.0" in str(info.value)
+        assert not isinstance(info.value, CompositeError)
 
-        assert any(
-            "disagree on PROCESSING_SOFTWARE_VERSION" in r.getMessage() for r in caplog.records
-        )
+    # Previously composed, leaving the tag out of the composite.
+    def test_mixed_settings_are_refused(self, scene: _Scene) -> None:
+        first, second = _rtc("2022-08-13"), _rtc("2022-08-25")
+        for product, config in ((first, RTCConfig()), (second, RTCConfig(multilook=(3, 3)))):
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(2.0), _full(4.0)],
+                tags=_rtc_settings(product, config),
+            )
+
+        with pytest.raises(InconsistentInputsError, match="same settings") as info:
+            scene.weighter.compose_rtc_lrw([first, second], scene.geobox)
+        assert "MULTILOOK_RANGE: '3', '5'" in str(info.value)
+
+    def test_a_setting_only_some_inputs_record_is_refused(self, scene: _Scene) -> None:
+        first, second = _rtc("2022-08-13"), _rtc("2022-08-25")
+        tags = _rtc_settings(first)
+        _write_raster(scene.manager.get_product_path(first), [_full(2.0), _full(4.0)], tags=tags)
+        del tags["IMAGE_RESAMPLING"]
+        _write_raster(scene.manager.get_product_path(second), [_full(2.0), _full(4.0)], tags=tags)
+
+        with pytest.raises(InconsistentInputsError, match="IMAGE_RESAMPLING: 'BILINEAR"):
+            scene.weighter.compose_rtc_lrw([first, second], scene.geobox)
+
+    def test_an_unknown_snap_version_matches_on_the_snap_14_options(self, scene: _Scene) -> None:
+        known, unknown = _coh("2022-08-01", "2022-08-13"), _coh("2022-08-13", "2022-08-25")
+        rtc = [_rtc("2022-08-01"), _rtc("2022-08-13")]
+        for product, version in ((known, (14, 0, 0)), (unknown, None)):
+            tags = product_tags.coherence_metadata(
+                product, CoherenceConfig(), snap_version=version
+            )
+            _write_raster(scene.manager.get_product_path(product), [_full(0.5)], tags=tags.tags)
+        for product in rtc:
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(1.0), _full(4.0)],
+                tags=_rtc_settings(product),
+            )
+
+        composite = scene.weighter.compose_coherence_lrw([known, unknown], rtc, scene.geobox)
+
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
-            assert src.tags()["PROCESSING_SOFTWARE_VERSION"] == product_tags.UNKNOWN
+            tags = src.tags()
+        assert tags["PROCESSING_SOFTWARE_VERSION"] == product_tags.UNKNOWN
+        assert tags["COHERENCE_BIAS_CORRECTED"] == product_tags.UNKNOWN
+        assert tags["LOCAL_PHASE_RAMP_REMOVED"] == product_tags.UNKNOWN
+        assert tags["COHERENCE_WINDOW_RANGE"] == "25"
 
-    def test_inputs_without_provenance_tags_warn_about_nothing(
-        self,
-        scene: _Scene,
-        caplog: pytest.LogCaptureFixture,
+    def test_rtc_weights_of_mixed_settings_are_refused(self, scene: _Scene) -> None:
+        coh = _coh("2022-08-01", "2022-08-13")
+        first, second = _rtc("2022-08-01"), _rtc("2022-08-13")
+        coh_tags = product_tags.coherence_metadata(coh, CoherenceConfig()).tags
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)], tags=coh_tags)
+        for product, config in ((first, RTCConfig()), (second, RTCConfig(dem_oversampling=2.0))):
+            _write_raster(
+                scene.manager.get_product_path(product),
+                [_full(1.0), _full(4.0)],
+                tags=_rtc_settings(product, config),
+            )
+
+        with pytest.raises(InconsistentInputsError, match="RTC products supplying") as info:
+            scene.weighter.compose_coherence_lrw([coh], [first, second], scene.geobox)
+        assert "TERRAIN_FLATTENING_OVERSAMPLING: '1', '2'" in str(info.value)
+
+    def test_rtc_weights_are_compared_with_the_coherence_on_the_version_only(
+        self, scene: _Scene
     ) -> None:
+        coh = _coh("2022-08-01", "2022-08-13")
+        rtc = _rtc("2022-08-01")
+        coh_tags = product_tags.coherence_metadata(
+            coh, CoherenceConfig(), snap_version=(14, 0, 0)
+        ).tags
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)], tags=coh_tags)
+        # The RTC config sets its own resampling, which the coherence need not share.
+        rtc_tags = _rtc_settings(rtc, RTCConfig(img_resampling="NEAREST_NEIGHBOUR"))
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(4.0)], tags=rtc_tags)
+
+        composite = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            tags = src.tags()
+        assert tags["IMAGE_RESAMPLING"] == "BILINEAR_INTERPOLATION"
+        assert tags["PROCESSING_SOFTWARE_VERSION"] == "14.0.0"
+
+        rtc_tags["PROCESSING_SOFTWARE_VERSION"] = "13.0.0"
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(4.0)], tags=rtc_tags)
+        with pytest.raises(InconsistentInputsError, match=r"13\.0\.0, 14\.0\.0"):
+            scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox, overwrite=True)
+
+    def test_inputs_without_provenance_tags_compose(self, scene: _Scene) -> None:
         """Absent from every input is agreement, not disagreement."""
         products = [_rtc("2022-08-13"), _rtc("2022-08-25")]
         for product in products:
             _write_raster(scene.manager.get_product_path(product), [_full(2.0), _full(4.0)])
 
-        with caplog.at_level(logging.WARNING, logger="s1bursts.resolution_weighter"):
-            scene.weighter.compose_rtc_lrw(products, scene.geobox)
+        composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
 
-        assert not [r for r in caplog.records if "disagree" in r.message]
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            assert src.tags()["PROCESSING_SOFTWARE_VERSION"] == product_tags.UNKNOWN
 
 
 class TestPerProductProfiles:

@@ -48,6 +48,12 @@ from s1bursts.product import (
     RTCProduct,
     _layer_product_type,
 )
+from s1bursts.product_tags import (
+    _BURST_SETTING_KEYS,
+    _SNAP_OPTION_KEYS,
+    _SNAP_VERSION_KEY,
+    UNKNOWN,
+)
 from s1bursts.settings_check import _check_composite
 from s1bursts.time_range import TimeRange, calendar_day
 
@@ -109,6 +115,51 @@ def _split_profiles(
     if all(isinstance(value, Mapping) for value in rasterio_profile.values()):
         return {key: dict(value) for key, value in rasterio_profile.items()}
     return {_DEFAULT_PROFILE_KEY: dict(rasterio_profile)}
+
+
+def _snap_version_of(tags: Mapping[str, str]) -> str:
+    """Return the SNAP version an input records, ``UNKNOWN`` if it records none."""
+    return tags.get(_SNAP_VERSION_KEY, UNKNOWN)
+
+
+def _agreed_snap_version(inputs: Sequence[Mapping[str, str]]) -> str:
+    """Return the SNAP version the inputs share, raising if two known versions differ."""
+    versions = {_snap_version_of(tags) for tags in inputs}
+    known = versions - {UNKNOWN}
+    if len(known) > 1:
+        msg = (
+            f"All inputs must be made by the same SNAP version; got {', '.join(sorted(known))}. "
+            "SNAP 13 and 14 outputs differ, so do not mix them in one composite."
+        )
+        raise InconsistentInputsError(msg)
+    return versions.pop() if len(versions) == 1 else UNKNOWN
+
+
+def _agreed_settings(inputs: Sequence[Mapping[str, str]], *, what: str) -> dict[str, str]:
+    """Return the setting tags the inputs record, raising if they differ.
+
+    The DEM is compared separately, across every input of a composite. An
+    input of an undetermined SNAP version matches any value of the tags that
+    depend on the version; where only such an input differs, the tag is
+    ``UNKNOWN``.
+    """
+    agreed: dict[str, str] = {}
+    for key in _BURST_SETTING_KEYS:
+        if key == "DEM":
+            continue
+        compared = inputs
+        if key in _SNAP_OPTION_KEYS:
+            compared = [tags for tags in inputs if _snap_version_of(tags) != UNKNOWN]
+        values = {tags.get(key) for tags in compared}
+        if len(values) > 1:
+            listed = ", ".join(sorted("none" if v is None else repr(v) for v in values))
+            msg = f"{what} must be made with the same settings; they differ on {key}: {listed}."
+            raise InconsistentInputsError(msg)
+        values = {tags.get(key) for tags in inputs}
+        value = values.pop() if len(values) == 1 else UNKNOWN
+        if value is not None:
+            agreed[key] = value
+    return agreed
 
 
 class ResolutionWeighter:
@@ -247,8 +298,10 @@ class ResolutionWeighter:
         InconsistentInputsError
             If the inputs differ in polarization, an input is on another
             CRS, pixel size or grid than ``geobox``, or the inputs were made
-            with different DEMs. Not a ``CompositeError``: other cells given
-            these inputs would meet it too.
+            with different DEMs, processing settings or SNAP versions, where
+            an undetermined SNAP version matches any. Not a
+            ``CompositeError``: other cells given these inputs would meet it
+            too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -418,10 +471,12 @@ class ResolutionWeighter:
             If no input has a valid pixel in ``geobox``; nothing is written.
         InconsistentInputsError
             If the inputs differ in polarization or temporal baseline, an
-            input is on another CRS, pixel size or grid than ``geobox``, or
-            the inputs were made with different DEMs. Not a
-            ``CompositeError``: other cells given these inputs would meet it
-            too.
+            input is on another CRS, pixel size or grid than ``geobox``, the
+            inputs were made with different DEMs or SNAP versions, where an
+            undetermined SNAP version matches any, or the coherence products
+            or the RTC products among themselves with different processing
+            settings. Not a ``CompositeError``: other cells given these
+            inputs would meet it too.
         CompositeInputError
             If an input product is missing or cannot be read, or no RTC product
             supplies the scattering area of an observation.
@@ -487,7 +542,7 @@ class ResolutionWeighter:
 
         weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(coh_obs, weights, aggregation)
-        source_tags = self._input_tags(coh_products, additional_dem_products=rtc_products)
+        source_tags = self._input_tags(coh_products, rtc_weights=rtc_products)
         n_observations = len(coh_obs)
         self._save(
             composite,
@@ -591,8 +646,10 @@ class ResolutionWeighter:
         InconsistentInputsError
             If the inputs differ in polarization, an input is on another
             CRS, pixel size or grid than ``geobox``, or the inputs were made
-            with different DEMs. Not a ``CompositeError``: other cells given
-            these inputs would meet it too.
+            with different DEMs, processing settings or SNAP versions, where
+            an undetermined SNAP version matches any. Not a
+            ``CompositeError``: other cells given these inputs would meet it
+            too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -688,8 +745,10 @@ class ResolutionWeighter:
         InconsistentInputsError
             If the inputs differ in polarization, an input is on another
             CRS, pixel size or grid than ``geobox``, or the inputs were made
-            with different DEMs. Not a ``CompositeError``: other cells given
-            these inputs would meet it too.
+            with different DEMs, processing settings or SNAP versions, where
+            an undetermined SNAP version matches any. Not a
+            ``CompositeError``: other cells given these inputs would meet it
+            too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -929,9 +988,10 @@ class ResolutionWeighter:
         InconsistentInputsError
             If the inputs differ in polarization or temporal baseline, an
             input is on another CRS, pixel size or grid than ``geobox``, or
-            the inputs were made with different DEMs. Not a
-            ``CompositeError``: other cells given these inputs would meet it
-            too.
+            the inputs were made with different DEMs, processing settings or
+            SNAP versions, where an undetermined SNAP version matches any.
+            Not a ``CompositeError``: other cells given these inputs would
+            meet it too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -1164,19 +1224,23 @@ class ResolutionWeighter:
         self,
         products: Collection[ComposableProduct],
         *,
-        additional_dem_products: Collection[ComposableProduct] = (),
+        rtc_weights: Collection[ComposableProduct] = (),
     ) -> dict[str, str]:
-        """Tags that every per-burst input agrees on.
+        """Tags of the per-burst inputs, which must agree on how they were made.
 
         The SNAP version and the processing settings exist nowhere at
-        compositing time except in the input files. A key is carried forward
-        only where every input states the same value, so a composite spanning
-        two SNAP versions stays silent instead of claiming whichever its first
-        input happened to use.
+        compositing time except in the input files. The inputs must record
+        the same settings, the same SNAP version and the same DEM, or
+        ``InconsistentInputsError`` is raised; an input of an undetermined
+        SNAP version matches any version, and where it is all that differs,
+        the composite records ``UNKNOWN``. Any other tag is carried forward
+        only where every input states the same value.
 
-        All inputs must identify the same DEM. ``additional_dem_products``
-        supports coherence LRW composites, whose RTC contributing-area rasters
-        also depend on a DEM but do not supply the other coherence provenance.
+        ``rtc_weights`` are the RTC products that supply a coherence LRW
+        composite's scattering area. They are compared among themselves on
+        their settings, being made with another configuration than the
+        coherence inputs, and with the coherence inputs on the SNAP version
+        and the DEM.
 
         Called only after ``_load_band`` has read the same products, so the
         files are there.
@@ -1192,7 +1256,7 @@ class ResolutionWeighter:
                 raise CompositeInputError(msg) from err
 
         primary_count = len(products)
-        all_products = [*products, *additional_dem_products]
+        all_products = [*products, *rtc_weights]
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             all_input_tags = list(executor.map(read, all_products))
         per_input = all_input_tags[:primary_count]
@@ -1204,24 +1268,21 @@ class ResolutionWeighter:
             listed = ", ".join(sorted(dem_values))
             msg = f"All inputs must use the same DEM; got {listed}."
             raise InconsistentInputsError(msg)
+        snap_version = _agreed_snap_version(all_input_tags)
+        settings = _agreed_settings(per_input, what="All inputs")
+        _agreed_settings(
+            all_input_tags[primary_count:],
+            what="The RTC products supplying the scattering area",
+        )
 
         first, *rest = per_input
         agreed = {k: v for k, v in first.items() if all(other.get(k) == v for other in rest)}
-        agreed["DEM"] = dem_values.pop()
-
-        # Mixing SNAP versions is legitimate, but it is worth saying out loud
-        for key in ("PROCESSING_SOFTWARE_VERSION",):
-            values = {tags[key] for tags in per_input if key in tags}
-            # Absent from every input is agreement, not disagreement: an archive
-            # written before these tags existed simply has nothing to say.
-            if key in agreed or len(values) < 2:  # noqa: PLR2004
-                continue
-            logger.warning(
-                "inputs disagree on %s (%s); the composite will record it as unknown",
-                key,
-                ", ".join(sorted(values)),
-            )
-        return agreed
+        return {
+            **agreed,
+            **settings,
+            "DEM": dem_values.pop(),
+            _SNAP_VERSION_KEY: snap_version,
+        }
 
     def _write_lrw_qa(
         self,

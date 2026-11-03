@@ -284,6 +284,23 @@ def test_an_external_dem_requires_a_name(
         config_cls(dem=dem)
 
 
+# Previously accepted, and the products recorded the DEM as N/A.
+@pytest.mark.parametrize("config_cls", [RTCConfig, GTCConfig, CoherenceConfig])
+@pytest.mark.parametrize("name", ["", "   "], ids=["empty", "whitespace"])
+def test_an_external_dem_rejects_a_blank_name(
+    config_cls: type[RTCConfig | GTCConfig | CoherenceConfig], name: str
+) -> None:
+    with pytest.raises(ValidationError, match="must not be blank"):
+        config_cls(dem=Path("/data/dem/swissalti3d.tif"), dem_name=name)
+
+
+def test_replacing_zeros_is_a_geocoding_setting_every_config_inherits() -> None:
+    # Previously declared on BackscatterConfig and CoherenceConfig each.
+    assert GeocodingConfig.model_fields["replace_zeros_with_nan"].default is True
+    assert "replace_zeros_with_nan" not in BackscatterConfig.__annotations__
+    assert "replace_zeros_with_nan" not in CoherenceConfig.__annotations__
+
+
 def test_a_builtin_dem_needs_no_name() -> None:
     assert RTCConfig(dem="SRTM 1Sec HGT").dem_name is None
 

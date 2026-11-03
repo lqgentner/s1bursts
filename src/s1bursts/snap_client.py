@@ -835,9 +835,7 @@ class SNAPClient:
         Returns
         -------
         OperationResult
-            Result of the backscatter processing. A skipped product's result
-            records in ``other_snap_version`` another SNAP version that made
-            it; such a skip is also logged.
+            Result of the backscatter processing.
 
         Raises
         ------
@@ -854,8 +852,9 @@ class SNAPClient:
             caused by one or whose message or GPT output says so.
         ProductSettingsMismatchError
             If the product exists, ``overwrite`` is ``False``, and the product
-            records other settings than ``config``, or does not record one
-            of its fields.
+            records other settings than ``config`` or another SNAP version, or
+            does not record one of them. An undetermined SNAP version is not
+            compared.
         OSError or RasterioError
             If the product exists, ``overwrite`` is ``False``, and it cannot
             be read to check its settings.
@@ -988,9 +987,7 @@ class SNAPClient:
         Returns
         -------
         OperationResult
-            Result of the coherence processing. A skipped product's result
-            records in ``other_snap_version`` another SNAP version that made
-            it; such a skip is also logged.
+            Result of the coherence processing.
 
         Raises
         ------
@@ -1005,8 +1002,9 @@ class SNAPClient:
             caused by one or whose message or GPT output says so.
         ProductSettingsMismatchError
             If the product exists, ``overwrite`` is ``False``, and the product
-            records other settings than ``config``, or does not record one
-            of its fields.
+            records other settings than ``config`` or another SNAP version, or
+            does not record one of them. An undetermined SNAP version is not
+            compared.
         OSError or RasterioError
             If the product exists, ``overwrite`` is ``False``, and it cannot
             be read to check its settings.

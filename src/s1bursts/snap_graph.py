@@ -694,9 +694,10 @@ class GeocodingConfig(BaseModel):
         DEM.
     dem_name
         Name of an external DEM, written to product metadata and compared
-        before an existing product is skipped. Required when ``dem`` is a path;
-        ignored for SNAP's built-in DEMs, whose ``dem`` value is already their
-        name. Name each DEM differently, such as by its source and version.
+        before an existing product is skipped. Required when ``dem`` is a path,
+        and must not be blank; ignored for SNAP's built-in DEMs, whose ``dem``
+        value is already their name. Name each DEM differently, such as by its
+        source and version.
     img_resampling
         Resampling of the image during terrain correction.
     dem_resampling
@@ -721,6 +722,9 @@ class GeocodingConfig(BaseModel):
         ``s1bursts.prepare_dem_for_snap``, which has already been converted
         to ellipsoidal heights. SNAP only applies EGM96, so preprocess DEMs in
         other vertical datums such as EGM2008 instead of enabling this option.
+    replace_zeros_with_nan
+        Convert SNAP's zero fill value to NaN, so no-data does not enter later
+        averages as a valid low value.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
@@ -745,13 +749,15 @@ class GeocodingConfig(BaseModel):
     align_to_standard_grid: bool = True
     external_dem_nodata: float = 0.0
     external_dem_apply_egm: bool = False
+    replace_zeros_with_nan: bool = True
 
     @model_validator(mode="after")
     def _require_dem_name(self) -> Self:
         """Reject an external DEM without a name to record it by."""
-        if isinstance(self.dem, Path) and self.dem_name is None:
+        if isinstance(self.dem, Path) and not (self.dem_name or "").strip():
             msg = (
-                f"dem_name is required for an external DEM ({self.dem}): products record "
+                f"dem_name is required for an external DEM ({self.dem}) and must not be "
+                "blank: products record "
                 "the DEM by name, never by path. Name it by its source and version."
             )
             raise ValueError(msg)
@@ -809,13 +815,9 @@ class BackscatterConfig(GeocodingConfig):
         SNAP's ``grSquarePixel`` option, which derives the azimuth looks from
         the range looks and the local geometry and discards the requested
         ``n_az_looks`` is pinned off. Therefore, the looks given are the looks applied.
-    replace_zeros_with_nan
-        Convert SNAP's zero fill value to NaN, so no-data does not enter later
-        averages as a valid low value.
     """
 
     multilook: tuple[_PositiveInt, _PositiveInt] | None = (5, 1)
-    replace_zeros_with_nan: bool = True
 
     @property
     @abstractmethod
@@ -906,8 +908,6 @@ class CoherenceConfig(GeocodingConfig):
         Let SNAP estimate and remove a local phase ramp within each estimation
         window before averaging, which recovers coherence lost to residual
         fringes. Requires SNAP 14, as above.
-    replace_zeros_with_nan
-        Convert SNAP's zero fill value to NaN.
     """
 
     window: tuple[_PositiveInt, _PositiveInt] = (25, 5)
@@ -915,7 +915,6 @@ class CoherenceConfig(GeocodingConfig):
     subtract_topographic_phase: bool = True
     correct_coherence_bias: bool = False
     remove_local_phase_ramp: bool = False
-    replace_zeros_with_nan: bool = True
 
     @property
     def output_bands(self) -> list[str]:

@@ -67,10 +67,11 @@ with fm.open(product) as src:
 ```
 
 These tags make a file understandable on its own, even when separated from the
-code that wrote it. A composite carries each setting its inputs share. Where
-the [CEOS-ARD SAR specification](https://ceos.org/ard/) has a term, the tag
-names use it, so it can be looked up there. s1bursts borrows the vocabulary
-only and does not claim conformance with the specification.
+code that wrote it. A composite carries the processing settings of its inputs,
+which must all match. Where the
+[CEOS-ARD SAR specification](https://ceos.org/ard/) has a term, the tag names
+use it, so it can be looked up there. s1bursts borrows the vocabulary only and
+does not claim conformance with the specification.
 
 ## Filenames
 
