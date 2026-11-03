@@ -33,6 +33,18 @@ def test_citation_names_the_newest_release() -> None:
     assert _field("date-released") == newest.group("date")
 
 
+def test_abstract_is_the_readme_introduction() -> None:
+    readme = (REPO_ROOT / "README.md").read_text()
+    introduction = readme.split("</div>", 1)[1].split("\n## ", 1)[0]
+    abstract = re.search(r"^abstract: >-\n((?:  .*\n|\n)+)", CITATION, re.MULTILINE)
+    assert abstract is not None, "CITATION.cff has no folded 'abstract'"
+
+    def words(text: str) -> list[str]:
+        return re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text).split()
+
+    assert words(abstract.group(1)) == words(introduction)
+
+
 def test_citation_cites_the_concept_doi() -> None:
     doi = _field("doi")
 

@@ -3,10 +3,10 @@ message: If you use s1bursts in your research, please cite it as below.
 type: software
 title: s1bursts
 abstract: >-
-  Sentinel-1 download, processing and compositing made easy. s1bursts
-  searches and downloads Sentinel-1 SLC bursts from the Copernicus Data Space
-  Ecosystem, processes them with ESA SNAP into backscatter and coherence, and
-  composites them on the MGRS grid with local resolution weighting.
+  s1bursts makes Sentinel-1 synthetic aperture radar (SAR) data easy to use from
+  Python. It searches and downloads the data from the Copernicus Data Space
+  Ecosystem (CDSE), processes it with ESA SNAP into backscatter and coherence,
+  and composites them on the MGRS grid with local resolution weighting.
 authors:
   - given-names: Luis Q.
     family-names: Gentner

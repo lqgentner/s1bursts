@@ -14,6 +14,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   [10.5281/zenodo.23918246](https://doi.org/10.5281/zenodo.23918246), and
   `CITATION.cff` holds the citation metadata.
 
+### Changed
+
+- The package summary reads "Sentinel-1 download, processing and compositing
+  in Python." instead of "... made easy."
+
 ## [0.8.0] - 2026-11-03
 
 The first release on PyPI, and the first with a

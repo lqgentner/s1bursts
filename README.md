@@ -2,7 +2,7 @@
 
 <img src="https://raw.githubusercontent.com/lqgentner/s1bursts/main/assets/s1burst-logo.svg" alt="s1bursts" width="360">
 
-*Sentinel-1 download, processing and compositing made easy.*
+*Sentinel-1 download, processing and compositing in Python.*
 
 [![CI](https://github.com/lqgentner/s1bursts/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lqgentner/s1bursts/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/lqgentner/s1bursts/graph/badge.svg?token=V6PEU2U4DW)](https://codecov.io/gh/lqgentner/s1bursts)
@@ -20,13 +20,8 @@ s1bursts makes Sentinel-1 synthetic aperture radar (SAR) data easy to use from
 Python. It searches and downloads the data from the
 [Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu/) (CDSE),
 processes it with [ESA SNAP](https://step.esa.int/main/toolboxes/snap/) into
-backscatter and coherence, and combines the results into composites on a
-fixed grid.
-
-It works with bursts, the smallest part of a Sentinel-1 scene that can be
-processed on its own. A burst is about 100 MB instead of a 4 GB scene, so you
-download and process only the area you are interested in. This makes dense
-time series of a fixed area practical.
+backscatter and coherence, and composites them on the MGRS grid with local
+resolution weighting.
 
 ## Features
 
