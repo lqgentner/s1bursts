@@ -2534,7 +2534,7 @@ class TestInputConsistency:
         assert set(result) == {"Ascending", "Descending"}
 
     def test_existing_directions_alone_read_no_input(self, scene: _Scene) -> None:
-        asc, desc = self._pass_inputs(scene, ascending_version=(13, 0, 0))
+        asc, desc = self._pass_inputs(scene)
         first = scene.weighter.compose_rtc_by_pass([asc], scene.geobox, time_range=_AUGUST)
         first |= scene.weighter.compose_rtc_by_pass([desc], scene.geobox, time_range=_AUGUST)
         for product in (asc, desc):
@@ -2544,6 +2544,49 @@ class TestInputConsistency:
             scene.weighter.compose_rtc_by_pass([asc, desc], scene.geobox, time_range=_AUGUST)
             == first
         )
+
+    # Previously a call with only the other direction's inputs compared nothing.
+    def test_the_other_directions_composite_of_another_version_is_refused(
+        self, scene: _Scene
+    ) -> None:
+        asc, desc = self._pass_inputs(scene, ascending_version=(13, 0, 0))
+        existing = scene.weighter.compose_rtc_by_pass([asc], scene.geobox, time_range=_AUGUST)
+
+        with pytest.raises(
+            InconsistentInputsError, match=r"PROCESSING_SOFTWARE_VERSION '13\.0\.0'"
+        ):
+            scene.weighter.compose_rtc_by_pass([desc], scene.geobox, time_range=_AUGUST)
+        assert scene.manager.find(RTCPassComposite) == list(existing.values())
+
+    def test_the_other_directions_composite_is_left_untouched(self, scene: _Scene) -> None:
+        asc, desc = self._pass_inputs(scene)
+        existing = scene.weighter.compose_rtc_by_pass([asc], scene.geobox, time_range=_AUGUST)
+        path = scene.manager.get_product_path(existing["Ascending"])
+        before = (path.stat().st_mtime_ns, path.read_bytes())
+
+        result = scene.weighter.compose_rtc_by_pass([desc], scene.geobox, time_range=_AUGUST)
+
+        assert set(result) == {"Descending"}
+        assert (path.stat().st_mtime_ns, path.read_bytes()) == before
+
+    def test_the_other_directions_aggregation_is_not_compared(self, scene: _Scene) -> None:
+        asc, desc = self._pass_inputs(scene)
+        scene.weighter.compose_rtc_by_pass(
+            [asc], scene.geobox, aggregation="median", time_range=_AUGUST
+        )
+
+        result = scene.weighter.compose_rtc_by_pass([desc], scene.geobox, time_range=_AUGUST)
+
+        assert set(result) == {"Descending"}
+
+    def test_the_other_direction_of_another_span_is_not_found(self, scene: _Scene) -> None:
+        asc, desc = self._pass_inputs(scene, ascending_version=(13, 0, 0))
+        scene.weighter.compose_rtc_by_pass([asc], scene.geobox)
+
+        result = scene.weighter.compose_rtc_by_pass([desc], scene.geobox)
+
+        assert set(result) == {"Descending"}
+        assert len(scene.manager.find(RTCPassComposite)) == 2
 
     def test_an_existing_composite_missing_a_setting_is_refused(self) -> None:
         inputs = [_rtc_settings(_rtc("2022-08-25"))]

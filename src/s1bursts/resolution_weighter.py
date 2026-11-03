@@ -54,6 +54,7 @@ from s1bursts.product_tags import (
     _SNAP_VERSION_KEY,
     UNKNOWN,
 )
+from s1bursts.query import _PASS_DIRECTIONS
 from s1bursts.settings_check import _check_composite
 from s1bursts.time_range import TimeRange, calendar_day
 
@@ -236,8 +237,8 @@ def _check_existing_composite(
         if values and value not in values:
             msg = (
                 f"The existing composite '{name}' records {key} {_shown(value)}, but the "
-                f"inputs record {_shown(values.pop())}. Pass overwrite=True to rebuild "
-                "every direction from these inputs."
+                f"inputs record {_shown(values.pop())}. Pass overwrite=True with inputs "
+                "that agree to rebuild it."
             )
             raise InconsistentInputsError(msg)
 
@@ -922,8 +923,9 @@ class ResolutionWeighter:
 
         Every existing direction is checked before any is built. The inputs
         of every direction to be built are checked against each other and
-        against the composite of every existing direction, whose own inputs
-        are not read, so a mismatch writes nothing.
+        against the existing composite of every other direction, also one
+        this call has no inputs for, whose own inputs are not read, so a
+        mismatch writes nothing.
 
         Raises
         ------
@@ -945,6 +947,8 @@ class ResolutionWeighter:
         if not overwrite:
             result, existing_tags = self._existing_by_pass(by_pass, make, geobox, aggregation)
         building = {d: subset for d, subset in sorted(by_pass.items()) if d not in result}
+        if building:
+            existing_tags |= self._other_direction_tags(by_pass, make)
         source_tags = self._source_tags_by_pass(building, existing_tags)
         for direction, subset in building.items():
             product = make(direction)
@@ -1011,6 +1015,27 @@ class ResolutionWeighter:
             for name, recorded in existing.items():
                 _check_existing_composite(name, recorded, every_input)
         return {direction: _agreed_tags(entries) for direction, entries in per_direction.items()}
+
+    def _other_direction_tags(
+        self,
+        by_pass: Mapping[PassDirection, Sequence[ComposableProduct]],
+        make: Callable[[PassDirection], CompositeProduct],
+    ) -> dict[str, dict[str, str]]:
+        """Return the tags of each input-less direction's existing composite, by file name.
+
+        A call with the inputs of one direction must not add a composite that
+        disagrees with the other direction's already on disk. Only its tags
+        are read; it is neither checked against this call nor rebuilt.
+        """
+        tags: dict[str, dict[str, str]] = {}
+        for direction in _PASS_DIRECTIONS:
+            if direction in by_pass:
+                continue
+            product = make(direction)
+            if self._fm.product_exists(product, Layer.MEASUREMENT):
+                name = self._fm.get_product_path(product).name
+                tags[name] = self._read_tags([product])[0]
+        return tags
 
     def _existing_by_pass[C: (RTCPassComposite, GTCPassComposite, CohPassComposite)](
         self,
@@ -1347,10 +1372,12 @@ class ResolutionWeighter:
         tags = self._read_tags([*products, *rtc_weights])
         return _agreed_tags(tags[: len(products)], tags[len(products) :])
 
-    def _read_tags(self, products: Sequence[ComposableProduct]) -> list[dict[str, str]]:
+    def _read_tags(
+        self, products: Sequence[ComposableProduct | CompositeProduct]
+    ) -> list[dict[str, str]]:
         """Read the tags of each product, in parallel and in order."""
 
-        def read(product: ComposableProduct) -> dict[str, str]:
+        def read(product: ComposableProduct | CompositeProduct) -> dict[str, str]:
             path = self._fm.get_product_path(product)
             try:
                 with rasterio_open(path) as src:
