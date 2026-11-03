@@ -1,5 +1,6 @@
-"""``CITATION.cff`` names the newest release; keep it agreeing with the changelog.
+"""``CITATION.cff`` repeats facts stated elsewhere; keep them agreeing.
 
+Its title carries the package summary and its abstract the README introduction.
 Its ``version`` and ``date-released`` cannot come from the git tag like the package
 version does, so they are bumped by hand in each release PR.
 """
@@ -8,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import tomllib
 
 REPO_ROOT = Path(__file__).parent.parent
 CITATION = (REPO_ROOT / "CITATION.cff").read_text()
@@ -31,6 +33,12 @@ def test_citation_names_the_newest_release() -> None:
 
     assert _field("version") == newest.group("version")
     assert _field("date-released") == newest.group("date")
+
+
+def test_title_carries_the_package_summary() -> None:
+    summary = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"]["description"]
+
+    assert _field("title").strip('"') == f"s1bursts: {summary.removesuffix('.')}"
 
 
 def test_abstract_is_the_readme_introduction() -> None:

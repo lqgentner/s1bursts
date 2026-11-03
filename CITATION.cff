@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: If you use s1bursts in your research, please cite it as below.
 type: software
-title: s1bursts
+title: "s1bursts: Sentinel-1 download, processing and compositing in Python"
 abstract: >-
   s1bursts makes Sentinel-1 synthetic aperture radar (SAR) data easy to use from
   Python. It searches and downloads the data from the Copernicus Data Space
