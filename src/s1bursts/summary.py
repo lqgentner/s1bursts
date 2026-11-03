@@ -34,23 +34,11 @@ class OkResult[T]:
         The resulting product.
     skipped
         Whether the operation was skipped (product already exists).
-    other_snap_version
-        For a skipped product, the SNAP version that made it, as for the
-        attribute.
-
-    Attributes
-    ----------
-    other_snap_version
-        The SNAP version recorded by a skipped product when it differs from
-        the running one, such as ``"13.0.0"``; ``None`` otherwise, also when
-        either version is unknown. SNAP 13 and 14 outputs differ, so such a
-        product should not be mixed into a time series of the other.
     """
 
     source: Any
     result: T
     skipped: bool = False
-    other_snap_version: str | None = None
 
 
 @dataclass
@@ -92,9 +80,6 @@ class OperationSummary[T]:
         List of operation results for failed items.
     processing_time
         Total operation time in seconds.
-    n_other_snap_version
-        Number of skipped items made by another SNAP version than the running
-        one; see ``OkResult.other_snap_version``.
     """
 
     n_total: int
@@ -104,7 +89,6 @@ class OperationSummary[T]:
     products: list[T]
     failed_items: list[ErrorResult]
     processing_time: float = 0.0
-    n_other_snap_version: int = 0
 
     @property
     def success_rate(self) -> float:
@@ -152,9 +136,6 @@ class OperationSummary[T]:
             products=[r.result for r in results if isinstance(r, OkResult)],
             failed_items=[r for r in results if isinstance(r, ErrorResult)],
             processing_time=end_time - start_time,
-            n_other_snap_version=sum(
-                1 for r in results if isinstance(r, OkResult) and r.other_snap_version
-            ),
         )
 
     def raise_on_failure(
@@ -214,8 +195,6 @@ class OperationSummary[T]:
         table.add_row("Total", str(self.n_total))
         table.add_row("Processed", f"[green]{self.n_processed}[/green]")
         table.add_row("Skipped", f"[yellow]{self.n_skipped}[/yellow]")
-        if self.n_other_snap_version:
-            table.add_row("  other SNAP version", f"[yellow]{self.n_other_snap_version}[/yellow]")
         table.add_row("Failed", f"[red]{self.n_failed}[/red]")
         table.add_row("Success Rate", f"{self.success_rate * 100:.0f} %")
         table.add_row("Processing Time", f"{self.processing_time / MIN_S:.0f} min")

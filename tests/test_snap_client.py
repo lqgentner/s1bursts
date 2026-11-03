@@ -1029,21 +1029,36 @@ class TestSkipChecksTheSettings:
 
         mock_gpt.assert_not_called()
 
-    def test_another_snap_version_is_recorded_in_the_result(
-        self, client: SNAPClient, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    # Previously skipped, with the version recorded in the result and logged.
+    def test_another_snap_version_raises(self, client: SNAPClient) -> None:
         client.config.resolved_snap_version = (14, 0, 0)
         product = RTCProduct.from_burst(_make_burst("2022-01-01"), self.CRS_UTM32)
         _write_tagged(client, product, RTCConfig(), snap_version=(13, 0, 0))
 
-        with caplog.at_level(logging.WARNING, logger="s1bursts"):
-            result = client.create_backscatter(
+        with (
+            patch.object(client, "_run_gpt") as mock_gpt,
+            pytest.raises(ProductSettingsMismatchError, match="SNAP 13 and 14 outputs differ"),
+        ):
+            client.create_backscatter(
                 _make_burst("2022-01-01"), crs=self.CRS_UTM32, config=RTCConfig()
             )
 
+        mock_gpt.assert_not_called()
+
+    def test_a_known_version_skips_a_coherence_made_under_an_unknown_one(
+        self, client: SNAPClient
+    ) -> None:
+        pair = self._pair()
+        product = CoherenceProduct.from_burst_pair(pair, self.CRS_UTM32)
+        # The stub installation has no VERSION.txt, so the file records N/A.
+        assert client.config.resolved_snap_version is None
+        _write_tagged(client, product, CoherenceConfig())
+        client.config.resolved_snap_version = (14, 0, 0)
+
+        result = client.create_coherence(pair, crs=self.CRS_UTM32, config=CoherenceConfig())
+
         assert isinstance(result, OkResult)
-        assert (result.skipped, result.other_snap_version) == (True, "13.0.0")
-        assert "made by SNAP 13.0.0 rather than the running 14.0.0" in caplog.text
+        assert result.skipped
 
     def test_overwrite_neither_reads_nor_skips_the_existing_product(
         self, client: SNAPClient

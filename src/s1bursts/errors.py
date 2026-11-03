@@ -23,7 +23,8 @@ can still fail on a batch that finished with failures:
   next cell may still succeed. A loop over cells catches this base class; an
   invalid argument to ``compose_*`` stays a plain ``ValueError`` and is not
   caught by it, nor are inputs that cannot be composited together at all, an
-  ``InconsistentInputsError``, such as products on another UTM zone or grid.
+  ``InconsistentInputsError``, such as products on another UTM zone or grid,
+  or made with other settings or by another SNAP version.
 - ``ProductSettingsMismatchError`` says that a product to be skipped exists
   but was made with other settings than requested, or does not record them.
   Changed settings affect every product of a call, so it stops a batch like an
@@ -270,8 +271,9 @@ class InconsistentInputsError(S1BurstsError, ValueError):
     """The input products passed to ``compose_*`` cannot be composited together.
 
     They are on another CRS, pixel size or pixel grid than the target cell,
-    were made with different DEMs, or differ in polarization or temporal
-    baseline. The inputs are chosen by the call, so every other cell given
+    were made with different DEMs, processing settings or SNAP versions, or
+    differ in polarization or temporal baseline. An undetermined SNAP version
+    matches any. The inputs are chosen by the call, so every other cell given
     such inputs fails alike: this is not a ``CompositeError``, and a loop over
     cells stops at it.
     """
@@ -289,8 +291,10 @@ class CompositeInputError(CompositeError, OSError):
 class ProductSettingsMismatchError(S1BurstsError):
     """An existing product was made with other settings than requested.
 
-    Also raised for a product that does not record every requested setting,
-    such as one written by an earlier s1bursts. Raised instead of skipping the
+    Also raised for a per-burst product made by another SNAP version than the
+    running one, unless either version is undetermined, and for a product
+    that does not record every requested setting, such as one written by an
+    earlier s1bursts. Raised instead of skipping the
     product when ``overwrite=False``: by ``BurstProcessor.create_*`` and
     ``SNAPClient.create_*`` for a per-burst product, and by
     ``ResolutionWeighter.compose_*`` for a composite. Pass ``overwrite=True``
@@ -313,7 +317,9 @@ class ProductSettingsMismatchError(S1BurstsError):
     differences
         Each differing setting, keyed by the tag or grid property compared,
         such as ``"GRID_SPACING"`` or ``"TRANSFORM"``, mapped to its recorded
-        and its requested value. ``None`` stands for a tag that is absent.
+        and its requested value; for ``"PROCESSING_SOFTWARE_VERSION"``, the
+        requested value is the running SNAP version. ``None`` stands for a tag
+        that is absent.
     """
 
     def __init__(

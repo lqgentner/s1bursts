@@ -46,7 +46,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from importlib.metadata import version as _distribution_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 
@@ -153,13 +153,18 @@ _SETTING_TAGS: dict[str, tuple[str, ...]] = {
 # The per-burst tags that record a processing setting.
 _BURST_SETTING_KEYS = tuple(key for keys in _SETTING_TAGS.values() for key in keys)
 
+# The SNAP version, and the tags that depend on it: written as ``UNKNOWN``
+# under an undetermined version, which therefore matches any other.
+_SNAP_VERSION_KEY = "PROCESSING_SOFTWARE_VERSION"
+_SNAP_OPTION_KEYS = ("COHERENCE_BIAS_CORRECTED", "LOCAL_PHASE_RAMP_REMOVED")
+
 # Provenance a composite inherits from the per-burst products it was built
 # from, describing how those inputs were made. Always present on a composite,
-# as ``UNKNOWN`` where the inputs do not supply a single answer.
-_INPUT_KEYS = ("DEM", "PROCESSING_SOFTWARE", "PROCESSING_SOFTWARE_VERSION")
-# Inherited only where every input records the same value, and left out
-# otherwise: the processing settings, and the coherence estimator.
-_SETTING_INPUT_KEYS = tuple(key for key in _BURST_SETTING_KEYS if key not in _INPUT_KEYS)
+# as ``UNKNOWN`` where the inputs do not record a single answer.
+_INPUT_KEYS = ("DEM", "PROCESSING_SOFTWARE", _SNAP_VERSION_KEY)
+# Everything a composite inherits, where its inputs record it: the provenance,
+# the processing settings the inputs share, and for coherence the estimator.
+_INHERITED_KEYS = tuple(dict.fromkeys((*_INPUT_KEYS, *_BURST_SETTING_KEYS)))
 _COHERENCE_INPUT_KEYS = (
     "PHASE_QUALITY_METHOD",
     "PHASE_QUALITY_REFERENCE",
@@ -326,9 +331,8 @@ def _inherited(
     """Forward the named keys from the per-burst inputs' tags.
 
     A key in ``required`` is always emitted, as ``UNKNOWN`` where the
-    inputs did not supply it — they disagreed, or never carried it. Anything
-    else is simply left out when absent, because it may not apply to this
-    product at all.
+    inputs did not supply it. Anything else is simply left out when absent,
+    because it may not apply to this product at all.
     """
     source_tags = source_tags or {}
     inherited = {key: source_tags[key] for key in keys if key in source_tags}
@@ -448,7 +452,7 @@ def rtc_lrw_metadata(
         "LAYER_DESCRIPTION": (
             "Gamma-0 backscatter composite, weighted by the inverse local scattering area."
         ),
-        **_inherited(source_tags, (*_INPUT_KEYS, *_SETTING_INPUT_KEYS), required=_INPUT_KEYS),
+        **_inherited(source_tags, _INHERITED_KEYS, required=_INPUT_KEYS),
     }
     return RasterMetadata(
         tags=tags,
@@ -524,7 +528,7 @@ def coh_lrw_metadata(
         **dict(statistics or {}),
         **_inherited(
             source_tags,
-            (*_INPUT_KEYS, *_SETTING_INPUT_KEYS, *_COHERENCE_INPUT_KEYS),
+            (*_INHERITED_KEYS, *_COHERENCE_INPUT_KEYS),
             required=_INPUT_KEYS,
         ),
     }
@@ -570,7 +574,7 @@ def rtc_pass_metadata(
         "LAYER_DESCRIPTION": (
             "Unweighted gamma-0 backscatter composite of a single pass direction."
         ),
-        **_inherited(source_tags, (*_INPUT_KEYS, *_SETTING_INPUT_KEYS), required=_INPUT_KEYS),
+        **_inherited(source_tags, _INHERITED_KEYS, required=_INPUT_KEYS),
     }
     return RasterMetadata(
         tags=tags,
@@ -619,7 +623,7 @@ def gtc_pass_metadata(
             "Unweighted beta-0 backscatter composite of a single pass direction, "
             "geometrically terrain corrected only."
         ),
-        **_inherited(source_tags, (*_INPUT_KEYS, *_SETTING_INPUT_KEYS), required=_INPUT_KEYS),
+        **_inherited(source_tags, _INHERITED_KEYS, required=_INPUT_KEYS),
     }
     return RasterMetadata(
         tags=tags,
@@ -675,7 +679,7 @@ def coh_pass_metadata(
         **dict(statistics or {}),
         **_inherited(
             source_tags,
-            (*_INPUT_KEYS, *_SETTING_INPUT_KEYS, *_COHERENCE_INPUT_KEYS),
+            (*_INHERITED_KEYS, *_COHERENCE_INPUT_KEYS),
             required=_INPUT_KEYS,
         ),
     }
@@ -747,7 +751,7 @@ def qa_metadata(
         ),
         **(_lrw(aggregation, clip_max_resolution) if weighted else _unweighted(aggregation)),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
-        **_inherited(source_tags, (*_INPUT_KEYS, *_SETTING_INPUT_KEYS), required=_INPUT_KEYS),
+        **_inherited(source_tags, _INHERITED_KEYS, required=_INPUT_KEYS),
     }
     if isinstance(product, RTCPassComposite | GTCPassComposite | CohPassComposite):
         tags["PASS_DIRECTION"] = product.pass_direction
@@ -804,11 +808,13 @@ def _burst(
         "PIXEL_COORDINATE_CONVENTION": _PIXEL_CONVENTION,
         "PROCESSING_SOFTWARE": "ESA SNAP",
         "PROCESSING_SOFTWARE_VERSION": _software_version(snap_version),
-        "GRID_SPACING": f"{config.grid_spacing:g} m",
-        "DEM": config.dem if isinstance(config.dem, str) else config.dem_name or UNKNOWN,
+        "GRID_SPACING": f"{_number(config.grid_spacing)} m",
+        # GeocodingConfig rejects an external DEM without a name.
+        "DEM": config.dem if isinstance(config.dem, str) else cast("str", config.dem_name),
         "IMAGE_RESAMPLING": config.img_resampling,
         "DEM_RESAMPLING": config.dem_resampling,
         "ALIGNED_TO_STANDARD_GRID": _flag(config.align_to_standard_grid),
+        "ZEROS_REPLACED_WITH_NAN": _flag(config.replace_zeros_with_nan),
     }
     # These settings apply to an external DEM only.
     if isinstance(config.dem, Path):
@@ -864,7 +870,6 @@ def backscatter_metadata(
         "POLARIZATION": product.polarization,
         "ACQUISITION_DATE": _date(product.date),
         "TERRAIN_CORRECTION": "Radiometric and geometric" if gamma0 else "Geometric",
-        "ZEROS_REPLACED_WITH_NAN": _flag(config.replace_zeros_with_nan),
     }
     if config.multilook is not None:
         looks_rg, looks_az = config.multilook
@@ -959,7 +964,6 @@ def coherence_metadata(
         "TOPOGRAPHIC_PHASE_REMOVED": _flag(config.subtract_topographic_phase),
         "COHERENCE_BIAS_CORRECTED": correct_bias,
         "LOCAL_PHASE_RAMP_REMOVED": remove_ramp,
-        "ZEROS_REPLACED_WITH_NAN": _flag(config.replace_zeros_with_nan),
     }
     return RasterMetadata(
         tags=tags,

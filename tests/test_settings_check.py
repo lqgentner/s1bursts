@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING
-import warnings
 
 from affine import Affine
 import numpy as np
@@ -24,10 +23,7 @@ from s1bursts.errors import (
 )
 from s1bursts.product import CoherenceProduct, GTCProduct, RTCProduct
 from s1bursts.product_tags import _SETTING_TAGS
-from s1bursts.settings_check import (
-    _check_burst_product,
-    _warn_other_snap,
-)
+from s1bursts.settings_check import _check_burst_product
 from s1bursts.snap_graph import CoherenceConfig, GTCConfig, RTCConfig
 
 if TYPE_CHECKING:
@@ -114,8 +110,8 @@ def _check(
     product: _BurstProduct,
     config: BackscatterConfig | CoherenceConfig,
     snap_version: tuple[int, ...] | None = _SNAP_14,
-) -> str | None:
-    return _check_burst_product(path, product, config, snap_version=snap_version)
+) -> None:
+    _check_burst_product(path, product, config, snap_version=snap_version)
 
 
 # Another value for every config field that a tag records, so that a new field
@@ -195,7 +191,7 @@ class TestBurstProducts:
     def test_matching_settings_pass(self, tmp_path: Path) -> None:
         path = _made_with(tmp_path, _rtc(), RTCConfig())
 
-        assert _check(path, _rtc(), RTCConfig()) is None
+        _check(path, _rtc(), RTCConfig())
 
     def test_another_grid_spacing_raises_naming_both_values(self, tmp_path: Path) -> None:
         path = _made_with(tmp_path, _rtc(), RTCConfig(grid_spacing=20.0))
@@ -274,7 +270,7 @@ class TestBurstProducts:
         named = RTCConfig(dem=tmp_path / "dem.tif", dem_name="GLO-30 prepared")
         path = _made_with(tmp_path, _rtc(), named)
 
-        assert _check(path, _rtc(), named) is None
+        _check(path, _rtc(), named)
         with pytest.raises(ProductSettingsMismatchError, match=r"\(dem, dem_name\)") as excinfo:
             _check(path, _rtc(), RTCConfig())
 
@@ -337,15 +333,40 @@ class TestMissingTags:
 
 
 class TestSnapVersion:
-    def test_another_snap_version_is_counted_not_raised(self, tmp_path: Path) -> None:
+    # Previously skipped, recorded in OkResult.other_snap_version.
+    def test_another_snap_version_raises(self, tmp_path: Path) -> None:
         path = _made_with(tmp_path, _rtc(), RTCConfig(), snap_version=(13, 0, 0))
 
-        assert _check(path, _rtc(), RTCConfig(), snap_version=_SNAP_14) == "13.0.0"
+        with pytest.raises(ProductSettingsMismatchError) as excinfo:
+            _check(path, _rtc(), RTCConfig(), snap_version=_SNAP_14)
+
+        assert excinfo.value.differences == {
+            "PROCESSING_SOFTWARE_VERSION": ("13.0.0", "14.0.0"),
+        }
+        message = str(excinfo.value)
+        assert (
+            "PROCESSING_SOFTWARE_VERSION (the SNAP installation): recorded '13.0.0', "
+            "requested '14.0.0'"
+        ) in message
+        assert "SNAP 13 and 14 outputs differ" in message
+        assert "overwrite=True" in message
+
+    def test_a_missing_snap_version_raises(self, tmp_path: Path) -> None:
+        tags = product_tags.burst_metadata(_rtc(), RTCConfig(), snap_version=_SNAP_14).tags
+        del tags["PROCESSING_SOFTWARE_VERSION"]
+        path = _write(tmp_path / "older.tif", tags)
+
+        with pytest.raises(ProductSettingsMismatchError) as excinfo:
+            _check(path, _rtc(), RTCConfig())
+
+        assert excinfo.value.differences == {"PROCESSING_SOFTWARE_VERSION": (None, "14.0.0")}
 
     @pytest.mark.parametrize(
-        ("made", "running"), [((13, 0, 0), None), (None, _SNAP_14)], ids=["running", "recorded"]
+        ("made", "running"),
+        [((13, 0, 0), None), (None, _SNAP_14), (None, None), ((15, 1, 0), (15, 1, 0))],
+        ids=["running-unknown", "recorded-unknown", "both-unknown", "same-unsupported"],
     )
-    def test_an_unknown_version_is_not_compared(
+    def test_an_undetermined_or_equal_version_is_skipped(
         self,
         tmp_path: Path,
         made: tuple[int, ...] | None,
@@ -353,13 +374,32 @@ class TestSnapVersion:
     ) -> None:
         path = _made_with(tmp_path, _rtc(), RTCConfig(), snap_version=made)
 
-        assert _check(path, _rtc(), RTCConfig(), snap_version=running) is None
+        _check(path, _rtc(), RTCConfig(), snap_version=running)
 
-    def test_snap_13_coherence_matches_snap_14_with_the_options_off(self, tmp_path: Path) -> None:
+    # Previously raised: COHERENCE_BIAS_CORRECTED recorded 'false', requested 'N/A'.
+    def test_an_unknown_running_version_skips_known_coherence(self, tmp_path: Path) -> None:
         product = _coherence()
-        path = _made_with(tmp_path, product, CoherenceConfig(), snap_version=(13, 0, 0))
+        path = _made_with(tmp_path, product, CoherenceConfig(), snap_version=_SNAP_14)
 
-        assert _check(path, product, CoherenceConfig(), snap_version=_SNAP_14) == "13.0.0"
+        _check(path, product, CoherenceConfig(), snap_version=None)
+
+    def test_an_unknown_recorded_version_skips_coherence(self, tmp_path: Path) -> None:
+        product = _coherence()
+        path = _made_with(tmp_path, product, CoherenceConfig(), snap_version=None)
+
+        _check(path, product, CoherenceConfig(), snap_version=(13, 0, 0))
+
+    def test_an_unknown_version_still_compares_the_other_settings(self, tmp_path: Path) -> None:
+        product = _coherence()
+        path = _made_with(tmp_path, product, CoherenceConfig(window=(10, 2)), snap_version=None)
+
+        with pytest.raises(ProductSettingsMismatchError) as excinfo:
+            _check(path, product, CoherenceConfig(), snap_version=_SNAP_14)
+
+        assert excinfo.value.differences == {
+            "COHERENCE_WINDOW_RANGE": ("10", "25"),
+            "COHERENCE_WINDOW_AZIMUTH": ("2", "5"),
+        }
 
     def test_snap_13_coherence_differs_from_snap_14_with_an_option_on(
         self, tmp_path: Path
@@ -370,18 +410,9 @@ class TestSnapVersion:
         with pytest.raises(ProductSettingsMismatchError) as excinfo:
             _check(path, product, CoherenceConfig(correct_coherence_bias=True))
 
-        assert excinfo.value.differences == {"COHERENCE_BIAS_CORRECTED": ("false", "true")}
-
-    def test_an_unknown_version_cannot_confirm_the_snap_14_options(self, tmp_path: Path) -> None:
-        product = _coherence()
-        path = _made_with(tmp_path, product, CoherenceConfig())
-
-        with pytest.raises(ProductSettingsMismatchError) as excinfo:
-            _check(path, product, CoherenceConfig(), snap_version=None)
-
         assert excinfo.value.differences == {
-            "COHERENCE_BIAS_CORRECTED": ("false", "N/A"),
-            "LOCAL_PHASE_RAMP_REMOVED": ("false", "N/A"),
+            "COHERENCE_BIAS_CORRECTED": ("false", "true"),
+            "PROCESSING_SOFTWARE_VERSION": ("13.0.0", "14.0.0"),
         }
 
     def test_an_option_snap_cannot_apply_raises_as_the_graph_would(self, tmp_path: Path) -> None:
@@ -390,21 +421,6 @@ class TestSnapVersion:
 
         with pytest.raises(ConfigurationError, match="SNAP 14"):
             _check(path, product, CoherenceConfig(remove_local_phase_ramp=True), snap_version=None)
-
-
-class TestWarnings:
-    def test_names_its_count(self) -> None:
-        with pytest.warns(UserWarning, match="another SNAP version") as other:
-            _warn_other_snap(2, "14.0.0", stacklevel=1)
-
-        message = str(other[0].message)
-        assert "Skipped 2 existing product(s) made by another SNAP version" in message
-        assert "running 14.0.0" in message
-
-    def test_no_skips_stay_quiet(self) -> None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            _warn_other_snap(0, "14.0.0", stacklevel=1)
 
 
 class TestError:

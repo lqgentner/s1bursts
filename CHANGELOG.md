@@ -123,15 +123,17 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `false` under SNAP 13, which lacks the options, and `N/A` when the SNAP
   version is unknown, since SNAP 14 then applies its own default. A rerun
   with `overwrite=False` compares all of them, see below. Composites carry
-  each setting tag on which all their inputs agree, in every layer, and leave
-  it out otherwise; RTC and GTC composites carried none of them before.
+  every setting tag of their inputs, in every layer, since the inputs must
+  agree on them (see Changed); RTC and GTC composites carried none of them
+  before.
 
 ### Changed
 
 - **Breaking:** an external DEM needs a name. A `RTCConfig`, `GTCConfig` or
-  `CoherenceConfig` whose `dem` is a path and whose `dem_name` is `None` fails
-  validation with a `pydantic.ValidationError`, instead of writing products
-  that record the DEM as `N/A`, which a rerun could not compare.
+  `CoherenceConfig` whose `dem` is a path and whose `dem_name` is `None`,
+  empty or blank fails validation with a `pydantic.ValidationError`, instead
+  of writing products that record the DEM as `N/A`, which a rerun could not
+  compare.
 
   ```python
   # before
@@ -455,8 +457,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `InconsistentInputsError`, an `S1BurstsError` and a `ValueError` but not a
   `CompositeError`, so `except ValueError:` still catches it and a loop over
   cells stops at it: products in another UTM zone, at another pixel size or
-  on another grid than the cell, made with different DEMs, or differing in
-  polarization or coherence baseline would fail every cell they are given to.
+  on another grid than the cell, made with different DEMs, processing
+  settings or SNAP versions (see below), or differing in polarization or
+  coherence baseline would fail every cell they are given to.
   An invalid argument still raises a plain `ValueError`, which
   `CompositeError` does not catch either. That now includes an empty
   `rtc_products` in `compose_coherence_lrw()`, which raised the
@@ -468,6 +471,33 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   except (ValueError, FileNotFoundError, RasterioIOError): ...
   # after
   except CompositeError as err: ...  # per cell; InconsistentInputsError propagates
+  ```
+- **Breaking:** a composite refuses inputs made with different processing
+  settings or by different SNAP versions with `InconsistentInputsError`,
+  naming the tag and its values, as it refuses different DEMs. Such inputs
+  were composited: two SNAP versions with a warning, the composite recording
+  the version as `N/A`, and other settings, such as two coherence windows,
+  silently. An input whose SNAP version could not be determined matches any
+  version; where only such an input differs, the composite records `N/A` for
+  the version and for `COHERENCE_BIAS_CORRECTED` and
+  `LOCAL_PHASE_RAMP_REMOVED`; an input that records no version differs from
+  one that does. The RTC products that weight an observation of
+  `compose_coherence_lrw()` are compared among themselves on their settings,
+  and with the coherence products on the SNAP version and the DEM; RTC
+  products that weight none are not compared. The `compose_*_by_pass()`
+  methods compare the inputs of every direction they build with each other,
+  and with the composite of every direction they skip as existing, before
+  writing any; the skipped direction's own inputs are not read. Inputs and
+  composites written by 0.7.0, which record fewer settings, cannot be
+  combined with newer ones. Composite each SNAP version and set of settings
+  on its own, or rebuild the inputs:
+
+  ```python
+  # before: composited with a warning, recording PROCESSING_SOFTWARE_VERSION=N/A
+  weighter.compose_rtc_lrw(snap13_products + snap14_products, cell)
+  # after: raises InconsistentInputsError: All inputs must be made by the same
+  # SNAP version; got 13.0.0, 14.0.0. ...
+  weighter.compose_rtc_lrw(snap14_products, cell)
   ```
 - **Breaking:** `compose_rtc_by_pass()`, `compose_gtc_by_pass()` and
   `compose_coherence_by_pass()` behave like the LRW methods:
@@ -601,12 +631,12 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
     # requested 'BILINEAR_INTERPOLATION'; ...
     processor.create_coherence(pairs, crs=crs, overwrite=True)
     ```
-  - A product made by another SNAP version than the running one is skipped,
-    since SNAP 13 and 14 outputs should not be mixed in one time series. Such
-    a skip is recorded in the new `OkResult.other_snap_version`, counted in
-    the new `OperationSummary.n_other_snap_version`, which `print_summary()`
-    shows, and logged by `SNAPClient.create_*`; `BurstProcessor.create_*`
-    warn once per call.
+  - A product made by another SNAP version than the running one raises too,
+    since SNAP 13 and 14 outputs differ: `PROCESSING_SOFTWARE_VERSION (the
+    SNAP installation): recorded '13.0.0', requested '14.0.0'`. A version
+    that could not be determined, recorded or running, is not compared, nor
+    are `COHERENCE_BIAS_CORRECTED` and `LOCAL_PHASE_RAMP_REMOVED`, which
+    depend on it.
   - Composites written by 0.7.0 with its default `aggregation="median"`
     record it, so rerunning them with the new default, the mean, raises. Pass
     `aggregation="median"` to keep them, or `overwrite=True` to rebuild them.
@@ -696,6 +726,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Fixed
 
+- `GRID_SPACING` records a pixel spacing in full where six significant digits
+  would round it, such as `10.0000001 m` rather than `10 m`, so two spacings
+  never record the same value. Spacings such as `10 m` are unchanged.
 - `SearchQuery(intersects=...)` rejects an empty geometry and
   one whose `crs` is not WGS 84 with `ValueError`. An empty geometry was
   dropped, so the search ran without a spatial filter, and an `odc.geo`

@@ -12,14 +12,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from typing import TYPE_CHECKING
-import warnings
 
 from freezebase.raster import rasterio_open
 from rasterio.errors import RasterioError
 
 from s1bursts.errors import ProductSettingsMismatchError
+from s1bursts.product import Layer
 from s1bursts.product_tags import (
     _SETTING_TAGS,
+    _SNAP_OPTION_KEYS,
+    _SNAP_VERSION_KEY,
     UNKNOWN,
     _burst_settings,
     _composite_settings,
@@ -50,13 +52,13 @@ logger = logging.getLogger(__name__)
 
 type _Differences = dict[str, tuple[str | None, str | None]]
 
-_SNAP_VERSION = "PROCESSING_SOFTWARE_VERSION"
 _DECIBEL = "decibel"
 
 # The argument behind each compared tag, for the message.
 _ARGUMENTS = {
     **{key: name for name, keys in _SETTING_TAGS.items() for key in keys},
     "DEM": "dem, dem_name",
+    _SNAP_VERSION_KEY: "the SNAP installation",
     "COMPOSITING_PARAMETERS": "aggregation, clip_max_resolution",
     "CRS": "geobox",
     "TRANSFORM": "geobox",
@@ -101,9 +103,11 @@ def _mismatch(path: Path | UPath, differences: _Differences) -> ProductSettingsM
         f"requested {_shown(requested)}"
         for key, (recorded, requested) in differences.items()
     )
-    msg = (
-        f"'{path.name}' exists but records other settings than requested: {listed}. Pass "
-        "overwrite=True to replace it, or give these settings their own FileManager "
+    msg = f"'{path.name}' exists but records other settings than requested: {listed}."
+    if _SNAP_VERSION_KEY in differences:
+        msg += " SNAP 13 and 14 outputs differ, so do not mix them in one time series."
+    msg += (
+        " Pass overwrite=True to replace it, or give these settings their own FileManager "
         "directory to keep both."
     )
     return ProductSettingsMismatchError(msg, path=path, differences=differences)
@@ -115,15 +119,21 @@ def _check_burst_product(
     config: BackscatterConfig | CoherenceConfig,
     *,
     snap_version: tuple[int, ...] | None,
-) -> str | None:
-    """Check an existing per-burst product, returning the other SNAP version that made it.
+) -> None:
+    """Check an existing per-burst product against ``config`` and the running SNAP version.
 
-    Raises ``ProductSettingsMismatchError`` if the file records other settings
-    than ``config`` would write, or does not record one of them, and the read
+    An undetermined SNAP version, recorded or running, matches any other, and
+    so do the coherence tags that depend on it. Raises
+    ``ProductSettingsMismatchError`` if the file records other settings than
+    ``config`` would write, or does not record one of them, and the read
     error if it cannot be read.
     """
     recorded = _read_header(path).tags
     requested = _burst_settings(product, config, snap_version=snap_version)
+    requested[_SNAP_VERSION_KEY] = _software_version(snap_version)
+    if UNKNOWN in (requested[_SNAP_VERSION_KEY], recorded.get(_SNAP_VERSION_KEY)):
+        for key in (_SNAP_VERSION_KEY, *_SNAP_OPTION_KEYS):
+            requested.pop(key, None)
     differences: _Differences = {
         key: (recorded.get(key), value)
         for key, value in requested.items()
@@ -131,10 +141,6 @@ def _check_burst_product(
     }
     if differences:
         raise _mismatch(path, differences)
-
-    running = _software_version(snap_version)
-    made_with = recorded.get(_SNAP_VERSION, UNKNOWN)
-    return made_with if UNKNOWN not in (running, made_with) and made_with != running else None
 
 
 def _skip_existing[P: RTCProduct | GTCProduct | CoherenceProduct](
@@ -144,33 +150,17 @@ def _skip_existing[P: RTCProduct | GTCProduct | CoherenceProduct](
     config: BackscatterConfig | CoherenceConfig,
     *,
     snap_version: tuple[int, ...] | None,
-    log_level: int = logging.WARNING,
 ) -> OkResult[P] | None:
     """Return the skipped result of an existing per-burst product, or None if there is none.
 
-    Logs a skip that another SNAP version made at ``log_level``; a batch
-    that warns once about them all passes DEBUG. Raises as
-    ``_check_burst_product`` does.
+    Raises as ``_check_burst_product`` does.
     """
     if not file_manager.product_exists(product):
         return None
     path = file_manager.get_product_path(product)
-    other_snap_version = _check_burst_product(path, product, config, snap_version=snap_version)
-    if other_snap_version is not None:
-        logger.log(
-            log_level,
-            "Skipped '%s', made by SNAP %s rather than the running %s",
-            path.name,
-            other_snap_version,
-            _software_version(snap_version),
-        )
+    _check_burst_product(path, product, config, snap_version=snap_version)
     logger.debug("%s product already exists: '%s'", product.product_type, path.name)
-    return OkResult(
-        source=source,
-        result=product,
-        skipped=True,
-        other_snap_version=other_snap_version,
-    )
+    return OkResult(source=source, result=product, skipped=True)
 
 
 def _grid_differences(header: _Header, geobox: MGRSGeoBox) -> _Differences:
@@ -210,8 +200,8 @@ def _check_composite(
     *,
     aggregation: Aggregation,
     clip_max_resolution: float | None = None,
-) -> None:
-    """Check every requested layer of an existing composite.
+) -> dict[str, str]:
+    """Check every requested layer of an existing composite, returning its measurement's tags.
 
     Only the arguments of the ``compose_*`` call are compared, not what the
     composite inherits from its inputs, so no input needs to be read. Raises
@@ -222,21 +212,13 @@ def _check_composite(
     expected = _composite_settings(
         product, aggregation=aggregation, clip_max_resolution=clip_max_resolution
     )
+    measurement: dict[str, str] = {}
     for layer in sorted(product.layers):
         path = file_manager.get_product_path(product, layer)
         header = _read_header(path)
         differences = _grid_differences(header, geobox) | _tag_differences(header.tags, expected)
         if differences:
             raise _mismatch(path, differences)
-
-
-def _warn_other_snap(count: int, running: str, *, stacklevel: int) -> None:
-    """Warn that ``count`` existing products were made by another SNAP version."""
-    if not count:
-        return
-    msg = (
-        f"Skipped {count} existing product(s) made by another SNAP version than the "
-        f"running {running}. SNAP 13 and 14 outputs differ, so do not mix them in one "
-        "time series; pass overwrite=True to rebuild them."
-    )
-    warnings.warn(msg, stacklevel=stacklevel + 1)
+        if layer == Layer.MEASUREMENT:
+            measurement = header.tags
+    return measurement

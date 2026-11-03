@@ -48,6 +48,13 @@ from s1bursts.product import (
     RTCProduct,
     _layer_product_type,
 )
+from s1bursts.product_tags import (
+    _BURST_SETTING_KEYS,
+    _SNAP_OPTION_KEYS,
+    _SNAP_VERSION_KEY,
+    UNKNOWN,
+)
+from s1bursts.query import _PASS_DIRECTIONS
 from s1bursts.settings_check import _check_composite
 from s1bursts.time_range import TimeRange, calendar_day
 
@@ -109,6 +116,131 @@ def _split_profiles(
     if all(isinstance(value, Mapping) for value in rasterio_profile.values()):
         return {key: dict(value) for key, value in rasterio_profile.items()}
     return {_DEFAULT_PROFILE_KEY: dict(rasterio_profile)}
+
+
+def _snap_version_of(tags: Mapping[str, str]) -> str | None:
+    """Return the SNAP version an input records, None if it records none."""
+    return tags.get(_SNAP_VERSION_KEY)
+
+
+def _shown(value: str | None) -> str:
+    """Render a tag value for a message; ``None`` is an absent tag."""
+    return "none" if value is None else repr(value)
+
+
+def _agreed_snap_version(inputs: Sequence[Mapping[str, str]]) -> str | None:
+    """Return the SNAP version the inputs share, raising if two recorded versions differ.
+
+    ``UNKNOWN`` matches any version, and is returned where it is all that
+    differs; an absent tag is a difference like another version.
+    """
+    versions = {_snap_version_of(tags) for tags in inputs}
+    known = versions - {UNKNOWN}
+    if len(known) > 1:
+        listed = ", ".join(sorted("none" if version is None else version for version in known))
+        msg = (
+            f"All inputs must be made by the same SNAP version; got {listed}. "
+            "SNAP 13 and 14 outputs differ, so do not mix them in one composite."
+        )
+        raise InconsistentInputsError(msg)
+    return versions.pop() if len(versions) == 1 else UNKNOWN
+
+
+def _agreed_settings(inputs: Sequence[Mapping[str, str]], *, what: str) -> dict[str, str]:
+    """Return the setting tags the inputs record, raising if they differ.
+
+    The DEM is compared separately, across every input of a composite. An
+    input of an undetermined SNAP version matches any value of the tags that
+    depend on the version; where only such an input differs, the tag is
+    ``UNKNOWN``.
+    """
+    agreed: dict[str, str] = {}
+    for key in _BURST_SETTING_KEYS:
+        if key == "DEM":
+            continue
+        compared = inputs
+        if key in _SNAP_OPTION_KEYS:
+            compared = [tags for tags in inputs if _snap_version_of(tags) != UNKNOWN]
+        values = {tags.get(key) for tags in compared}
+        if len(values) > 1:
+            listed = ", ".join(sorted(_shown(value) for value in values))
+            msg = f"{what} must be made with the same settings; they differ on {key}: {listed}."
+            raise InconsistentInputsError(msg)
+        values = {tags.get(key) for tags in inputs}
+        value = values.pop() if len(values) == 1 else UNKNOWN
+        if value is not None:
+            agreed[key] = value
+    return agreed
+
+
+def _agreed_tags(
+    inputs: Sequence[Mapping[str, str]],
+    rtc_weights: Sequence[Mapping[str, str]] = (),
+) -> dict[str, str]:
+    """Return the tags of the per-burst inputs, which must agree on how they were made.
+
+    The SNAP version and the processing settings exist nowhere at
+    compositing time except in the input files. The inputs must record the
+    same settings, the same SNAP version and the same DEM, or
+    ``InconsistentInputsError`` is raised; an input of an undetermined SNAP
+    version matches any version, and where it is all that differs, the
+    composite records ``UNKNOWN``. Any other tag is carried forward only
+    where every input states the same value.
+
+    ``rtc_weights`` are the tags of the RTC products that supply a coherence
+    LRW composite's scattering area. They are compared among themselves on
+    their settings, being made with another configuration than the coherence
+    inputs, and with the coherence inputs on the SNAP version and the DEM.
+    """
+    if not inputs:
+        return {}
+    every_input = [*inputs, *rtc_weights]
+    dem_values = {tags.get("DEM", UNKNOWN) for tags in every_input}
+    if len(dem_values) > 1:
+        listed = ", ".join(sorted(dem_values))
+        msg = f"All inputs must use the same DEM; got {listed}."
+        raise InconsistentInputsError(msg)
+    snap_version = _agreed_snap_version(every_input)
+    settings = _agreed_settings(inputs, what="All inputs")
+    _agreed_settings(rtc_weights, what="The RTC products supplying the scattering area")
+
+    first, *rest = inputs
+    agreed = {k: v for k, v in first.items() if all(other.get(k) == v for other in rest)}
+    agreed |= settings
+    agreed["DEM"] = dem_values.pop()
+    if snap_version is not None:
+        agreed[_SNAP_VERSION_KEY] = snap_version
+    return agreed
+
+
+def _check_existing_composite(
+    name: str,
+    recorded: Mapping[str, str],
+    inputs: Sequence[Mapping[str, str]],
+) -> None:
+    """Raise if an existing composite records other settings or another SNAP version.
+
+    ``inputs`` are the tags of the per-burst inputs, which already agree. The
+    rules are those of ``_agreed_tags``: an undetermined SNAP version, on
+    either side, matches any version and any value of the tags that depend
+    on it, and an absent tag is a difference.
+    """
+    composite_version = _snap_version_of(recorded)
+    known = [tags for tags in inputs if _snap_version_of(tags) != UNKNOWN]
+    for key in ("DEM", *(k for k in _BURST_SETTING_KEYS if k != "DEM"), _SNAP_VERSION_KEY):
+        compared = inputs
+        if key == _SNAP_VERSION_KEY or key in _SNAP_OPTION_KEYS:
+            compared = known if composite_version != UNKNOWN else []
+        default = UNKNOWN if key == "DEM" else None
+        values = {tags.get(key, default) for tags in compared}
+        value = recorded.get(key, default)
+        if values and value not in values:
+            msg = (
+                f"The existing composite '{name}' records {key} {_shown(value)}, but the "
+                f"inputs record {_shown(values.pop())}. Pass overwrite=True with inputs "
+                "that agree to rebuild it."
+            )
+            raise InconsistentInputsError(msg)
 
 
 class ResolutionWeighter:
@@ -247,8 +379,10 @@ class ResolutionWeighter:
         InconsistentInputsError
             If the inputs differ in polarization, an input is on another
             CRS, pixel size or grid than ``geobox``, or the inputs were made
-            with different DEMs. Not a ``CompositeError``: other cells given
-            these inputs would meet it too.
+            with different DEMs, processing settings or SNAP versions, where
+            an undetermined SNAP version matches any. Not a
+            ``CompositeError``: other cells given these inputs would meet it
+            too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -418,10 +552,13 @@ class ResolutionWeighter:
             If no input has a valid pixel in ``geobox``; nothing is written.
         InconsistentInputsError
             If the inputs differ in polarization or temporal baseline, an
-            input is on another CRS, pixel size or grid than ``geobox``, or
-            the inputs were made with different DEMs. Not a
-            ``CompositeError``: other cells given these inputs would meet it
-            too.
+            input is on another CRS, pixel size or grid than ``geobox``, the
+            inputs were made with different DEMs or SNAP versions, where an
+            undetermined SNAP version matches any, or the coherence products,
+            or the RTC products that weight them, among themselves with
+            different processing settings. RTC products that weight no
+            observation are not compared. Not a ``CompositeError``: other
+            cells given these inputs would meet it too.
         CompositeInputError
             If an input product is missing or cannot be read, or no RTC product
             supplies the scattering area of an observation.
@@ -487,7 +624,9 @@ class ResolutionWeighter:
 
         weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(coh_obs, weights, aggregation)
-        source_tags = self._input_tags(coh_products, additional_dem_products=rtc_products)
+        # Only the RTC products that weight an observation are compared.
+        weighting = [prod for prod in rtc_products if self._group_key(prod) in coh_groups]
+        source_tags = self._input_tags(coh_products, rtc_weights=weighting)
         n_observations = len(coh_obs)
         self._save(
             composite,
@@ -591,7 +730,10 @@ class ResolutionWeighter:
         InconsistentInputsError
             If the inputs differ in polarization, an input is on another
             CRS, pixel size or grid than ``geobox``, or the inputs were made
-            with different DEMs. Not a ``CompositeError``: other cells given
+            with different DEMs, processing settings or SNAP versions, where
+            an undetermined SNAP version matches any. When a direction is
+            built, the composite of a direction skipped as existing must agree
+            with its inputs too. Not a ``CompositeError``: other cells given
             these inputs would meet it too.
         CompositeInputError
             If an input product is missing or cannot be read.
@@ -688,7 +830,10 @@ class ResolutionWeighter:
         InconsistentInputsError
             If the inputs differ in polarization, an input is on another
             CRS, pixel size or grid than ``geobox``, or the inputs were made
-            with different DEMs. Not a ``CompositeError``: other cells given
+            with different DEMs, processing settings or SNAP versions, where
+            an undetermined SNAP version matches any. When a direction is
+            built, the composite of a direction skipped as existing must agree
+            with its inputs too. Not a ``CompositeError``: other cells given
             these inputs would meet it too.
         CompositeInputError
             If an input product is missing or cannot be read.
@@ -776,8 +921,11 @@ class ResolutionWeighter:
     ) -> dict[PassDirection, C]:
         """Composite each pass direction on its own, skipping finished ones before any read.
 
-        Every existing direction is checked before any is built, so a
-        mismatch in one writes none.
+        Every existing direction is checked before any is built. The inputs
+        of every direction to be built are checked against each other and
+        against the existing composite of every other direction, also one
+        this call has no inputs for, whose own inputs are not read, so a
+        mismatch writes nothing.
 
         Raises
         ------
@@ -785,17 +933,24 @@ class ResolutionWeighter:
             If no direction has an input with a valid pixel in the cell.
         ProductSettingsMismatchError
             If a direction's composite exists with other settings.
+        InconsistentInputsError
+            If the inputs of the directions to be built differ in DEM,
+            processing settings or SNAP version, from each other or from the
+            composite of an existing direction.
         """
         by_pass: defaultdict[PassDirection, list[ComposableProduct]] = defaultdict(list)
         for prod in products:
             by_pass[prod.pass_direction].append(prod)
 
         result: dict[PassDirection, C] = {}
+        existing_tags: dict[str, dict[str, str]] = {}
         if not overwrite:
-            result = self._existing_by_pass(by_pass, make, geobox, aggregation)
-        for direction, subset in sorted(by_pass.items()):
-            if direction in result:
-                continue
+            result, existing_tags = self._existing_by_pass(by_pass, make, geobox, aggregation)
+        building = {d: subset for d, subset in sorted(by_pass.items()) if d not in result}
+        if building:
+            existing_tags |= self._other_direction_tags(by_pass, make)
+        source_tags = self._source_tags_by_pass(building, existing_tags)
+        for direction, subset in building.items():
             product = make(direction)
 
             groups = self._reaching(
@@ -812,7 +967,7 @@ class ResolutionWeighter:
             entry = _PassObservations(
                 composite=composite,
                 n_observations=len(observations),
-                source_tags=self._input_tags(subset),
+                source_tags=source_tags[direction],
                 # This file holds one direction, so its span is that direction's.
                 acquisitions=self._contributing_span(subset, groups),
             )
@@ -840,21 +995,65 @@ class ResolutionWeighter:
         # Sorted, as before the existing directions were checked first.
         return dict(sorted(result.items()))
 
+    def _source_tags_by_pass(
+        self,
+        by_pass: Mapping[PassDirection, Sequence[ComposableProduct]],
+        existing: Mapping[str, Mapping[str, str]],
+    ) -> dict[PassDirection, dict[str, str]]:
+        """Check that every input agrees across the directions, then return each one's tags.
+
+        ``existing`` maps the file name of each existing direction composite
+        to its tags, which the inputs must agree with too.
+        """
+        tags = iter(self._read_tags([prod for subset in by_pass.values() for prod in subset]))
+        per_direction = {
+            direction: [next(tags) for _ in subset] for direction, subset in by_pass.items()
+        }
+        every_input = [entry for entries in per_direction.values() for entry in entries]
+        _agreed_tags(every_input)
+        if every_input:
+            for name, recorded in existing.items():
+                _check_existing_composite(name, recorded, every_input)
+        return {direction: _agreed_tags(entries) for direction, entries in per_direction.items()}
+
+    def _other_direction_tags(
+        self,
+        by_pass: Mapping[PassDirection, Sequence[ComposableProduct]],
+        make: Callable[[PassDirection], CompositeProduct],
+    ) -> dict[str, dict[str, str]]:
+        """Return the tags of each input-less direction's existing composite, by file name.
+
+        A call with the inputs of one direction must not add a composite that
+        disagrees with the other direction's already on disk. Only its tags
+        are read; it is neither checked against this call nor rebuilt.
+        """
+        tags: dict[str, dict[str, str]] = {}
+        for direction in _PASS_DIRECTIONS:
+            if direction in by_pass:
+                continue
+            product = make(direction)
+            if self._fm.product_exists(product, Layer.MEASUREMENT):
+                name = self._fm.get_product_path(product).name
+                tags[name] = self._read_tags([product])[0]
+        return tags
+
     def _existing_by_pass[C: (RTCPassComposite, GTCPassComposite, CohPassComposite)](
         self,
         directions: Iterable[PassDirection],
         make: Callable[[PassDirection], C],
         geobox: MGRSGeoBox,
         aggregation: Literal["mean", "median"] | float,
-    ) -> dict[PassDirection, C]:
-        """Check the existing direction composites and return them."""
+    ) -> tuple[dict[PassDirection, C], dict[str, dict[str, str]]]:
+        """Check the existing direction composites, returning them and their tags by file name."""
         existing: dict[PassDirection, C] = {}
+        tags: dict[str, dict[str, str]] = {}
         for direction in sorted(directions):
             product = make(direction)
             if self._all_exist(product):
-                _check_composite(self._fm, product, geobox, aggregation=aggregation)
+                name = self._fm.get_product_path(product).name
+                tags[name] = _check_composite(self._fm, product, geobox, aggregation=aggregation)
                 existing[direction] = product
-        return existing
+        return existing, tags
 
     def compose_coherence_by_pass(
         self,
@@ -929,7 +1128,10 @@ class ResolutionWeighter:
         InconsistentInputsError
             If the inputs differ in polarization or temporal baseline, an
             input is on another CRS, pixel size or grid than ``geobox``, or
-            the inputs were made with different DEMs. Not a
+            the inputs were made with different DEMs, processing settings or
+            SNAP versions, where an undetermined SNAP version matches any.
+            When a direction is built, the composite of a direction skipped
+            as existing must agree with its inputs too. Not a
             ``CompositeError``: other cells given these inputs would meet it
             too.
         CompositeInputError
@@ -1164,25 +1366,18 @@ class ResolutionWeighter:
         self,
         products: Collection[ComposableProduct],
         *,
-        additional_dem_products: Collection[ComposableProduct] = (),
+        rtc_weights: Collection[ComposableProduct] = (),
     ) -> dict[str, str]:
-        """Tags that every per-burst input agrees on.
+        """Read the per-burst inputs' tags and return those they agree on, as ``_agreed_tags``."""
+        tags = self._read_tags([*products, *rtc_weights])
+        return _agreed_tags(tags[: len(products)], tags[len(products) :])
 
-        The SNAP version and the processing settings exist nowhere at
-        compositing time except in the input files. A key is carried forward
-        only where every input states the same value, so a composite spanning
-        two SNAP versions stays silent instead of claiming whichever its first
-        input happened to use.
+    def _read_tags(
+        self, products: Sequence[ComposableProduct | CompositeProduct]
+    ) -> list[dict[str, str]]:
+        """Read the tags of each product, in parallel and in order."""
 
-        All inputs must identify the same DEM. ``additional_dem_products``
-        supports coherence LRW composites, whose RTC contributing-area rasters
-        also depend on a DEM but do not supply the other coherence provenance.
-
-        Called only after ``_load_band`` has read the same products, so the
-        files are there.
-        """
-
-        def read(product: ComposableProduct) -> dict[str, str]:
+        def read(product: ComposableProduct | CompositeProduct) -> dict[str, str]:
             path = self._fm.get_product_path(product)
             try:
                 with rasterio_open(path) as src:
@@ -1191,37 +1386,8 @@ class ResolutionWeighter:
                 msg = f"cannot read '{path.name}': {err}"
                 raise CompositeInputError(msg) from err
 
-        primary_count = len(products)
-        all_products = [*products, *additional_dem_products]
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            all_input_tags = list(executor.map(read, all_products))
-        per_input = all_input_tags[:primary_count]
-        if not per_input:
-            return {}
-
-        dem_values = {tags.get("DEM", product_tags.UNKNOWN) for tags in all_input_tags}
-        if len(dem_values) > 1:
-            listed = ", ".join(sorted(dem_values))
-            msg = f"All inputs must use the same DEM; got {listed}."
-            raise InconsistentInputsError(msg)
-
-        first, *rest = per_input
-        agreed = {k: v for k, v in first.items() if all(other.get(k) == v for other in rest)}
-        agreed["DEM"] = dem_values.pop()
-
-        # Mixing SNAP versions is legitimate, but it is worth saying out loud
-        for key in ("PROCESSING_SOFTWARE_VERSION",):
-            values = {tags[key] for tags in per_input if key in tags}
-            # Absent from every input is agreement, not disagreement: an archive
-            # written before these tags existed simply has nothing to say.
-            if key in agreed or len(values) < 2:  # noqa: PLR2004
-                continue
-            logger.warning(
-                "inputs disagree on %s (%s); the composite will record it as unknown",
-                key,
-                ", ".join(sorted(values)),
-            )
-        return agreed
+            return list(executor.map(read, products))
 
     def _write_lrw_qa(
         self,

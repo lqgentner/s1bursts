@@ -16,8 +16,7 @@ from s1bursts.product import (
     RTCProduct,
     _check_output_crs,
 )
-from s1bursts.product_tags import _software_version
-from s1bursts.settings_check import _skip_existing, _warn_other_snap
+from s1bursts.settings_check import _skip_existing
 from s1bursts.snap_client import SNAPClient, SNAPConfig, _item_failure
 from s1bursts.snap_graph import (
     CoherenceConfig,
@@ -158,29 +157,23 @@ class BurstProcessor:
             every remaining item alike: an ``OSError`` saying so, or an error
             caused by one or whose message or GPT output says so.
         ProductSettingsMismatchError
-            If a product exists with other settings than ``config``, or
-            without recording all of them, and ``overwrite`` is ``False``.
-            Every product existing when the call starts is checked before any
+            If a product exists with other settings than ``config`` or from
+            another SNAP version, or without recording all of them, and
+            ``overwrite`` is ``False``. An undetermined SNAP version is not
+            compared. Every product existing when the call starts is checked before any
             item is processed, so for those it is raised before any GPT run; a
             product written by another process meanwhile is checked when its
             item is reached.
         OSError or RasterioError
             If a product exists, ``overwrite`` is ``False``, and it cannot be
             read to check its settings; checked up front in the same way.
-
-        Warns
-        -----
-        UserWarning
-            Once per call, counting the existing products skipped although
-            another SNAP version made them. The summary counts them, and each
-            skipped result records the version.
         """
         # Checked once, so an invalid CRS fails before any burst is processed.
         utm_crs = _check_output_crs(crs)
         client = self.snap_client
         if config is None or isinstance(config, RTCConfig):
             rtc_config = config or RTCConfig()
-            rtc_summary = self._run(
+            return self._run(
                 bursts,
                 lambda burst: RTCProduct.from_burst(burst, utm_crs),
                 lambda burst: client.create_backscatter(
@@ -190,11 +183,9 @@ class BurstProcessor:
                 overwrite=overwrite,
                 item_description="RTC",
             )
-            self._warn_about_skips(rtc_summary)
-            return rtc_summary
         if isinstance(config, GTCConfig):
             gtc_config = config
-            gtc_summary = self._run(
+            return self._run(
                 bursts,
                 lambda burst: GTCProduct.from_burst(burst, utm_crs),
                 lambda burst: client.create_backscatter(
@@ -204,8 +195,6 @@ class BurstProcessor:
                 overwrite=overwrite,
                 item_description="GTC",
             )
-            self._warn_about_skips(gtc_summary)
-            return gtc_summary
         msg = f"`config` must be an RTCConfig or a GTCConfig, received '{type(config).__name__}'."
         raise TypeError(msg)
 
@@ -261,27 +250,21 @@ class BurstProcessor:
             every remaining item alike: an ``OSError`` saying so, or an error
             caused by one or whose message or GPT output says so.
         ProductSettingsMismatchError
-            If a product exists with other settings than ``config``, or
-            without recording all of them, and ``overwrite`` is ``False``.
-            Every product existing when the call starts is checked before any
+            If a product exists with other settings than ``config`` or from
+            another SNAP version, or without recording all of them, and
+            ``overwrite`` is ``False``. An undetermined SNAP version is not
+            compared. Every product existing when the call starts is checked before any
             item is processed, so for those it is raised before any GPT run; a
             product written by another process meanwhile is checked when its
             item is reached.
         OSError or RasterioError
             If a product exists, ``overwrite`` is ``False``, and it cannot be
             read to check its settings; checked up front in the same way.
-
-        Warns
-        -----
-        UserWarning
-            Once per call, counting the existing products skipped although
-            another SNAP version made them. The summary counts them, and each
-            skipped result records the version.
         """
         cfg = config or CoherenceConfig()
         utm_crs = _check_output_crs(crs)
         client = self.snap_client
-        summary = self._run(
+        return self._run(
             pairs,
             lambda pair: CoherenceProduct.from_burst_pair(pair, utm_crs),
             lambda pair: client.create_coherence(pair, utm_crs, config=cfg, overwrite=overwrite),
@@ -289,8 +272,6 @@ class BurstProcessor:
             overwrite=overwrite,
             item_description="Coherence",
         )
-        self._warn_about_skips(summary)
-        return summary
 
     def _run[I, P: RTCProduct | GTCProduct | CoherenceProduct](
         self,
@@ -340,15 +321,7 @@ class BurstProcessor:
             except NoUTMZoneError as err:
                 # Under "auto", this item alone has no zone; it fails without being run.
                 return _item_failure(item, err)
-            # The batch warns once about these skips, so each is logged at DEBUG only.
-            return _skip_existing(
-                self.manager,
-                item,
-                product,
-                config,
-                snap_version=snap_version,
-                log_level=logging.DEBUG,
-            )
+            return _skip_existing(self.manager, item, product, config, snap_version=snap_version)
 
         max_workers = self.config.resolved_max_workers
         if max_workers <= 1 or len(items) <= 1:
@@ -360,15 +333,6 @@ class BurstProcessor:
             except BaseException:
                 executor.shutdown(wait=False, cancel_futures=True)
                 raise
-
-    def _warn_about_skips[T](self, summary: OperationSummary[T]) -> None:
-        """Warn once about the skips the summary counts as made by another SNAP version."""
-        # Points at the caller of the public create_* method.
-        _warn_other_snap(
-            summary.n_other_snap_version,
-            _software_version(self.config.resolved_snap_version),
-            stacklevel=3,
-        )
 
     def _raise_unless_continuing[T](self, result: OperationResult[T]) -> None:
         """Raise the error of a failed item unless the batch continues on error."""

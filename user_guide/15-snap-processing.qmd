@@ -135,7 +135,9 @@ s1bursts works around four SNAP problems, so you do not need to:
 
 s1bursts works with SNAP 13 and 14. It reads the installed version and adapts
 the graphs to it, so the same code runs on either. The version is recorded in
-every product's `PROCESSING_SOFTWARE_VERSION` tag.
+every product's `PROCESSING_SOFTWARE_VERSION` tag. An existing product of
+another version is not skipped, and products of two versions are not combined
+into one composite.
 
 ::: {.callout-note}
 ## Keep one SNAP version per study

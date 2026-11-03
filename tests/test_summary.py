@@ -150,24 +150,6 @@ class TestOperationSummary:
         summary.print_summary(console=console)
 
         assert "Failed Items:" not in buffer.getvalue()
-        assert "other SNAP version" not in buffer.getvalue()
-
-    def test_skips_of_another_snap_version_are_counted_and_shown(self) -> None:
-        buffer = io.StringIO()
-        console = Console(file=buffer, force_jupyter=False, width=120)
-        summary = OperationSummary.from_results(
-            [
-                OkResult(source="c", result="c", skipped=True, other_snap_version="13.0.0"),
-                OkResult(source="d", result="d", skipped=True),
-            ],
-            start_time=0.0,
-            end_time=1.0,
-        )
-
-        summary.print_summary(console=console)
-
-        assert (summary.n_skipped, summary.n_other_snap_version) == (2, 1)
-        assert "other SNAP version" in buffer.getvalue()
 
 
 def summary_of(*errors: Exception) -> OperationSummary[str]:

@@ -577,6 +577,13 @@ class TestBurstProducts:
         assert tags["GRID_SPACING"] == "10 m"
         assert tags["PROCESSING_SOFTWARE"] == "ESA SNAP"
 
+    # Previously both recorded '10 m', six significant digits being all `:g` keeps.
+    def test_grid_spacings_that_differ_record_different_values(self) -> None:
+        tags = product_tags.backscatter_metadata(
+            _rtc_burst(), RTCConfig(grid_spacing=10.0000001)
+        ).tags
+        assert tags["GRID_SPACING"] == "10.0000001 m"
+
     def test_every_burst_product_carries_the_track_number(self) -> None:
         # The acquisition geometry a user needs when handed one burst file on
         # its own. A composite mixes tracks, so it carries none.
@@ -761,7 +768,7 @@ class TestSettingTags:
             ),
         ],
     )
-    def test_a_composite_carries_the_settings_its_inputs_agree_on(
+    def test_a_composite_carries_the_settings_of_its_inputs(
         self, build: Callable[[dict[str, str]], dict[str, str]]
     ) -> None:
         # Previously no RTC composite carried any setting tag but the DEM.
@@ -770,9 +777,9 @@ class TestSettingTags:
         for key in product_tags._BURST_SETTING_KEYS:
             assert tags.get(key) == source.get(key), key
 
-    def test_a_setting_the_inputs_disagree_on_is_left_out(self) -> None:
-        # The inputs' agreement is decided by ResolutionWeighter._input_tags,
-        # which passes on only the keys every input shares.
+    def test_a_setting_the_inputs_do_not_record_is_left_out(self) -> None:
+        # Such as inputs written before s1bursts recorded it; inputs that
+        # record different values are refused by ResolutionWeighter._input_tags.
         source = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
         del source["IMAGE_RESAMPLING"]
         tags = _lrw(source_tags=source)
