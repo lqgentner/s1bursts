@@ -60,9 +60,7 @@ They include the units of the stored values, the acquisition dates, the DEM,
 and the SNAP and s1bursts versions:
 
 ```{.python}
-import rasterio
-
-with rasterio.open(fm.get_product_path(product)) as src:
+with fm.open(product) as src:
     print(src.descriptions, src.units)
     print(src.tags())
 ```

@@ -7,10 +7,13 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 import warnings
 
+from affine import Affine
 import numpy as np
 import pandas as pd
 from pyproj import CRS
 import pytest
+import rasterio
+from upath import UPath
 
 if TYPE_CHECKING:
     from typing import ClassVar
@@ -729,6 +732,78 @@ def test_gtc_pass_composite_path_round_trip(tmp_path: Path) -> None:
     qa_path.touch()
     [found] = fm.find(GTCPassComposite, pass_direction="Ascending")
     assert found.layers == {Layer.MEASUREMENT, Layer.QA_NUM}
+
+
+class TestOpen:
+    """``FileManager.open()`` reads a product's file wherever it is stored."""
+
+    _COMPOSITE = RTCLRWComposite(
+        mgrs_code="32TMS03",
+        start_date=pd.Timestamp("20150706"),
+        end_date=pd.Timestamp("20151001"),
+        polarization="VH",
+    )
+
+    @staticmethod
+    def _write(path: Path | UPath, value: float) -> None:
+        """Write a one-pixel GeoTIFF holding ``value``."""
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=1,
+            height=1,
+            count=1,
+            dtype="float32",
+            crs=_CRS_32N,
+            transform=Affine(10.0, 0.0, 400000.0, 0.0, -10.0, 5200000.0),
+        ) as dst:
+            dst.write(np.full((1, 1, 1), value, dtype="float32"))
+
+    def test_opens_a_local_layer_read_only(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        self._write(fm.get_product_path(self._COMPOSITE), 1.0)
+        self._write(fm.get_product_path(self._COMPOSITE, Layer.QA_NUM), 2.0)
+
+        with fm.open(self._COMPOSITE) as src:
+            assert src.mode == "r"
+            assert src.read(1)[0, 0] == 1.0
+        with fm.open(self._COMPOSITE, "QA-NUM") as src:
+            assert src.mode == "r"
+            assert src.read(1)[0, 0] == 2.0
+
+    def test_an_s3_path_reaches_freezebase_with_its_storage_options(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        # Assigned after construction, so the test makes no S3 request.
+        fm.comp_dir = UPath("s3://bucket/comp", endpoint_url="https://s3.example.invalid")
+
+        with patch("s1bursts.filemanager.rasterio_open") as rasterio_open:
+            dataset = fm.open(self._COMPOSITE, Layer.QA_CQM)
+
+        rasterio_open.assert_called_once_with(fm.get_product_path(self._COMPOSITE, Layer.QA_CQM))
+        [path] = rasterio_open.call_args.args
+        assert isinstance(path, UPath)
+        assert str(path) == "s3://bucket/comp/S1_RTC_LRW_QA-CQM_32TMS03_VH_20150706_20151001.tif"
+        assert path.storage_options["endpoint_url"] == "https://s3.example.invalid"
+        assert dataset is rasterio_open.return_value
+
+    def test_a_missing_layer_is_refused_before_opening(self, tmp_path: Path) -> None:
+        fm = FileManager(tmp_path)
+        product = RTCPassComposite(
+            mgrs_code="32TMS03",
+            start_date=pd.Timestamp("20150706"),
+            end_date=pd.Timestamp("20151001"),
+            polarization="VH",
+            pass_direction="Ascending",
+        )
+
+        with patch("s1bursts.filemanager.rasterio_open") as rasterio_open:
+            with pytest.raises(ValueError, match="RTCPassComposite has no layer QA_CQM"):
+                fm.open(product, Layer.QA_CQM)
+            with pytest.raises(ValueError, match="is not a valid Layer"):
+                fm.open(product, "QA-XYZ")
+
+        rasterio_open.assert_not_called()
 
 
 class TestStringPaths:

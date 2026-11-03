@@ -101,13 +101,12 @@ a slope in its radar shadow has no value in that direction.
 #| fig-cap: "Backscatter composites of August 2025 in a 4 by 4 km window west of Martigny: the five ascending acquisitions (left), the ten descending acquisitions (middle), and all fifteen combined with LRW (right). White marks radar shadow, where a composite has no value."
 import matplotlib.pyplot as plt
 import numpy as np
-import rasterio
 from s1bursts.product import Layer
 
 
 def read(composite, layer=Layer.MEASUREMENT):
     """Read one layer of a composite, with its extent in kilometers for imshow."""
-    with rasterio.open(fm.get_product_path(composite, layer)) as src:
+    with fm.open(composite, layer) as src:
         left, bottom, right, top = (v / 1000 for v in src.bounds)
         return src.read(1).astype("float32"), [left, right, bottom, top]
 

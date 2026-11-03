@@ -87,14 +87,14 @@ With `write_qa=True`, two quality layers are written beside an LRW composite:
 - The composite quality map (`QA-CQM`): how fine the combined detail of each
   pixel is.
 
-The composite lists them in its `layers`, and `get_product_path()` locates each
-layer's file:
+The composite lists them in its `layers`, and `fm.open()` reads each layer's
+file:
 
 ```{.python}
 from s1bursts.product import Layer
 
-num_path = fm.get_product_path(composite, Layer.QA_NUM)
-cqm_path = fm.get_product_path(composite, Layer.QA_CQM)
+with fm.open(composite, Layer.QA_CQM) as src:
+    cqm = src.read(1)
 ```
 
 ## Composites per pass direction
