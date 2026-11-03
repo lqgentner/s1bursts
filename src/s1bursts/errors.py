@@ -25,10 +25,10 @@ can still fail on a batch that finished with failures:
   caught by it, nor are inputs that cannot be composited together at all, an
   ``InconsistentInputsError``, such as products on another UTM zone or grid.
 - ``ProductSettingsMismatchError`` says that a product to be skipped exists
-  but was made with other settings than requested. Changed settings affect
-  every product of a call, so it stops a batch like an environment-wide
-  failure, and it is not a ``CompositeError``, so a loop over cells does not
-  pass over it.
+  but was made with other settings than requested, or does not record them.
+  Changed settings affect every product of a call, so it stops a batch like an
+  environment-wide failure, and it is not a ``CompositeError``, so a loop over
+  cells does not pass over it.
 
 Every other ``S1BurstsError`` fails the whole call that raised it, as does
 anything that is not one (a plain ``ValueError`` for an invalid argument, a
@@ -289,11 +289,13 @@ class CompositeInputError(CompositeError, OSError):
 class ProductSettingsMismatchError(S1BurstsError):
     """An existing product was made with other settings than requested.
 
-    Raised instead of skipping the product when ``overwrite=False``: by
-    ``BurstProcessor.create_*`` and ``SNAPClient.create_*`` for a per-burst
-    product, and by ``ResolutionWeighter.compose_*`` for a composite. Pass
-    ``overwrite=True`` to replace the product, or give the other settings their
-    own ``FileManager`` directories to keep both.
+    Also raised for a product that does not record every requested setting,
+    such as one written by an earlier s1bursts. Raised instead of skipping the
+    product when ``overwrite=False``: by ``BurstProcessor.create_*`` and
+    ``SNAPClient.create_*`` for a per-burst product, and by
+    ``ResolutionWeighter.compose_*`` for a composite. Pass ``overwrite=True``
+    to replace the product, or give the other settings their own
+    ``FileManager`` directories to keep both.
 
     Parameters
     ----------

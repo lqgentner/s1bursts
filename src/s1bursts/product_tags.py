@@ -37,13 +37,15 @@ upper-snake-cased, with the PFS item that asks for it::
     TEMPORAL_BASELINE_DAYS        TemporalBaseline            [InSAR] 1.7.16
 
 Every other tag has no counterpart in the specification and a plain
-descriptive name.
+descriptive name. Among them are the processing settings: every field of the
+configuration a per-burst product was made with has a tag of its own.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib.metadata import version as _distribution_version
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
@@ -66,6 +68,7 @@ from s1bursts.snap_graph import (
     GeocodingConfig,
     GTCConfig,
     RTCConfig,
+    _coherence_option_values,
 )
 
 if TYPE_CHECKING:
@@ -123,15 +126,43 @@ Written rather than left out, so that a reader can tell a field that was
 considered and came back empty from one this package never wrote.
 """
 
+# The tags that record each field of RTCConfig, GTCConfig and CoherenceConfig.
+# `dem_name` is recorded through DEM, and `standard_grid_origin` is derived
+# from `grid_spacing`. A tag a product does not write, such as the coherence
+# window of an RTC product or the no-data value of a built-in DEM, compares as
+# absent on both sides.
+_SETTING_TAGS: dict[str, tuple[str, ...]] = {
+    "grid_spacing": ("GRID_SPACING",),
+    "dem": ("DEM",),
+    "img_resampling": ("IMAGE_RESAMPLING",),
+    "dem_resampling": ("DEM_RESAMPLING",),
+    "align_to_standard_grid": ("ALIGNED_TO_STANDARD_GRID",),
+    "external_dem_nodata": ("EXTERNAL_DEM_NODATA",),
+    "external_dem_apply_egm": ("EXTERNAL_DEM_EGM96_APPLIED",),
+    "replace_zeros_with_nan": ("ZEROS_REPLACED_WITH_NAN",),
+    "multilook": ("MULTILOOK_RANGE", "MULTILOOK_AZIMUTH"),
+    "dem_oversampling": ("TERRAIN_FLATTENING_OVERSAMPLING",),
+    "additional_overlap": ("TERRAIN_FLATTENING_OVERLAP",),
+    "window": ("COHERENCE_WINDOW_RANGE", "COHERENCE_WINDOW_AZIMUTH"),
+    "subtract_flat_earth_phase": ("FLAT_EARTH_PHASE_REMOVED",),
+    "subtract_topographic_phase": ("TOPOGRAPHIC_PHASE_REMOVED",),
+    "correct_coherence_bias": ("COHERENCE_BIAS_CORRECTED",),
+    "remove_local_phase_ramp": ("LOCAL_PHASE_RAMP_REMOVED",),
+}
+
+# The per-burst tags that record a processing setting.
+_BURST_SETTING_KEYS = tuple(key for keys in _SETTING_TAGS.values() for key in keys)
+
 # Provenance a composite inherits from the per-burst products it was built
 # from, describing how those inputs were made. Always present on a composite,
 # as ``UNKNOWN`` where the inputs do not supply a single answer.
 _INPUT_KEYS = ("DEM", "PROCESSING_SOFTWARE", "PROCESSING_SOFTWARE_VERSION")
+# Inherited only where every input records the same value, and left out
+# otherwise: the processing settings, and the coherence estimator.
+_SETTING_INPUT_KEYS = tuple(key for key in _BURST_SETTING_KEYS if key not in _INPUT_KEYS)
 _COHERENCE_INPUT_KEYS = (
     "PHASE_QUALITY_METHOD",
     "PHASE_QUALITY_REFERENCE",
-    "COHERENCE_WINDOW_RANGE",
-    "COHERENCE_WINDOW_AZIMUTH",
     "COHERENCE_WEIGHTING_SHAPE",
 )
 
@@ -179,6 +210,17 @@ class RasterMetadata:
 
 def _date(value: Timestamp) -> str:
     return f"{value:%Y-%m-%d}"
+
+
+def _flag(value: bool) -> str:  # noqa: FBT001
+    """Render a boolean setting as ``true`` or ``false``."""
+    return "true" if value else "false"
+
+
+def _number(value: float) -> str:
+    """Render a float briefly, but never so briefly that two values coincide."""
+    short = f"{value:g}"
+    return short if float(short) == value else repr(value)
 
 
 def _pipeline() -> dict[str, str]:
@@ -406,7 +448,7 @@ def rtc_lrw_metadata(
         "LAYER_DESCRIPTION": (
             "Gamma-0 backscatter composite, weighted by the inverse local scattering area."
         ),
-        **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
+        **_inherited(source_tags, (*_INPUT_KEYS, *_SETTING_INPUT_KEYS), required=_INPUT_KEYS),
     }
     return RasterMetadata(
         tags=tags,
@@ -482,7 +524,7 @@ def coh_lrw_metadata(
         **dict(statistics or {}),
         **_inherited(
             source_tags,
-            (*_INPUT_KEYS, *_COHERENCE_INPUT_KEYS),
+            (*_INPUT_KEYS, *_SETTING_INPUT_KEYS, *_COHERENCE_INPUT_KEYS),
             required=_INPUT_KEYS,
         ),
     }
@@ -528,7 +570,7 @@ def rtc_pass_metadata(
         "LAYER_DESCRIPTION": (
             "Unweighted gamma-0 backscatter composite of a single pass direction."
         ),
-        **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
+        **_inherited(source_tags, (*_INPUT_KEYS, *_SETTING_INPUT_KEYS), required=_INPUT_KEYS),
     }
     return RasterMetadata(
         tags=tags,
@@ -577,7 +619,7 @@ def gtc_pass_metadata(
             "Unweighted beta-0 backscatter composite of a single pass direction, "
             "geometrically terrain corrected only."
         ),
-        **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
+        **_inherited(source_tags, (*_INPUT_KEYS, *_SETTING_INPUT_KEYS), required=_INPUT_KEYS),
     }
     return RasterMetadata(
         tags=tags,
@@ -633,7 +675,7 @@ def coh_pass_metadata(
         **dict(statistics or {}),
         **_inherited(
             source_tags,
-            (*_INPUT_KEYS, *_COHERENCE_INPUT_KEYS),
+            (*_INPUT_KEYS, *_SETTING_INPUT_KEYS, *_COHERENCE_INPUT_KEYS),
             required=_INPUT_KEYS,
         ),
     }
@@ -705,7 +747,7 @@ def qa_metadata(
         ),
         **(_lrw(aggregation, clip_max_resolution) if weighted else _unweighted(aggregation)),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
-        **_inherited(source_tags, _INPUT_KEYS, required=_INPUT_KEYS),
+        **_inherited(source_tags, (*_INPUT_KEYS, *_SETTING_INPUT_KEYS), required=_INPUT_KEYS),
     }
     if isinstance(product, RTCPassComposite | GTCPassComposite | CohPassComposite):
         tags["PASS_DIRECTION"] = product.pass_direction
@@ -761,10 +803,17 @@ def _burst(
         "RELATIVE_ORBIT_NUMBER": str(product.rel_orbit_number),
         "PIXEL_COORDINATE_CONVENTION": _PIXEL_CONVENTION,
         "PROCESSING_SOFTWARE": "ESA SNAP",
+        "PROCESSING_SOFTWARE_VERSION": _software_version(snap_version),
         "GRID_SPACING": f"{config.grid_spacing:g} m",
         "DEM": config.dem if isinstance(config.dem, str) else config.dem_name or UNKNOWN,
+        "IMAGE_RESAMPLING": config.img_resampling,
+        "DEM_RESAMPLING": config.dem_resampling,
+        "ALIGNED_TO_STANDARD_GRID": _flag(config.align_to_standard_grid),
     }
-    tags["PROCESSING_SOFTWARE_VERSION"] = _software_version(snap_version)
+    # These settings apply to an external DEM only.
+    if isinstance(config.dem, Path):
+        tags["EXTERNAL_DEM_NODATA"] = _number(config.external_dem_nodata)
+        tags["EXTERNAL_DEM_EGM96_APPLIED"] = _flag(config.external_dem_apply_egm)
     return tags
 
 
@@ -815,11 +864,15 @@ def backscatter_metadata(
         "POLARIZATION": product.polarization,
         "ACQUISITION_DATE": _date(product.date),
         "TERRAIN_CORRECTION": "Radiometric and geometric" if gamma0 else "Geometric",
+        "ZEROS_REPLACED_WITH_NAN": _flag(config.replace_zeros_with_nan),
     }
     if config.multilook is not None:
         looks_rg, looks_az = config.multilook
         tags["MULTILOOK_RANGE"] = str(looks_rg)
         tags["MULTILOOK_AZIMUTH"] = str(looks_az)
+    if isinstance(config, RTCConfig):
+        tags["TERRAIN_FLATTENING_OVERSAMPLING"] = _number(config.dem_oversampling)
+        tags["TERRAIN_FLATTENING_OVERLAP"] = _number(config.additional_overlap)
 
     if not gamma0:
         return RasterMetadata(
@@ -858,7 +911,9 @@ def coherence_metadata(
 
     The estimation window ([InSAR] item 1.7.18) exists only in ``config``, so
     these tags are the only route by which it reaches a composite built from
-    this product.
+    this product. The options SNAP 14 added to its ``Coherence`` operator are
+    recorded as ``false`` for an older SNAP, which has neither, and as
+    ``N/A`` for an unknown version, under which SNAP's own defaults apply.
 
     Parameters
     ----------
@@ -874,8 +929,20 @@ def coherence_metadata(
     -------
     RasterMetadata
         Tags, band description and unit for the product.
+
+    Raises
+    ------
+    ConfigurationError
+        If ``config`` enables an option of SNAP 14 but ``snap_version`` is
+        older or unknown, as building its graph does.
     """
     win_rg, win_az = config.window
+    # An option the graph leaves out is off under an older SNAP, which lacks it.
+    no_option = UNKNOWN if snap_version is None else "false"
+    correct_bias, remove_ramp = (
+        no_option if value is None else _flag(value)
+        for value in _coherence_option_values(config, snap_version)
+    )
     tags = {
         **_burst(product, config=config, snap_version=snap_version),
         "MEASUREMENT_TYPE": "Coherence",
@@ -888,6 +955,11 @@ def coherence_metadata(
         "COHERENCE_WINDOW_RANGE": str(win_rg),
         "COHERENCE_WINDOW_AZIMUTH": str(win_az),
         "COHERENCE_WEIGHTING_SHAPE": _COHERENCE_WEIGHTING_SHAPE,
+        "FLAT_EARTH_PHASE_REMOVED": _flag(config.subtract_flat_earth_phase),
+        "TOPOGRAPHIC_PHASE_REMOVED": _flag(config.subtract_topographic_phase),
+        "COHERENCE_BIAS_CORRECTED": correct_bias,
+        "LOCAL_PHASE_RAMP_REMOVED": remove_ramp,
+        "ZEROS_REPLACED_WITH_NAN": _flag(config.replace_zeros_with_nan),
     }
     return RasterMetadata(
         tags=tags,
@@ -937,29 +1009,18 @@ def burst_metadata(
             raise TypeError(msg)
 
 
-# The per-burst tags that record a processing setting. A tag a product type
-# does not write, such as the coherence window of an RTC product, compares as
-# absent on both sides.
-_BURST_SETTING_KEYS = (
-    "GRID_SPACING",
-    "DEM",
-    "MULTILOOK_RANGE",
-    "MULTILOOK_AZIMUTH",
-    "COHERENCE_WINDOW_RANGE",
-    "COHERENCE_WINDOW_AZIMUTH",
-)
-
-
 def _burst_settings(
     product: RTCProduct | GTCProduct | CoherenceProduct,
     config: BackscatterConfig | CoherenceConfig,
+    *,
+    snap_version: tuple[int, ...] | None,
 ) -> dict[str, str | None]:
     """Return the setting tags a per-burst product made with ``config`` carries, None if absent.
 
     Taken from the tags ``burst_metadata`` writes, so they compare with a
     file's recorded tags exactly as written.
     """
-    tags = burst_metadata(product, config).tags
+    tags = burst_metadata(product, config, snap_version=snap_version).tags
     return {key: tags.get(key) for key in _BURST_SETTING_KEYS}
 
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Final, Literal, override
+from typing import Annotated, Any, ClassVar, Final, Literal, Self, override
 from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
 from lxml import etree
@@ -25,6 +25,7 @@ from pydantic import (
     Field,
     computed_field,
     field_validator,
+    model_validator,
 )
 
 from s1bursts.errors import ConfigurationError
@@ -248,7 +249,6 @@ def _coherence(
     win_rg: int,
     subtract_flat_earth_phase: bool,
     subtract_topographic_phase: bool,
-    square_pixel: bool,
     correct_coherence_bias: bool | None,
     remove_local_phase_ramp: bool | None,
     dem: str | Path,
@@ -264,7 +264,11 @@ def _coherence(
     _add_param(p, "srpPolynomialDegree", 5)
     _add_param(p, "srpNumberPoints", 501)
     _add_param(p, "orbitDegree", 3)
-    _add_param(p, "squarePixel", square_pixel)
+    # Pinned off, never exposed: with squarePixel enabled SNAP 14 derives
+    # cohWinAz from cohWinRg and the scene-center geometry and discards the
+    # requested azimuth window, so the applied window stops matching the
+    # configured one. SNAP 13 declares the parameter but never reads it.
+    _add_param(p, "squarePixel", value=False)
     _add_param(p, "subtractTopographicPhase", subtract_topographic_phase)
     # ``None`` for a SNAP that does not know the option; see
     # `supports_coherence_options`.
@@ -606,7 +610,6 @@ def build_coherence_graph(
         win_rg=win_rg,
         subtract_flat_earth_phase=cfg.subtract_flat_earth_phase,
         subtract_topographic_phase=cfg.subtract_topographic_phase,
-        square_pixel=cfg.square_pixel,
         correct_coherence_bias=correct_coherence_bias,
         remove_local_phase_ramp=remove_local_phase_ramp,
         dem=cfg.dem,
@@ -690,12 +693,10 @@ class GeocodingConfig(BaseModel):
         DEMs; a path (or a string with a file suffix) is passed as an external
         DEM.
     dem_name
-        Identification written to product metadata for an external DEM. Ignored
-        for SNAP's built-in DEMs, whose ``dem`` value is already their name.
-        Set it for an external DEM: without it the products record the DEM as
-        unknown, so a rerun cannot tell whether an existing product was made
-        with the same DEM and skips it unchecked, with a warning. Name each
-        DEM differently, such as by its source and version.
+        Name of an external DEM, written to product metadata and compared
+        before an existing product is skipped. Required when ``dem`` is a path;
+        ignored for SNAP's built-in DEMs, whose ``dem`` value is already their
+        name. Name each DEM differently, such as by its source and version.
     img_resampling
         Resampling of the image during terrain correction.
     dem_resampling
@@ -744,6 +745,17 @@ class GeocodingConfig(BaseModel):
     align_to_standard_grid: bool = True
     external_dem_nodata: float = 0.0
     external_dem_apply_egm: bool = False
+
+    @model_validator(mode="after")
+    def _require_dem_name(self) -> Self:
+        """Reject an external DEM without a name to record it by."""
+        if isinstance(self.dem, Path) and self.dem_name is None:
+            msg = (
+                f"dem_name is required for an external DEM ({self.dem}): products record "
+                "the DEM by name, never by path. Name it by its source and version."
+            )
+            raise ValueError(msg)
+        return self
 
     @computed_field
     @property
@@ -877,16 +889,13 @@ class CoherenceConfig(GeocodingConfig):
     window
         Coherence estimation window ``(n_rg, n_az)`` in single-look samples.
         This is the only control over the number of looks entering the
-        estimator.
+        estimator. SNAP's ``squarePixel`` option, which derives the azimuth
+        window from the range window and the scene geometry, is pinned off, so
+        the window given is the window applied.
     subtract_flat_earth_phase
         Remove the flat-earth phase before estimating coherence.
     subtract_topographic_phase
         Remove the topographic phase using ``dem``.
-    square_pixel
-        Let SNAP's ``Coherence`` operator adjust the estimation window toward
-        square ground pixels. Leave off: as with SNAP's ``grSquarePixel`` on
-        the ``Multilook`` operator, enabling it means the applied window is not
-        the requested one.
     correct_coherence_bias
         Remove the positive bias a finite estimation window leaves in the
         coherence magnitude. Requires SNAP 14; building the graph for an older
@@ -904,7 +913,6 @@ class CoherenceConfig(GeocodingConfig):
     window: tuple[_PositiveInt, _PositiveInt] = (25, 5)
     subtract_flat_earth_phase: bool = True
     subtract_topographic_phase: bool = True
-    square_pixel: bool = False
     correct_coherence_bias: bool = False
     remove_local_phase_ramp: bool = False
     replace_zeros_with_nan: bool = True

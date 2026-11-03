@@ -7,7 +7,7 @@ mapping, so nothing here touches a file or the burst-map LUT.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from pandas import Timestamp
@@ -16,6 +16,7 @@ import pytest
 
 import s1bursts
 from s1bursts import product_tags
+from s1bursts.errors import ConfigurationError
 from s1bursts.product import (
     CoherenceProduct,
     CohLRWComposite,
@@ -29,6 +30,9 @@ from s1bursts.product import (
 )
 from s1bursts.product_tags import RasterMetadata
 from s1bursts.snap_graph import CoherenceConfig, GTCConfig, RTCConfig
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _UTM32 = CRS.from_epsg(32632)
 _START = Timestamp("2020-01-01")
@@ -599,11 +603,6 @@ class TestBurstProducts:
         assert tags["DEM"] == "Copernicus GLO-30, EGM2008"
         assert str(config.dem) not in tags.values()
 
-    def test_an_unnamed_external_dem_is_unknown(self) -> None:
-        config = CoherenceConfig(dem="/data/dem/glo30_ellipsoid.tif")
-        tags = product_tags.coherence_metadata(_coh_burst(), config).tags
-        assert tags["DEM"] == product_tags.UNKNOWN
-
     def test_a_composite_inherits_the_dem(self) -> None:
         tags = _lrw(source_tags={"DEM": "Copernicus 30m Global DEM"})
         assert tags["DEM"] == "Copernicus 30m Global DEM"
@@ -641,6 +640,154 @@ class TestBurstProducts:
             product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()),
         ):
             assert [tags["LAYER_NAME"] for tags in metadata.band_tags] == metadata.band_names
+
+
+_EXTERNAL = {"dem": Path("/data/dem/glo30.tif"), "dem_name": "GLO-30 prepared"}
+
+
+class TestSettingTags:
+    """Every configuration field is recorded on the product it made."""
+
+    def test_rtc_records_its_defaults(self) -> None:
+        tags = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
+        assert {key: tags.get(key) for key in product_tags._BURST_SETTING_KEYS} == {
+            "GRID_SPACING": "10 m",
+            "DEM": "Copernicus 30m Global DEM",
+            "IMAGE_RESAMPLING": "BILINEAR_INTERPOLATION",
+            "DEM_RESAMPLING": "BILINEAR_INTERPOLATION",
+            "ALIGNED_TO_STANDARD_GRID": "true",
+            "EXTERNAL_DEM_NODATA": None,
+            "EXTERNAL_DEM_EGM96_APPLIED": None,
+            "ZEROS_REPLACED_WITH_NAN": "true",
+            "MULTILOOK_RANGE": "5",
+            "MULTILOOK_AZIMUTH": "1",
+            "TERRAIN_FLATTENING_OVERSAMPLING": "1",
+            "TERRAIN_FLATTENING_OVERLAP": "0.2",
+            "COHERENCE_WINDOW_RANGE": None,
+            "COHERENCE_WINDOW_AZIMUTH": None,
+            "FLAT_EARTH_PHASE_REMOVED": None,
+            "TOPOGRAPHIC_PHASE_REMOVED": None,
+            "COHERENCE_BIAS_CORRECTED": None,
+            "LOCAL_PHASE_RAMP_REMOVED": None,
+        }
+
+    def test_gtc_records_no_terrain_flattening(self) -> None:
+        tags = product_tags.backscatter_metadata(_gtc_burst(), GTCConfig()).tags
+        assert "TERRAIN_FLATTENING_OVERSAMPLING" not in tags
+        assert "TERRAIN_FLATTENING_OVERLAP" not in tags
+        assert tags["ZEROS_REPLACED_WITH_NAN"] == "true"
+
+    def test_coherence_records_its_estimator(self) -> None:
+        config = CoherenceConfig(subtract_topographic_phase=False, replace_zeros_with_nan=False)
+        tags = product_tags.coherence_metadata(_coh_burst(), config, snap_version=(14, 0, 0)).tags
+        assert tags["FLAT_EARTH_PHASE_REMOVED"] == "true"
+        assert tags["TOPOGRAPHIC_PHASE_REMOVED"] == "false"
+        assert tags["COHERENCE_BIAS_CORRECTED"] == "false"
+        assert tags["LOCAL_PHASE_RAMP_REMOVED"] == "false"
+        assert tags["ZEROS_REPLACED_WITH_NAN"] == "false"
+
+    @pytest.mark.parametrize(
+        ("snap_version", "expected"),
+        [((14, 0, 0), "true"), ((13, 0, 0), "false"), (None, product_tags.UNKNOWN)],
+        ids=["snap14", "snap13", "unknown"],
+    )
+    def test_the_snap_14_options_follow_the_graph(
+        self, snap_version: tuple[int, ...] | None, expected: str
+    ) -> None:
+        # SNAP 13 has neither option; an unknown version gets SNAP's own defaults.
+        config = CoherenceConfig(correct_coherence_bias=snap_version == (14, 0, 0))
+        tags = product_tags.coherence_metadata(
+            _coh_burst(), config, snap_version=snap_version
+        ).tags
+        assert tags["COHERENCE_BIAS_CORRECTED"] == expected
+        assert tags["LOCAL_PHASE_RAMP_REMOVED"] == (
+            "false" if snap_version else product_tags.UNKNOWN
+        )
+
+    def test_an_option_the_snap_version_lacks_raises_as_the_graph_does(self) -> None:
+        with pytest.raises(ConfigurationError, match="SNAP 14"):
+            product_tags.coherence_metadata(
+                _coh_burst(),
+                CoherenceConfig(correct_coherence_bias=True),
+                snap_version=(13, 0, 0),
+            )
+
+    def test_the_external_dem_settings_are_recorded_only_for_an_external_dem(self) -> None:
+        external = RTCConfig(
+            **_EXTERNAL, external_dem_nodata=-32767.5, external_dem_apply_egm=True
+        )
+        tags = product_tags.backscatter_metadata(_rtc_burst(), external).tags
+        assert tags["EXTERNAL_DEM_NODATA"] == "-32767.5"
+        assert tags["EXTERNAL_DEM_EGM96_APPLIED"] == "true"
+
+        builtin = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
+        assert "EXTERNAL_DEM_NODATA" not in builtin
+        assert "EXTERNAL_DEM_EGM96_APPLIED" not in builtin
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [(0.0, "0"), (0.2, "0.2"), (-9999.0, "-9999"), (1234567.25, "1234567.25")],
+    )
+    def test_a_number_is_brief_but_exact(self, value: float, expected: str) -> None:
+        tags = product_tags.backscatter_metadata(
+            _rtc_burst(), RTCConfig(**_EXTERNAL, external_dem_nodata=value)
+        ).tags
+        assert tags["EXTERNAL_DEM_NODATA"] == expected
+        assert float(expected) == value
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda source: _lrw(source_tags=source), id="rtc_lrw"),
+            pytest.param(
+                lambda source: (
+                    product_tags.rtc_pass_metadata(
+                        _rtc_pass(), aggregation="mean", n_observations=2, source_tags=source
+                    ).tags
+                ),
+                id="rtc_pass",
+            ),
+            pytest.param(
+                lambda source: (
+                    product_tags.qa_metadata(
+                        _rtc_lrw(),
+                        Layer.QA_CQM,
+                        aggregation="mean",
+                        n_observations=2,
+                        source_tags=source,
+                    ).tags
+                ),
+                id="qa",
+            ),
+        ],
+    )
+    def test_a_composite_carries_the_settings_its_inputs_agree_on(
+        self, build: Callable[[dict[str, str]], dict[str, str]]
+    ) -> None:
+        # Previously no RTC composite carried any setting tag but the DEM.
+        source = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
+        tags = build(source)
+        for key in product_tags._BURST_SETTING_KEYS:
+            assert tags.get(key) == source.get(key), key
+
+    def test_a_setting_the_inputs_disagree_on_is_left_out(self) -> None:
+        # The inputs' agreement is decided by ResolutionWeighter._input_tags,
+        # which passes on only the keys every input shares.
+        source = product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags
+        del source["IMAGE_RESAMPLING"]
+        tags = _lrw(source_tags=source)
+        assert "IMAGE_RESAMPLING" not in tags
+        assert tags["GRID_SPACING"] == "10 m"
+
+    def test_a_coherence_composite_carries_the_estimator(self) -> None:
+        source = product_tags.coherence_metadata(
+            _coh_burst(), CoherenceConfig(), snap_version=(14, 0, 0)
+        ).tags
+        tags = product_tags.coh_pass_metadata(
+            _coh_pass(), aggregation="mean", n_observations=2, source_tags=source
+        ).tags
+        assert tags["COHERENCE_BIAS_CORRECTED"] == "false"
+        assert tags["TOPOGRAPHIC_PHASE_REMOVED"] == "true"
 
 
 class TestBurstDispatch:

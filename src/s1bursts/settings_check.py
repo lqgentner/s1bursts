@@ -4,9 +4,7 @@ File names carry no processing settings, so a product made with other settings
 has the same name as the requested one. Before a ``create_*`` or ``compose_*``
 call returns an existing product unchanged, it reads the settings the file
 records in its tags and raises ``ProductSettingsMismatchError`` where they
-differ from the request. A file written before the tags existed, or a product
-whose DEM is recorded as unknown, cannot be checked and is skipped as before;
-the skipped result says so.
+differ from the request or are not recorded at all.
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ from rasterio.errors import RasterioError
 
 from s1bursts.errors import ProductSettingsMismatchError
 from s1bursts.product_tags import (
+    _SETTING_TAGS,
     UNKNOWN,
     _burst_settings,
     _composite_settings,
@@ -46,25 +45,18 @@ if TYPE_CHECKING:
     )
     from s1bursts.product_tags import Aggregation
     from s1bursts.snap_graph import BackscatterConfig, CoherenceConfig
-    from s1bursts.summary import UncheckedReason
 
 logger = logging.getLogger(__name__)
 
 type _Differences = dict[str, tuple[str | None, str | None]]
 
-# Every tagged file has it: the tags arrived together in s1bursts 0.3.0.
-_TAGGED_MARKER = "PIPELINE_SOFTWARE_VERSION"
 _SNAP_VERSION = "PROCESSING_SOFTWARE_VERSION"
 _DECIBEL = "decibel"
 
 # The argument behind each compared tag, for the message.
 _ARGUMENTS = {
-    "GRID_SPACING": "grid_spacing",
-    "DEM": "dem",
-    "MULTILOOK_RANGE": "multilook",
-    "MULTILOOK_AZIMUTH": "multilook",
-    "COHERENCE_WINDOW_RANGE": "window",
-    "COHERENCE_WINDOW_AZIMUTH": "window",
+    **{key: name for name, keys in _SETTING_TAGS.items() for key in keys},
+    "DEM": "dem, dem_name",
     "COMPOSITING_PARAMETERS": "aggregation, clip_max_resolution",
     "CRS": "geobox",
     "TRANSFORM": "geobox",
@@ -72,14 +64,6 @@ _ARGUMENTS = {
     "BACKSCATTER_SCALING": "decibel, now removed",
     "CQM_SCALING": "cqm_decibel, now removed",
 }
-
-
-@dataclass(frozen=True)
-class _BurstSkip:
-    """What a skipped per-burst product's check could not confirm."""
-
-    unchecked: UncheckedReason | None = None
-    other_snap_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -118,7 +102,7 @@ def _mismatch(path: Path | UPath, differences: _Differences) -> ProductSettingsM
         for key, (recorded, requested) in differences.items()
     )
     msg = (
-        f"'{path.name}' exists but was made with other settings: {listed}. Pass "
+        f"'{path.name}' exists but records other settings than requested: {listed}. Pass "
         "overwrite=True to replace it, or give these settings their own FileManager "
         "directory to keep both."
     )
@@ -131,32 +115,26 @@ def _check_burst_product(
     config: BackscatterConfig | CoherenceConfig,
     *,
     snap_version: tuple[int, ...] | None,
-) -> _BurstSkip:
-    """Check an existing per-burst product, returning what its skip could not confirm.
+) -> str | None:
+    """Check an existing per-burst product, returning the other SNAP version that made it.
 
     Raises ``ProductSettingsMismatchError`` if the file records other settings
-    than ``config`` would write, and the read error if it cannot be read.
+    than ``config`` would write, or does not record one of them, and the read
+    error if it cannot be read.
     """
     recorded = _read_header(path).tags
-    if _TAGGED_MARKER not in recorded:
-        return _BurstSkip(unchecked="untagged")
-    requested = _burst_settings(product, config)
+    requested = _burst_settings(product, config, snap_version=snap_version)
     differences: _Differences = {
         key: (recorded.get(key), value)
         for key, value in requested.items()
         if recorded.get(key) != value
     }
-    # An external DEM without dem_name is recorded as unknown, so it cannot be compared.
-    dem_unknown = UNKNOWN in (recorded.get("DEM"), requested["DEM"])
-    if dem_unknown:
-        differences.pop("DEM", None)
     if differences:
         raise _mismatch(path, differences)
 
     running = _software_version(snap_version)
     made_with = recorded.get(_SNAP_VERSION, UNKNOWN)
-    other = made_with if UNKNOWN not in (running, made_with) and made_with != running else None
-    return _BurstSkip(unchecked="unknown_dem" if dem_unknown else None, other_snap_version=other)
+    return made_with if UNKNOWN not in (running, made_with) and made_with != running else None
 
 
 def _skip_existing[P: RTCProduct | GTCProduct | CoherenceProduct](
@@ -170,27 +148,20 @@ def _skip_existing[P: RTCProduct | GTCProduct | CoherenceProduct](
 ) -> OkResult[P] | None:
     """Return the skipped result of an existing per-burst product, or None if there is none.
 
-    Logs a skip whose settings could not be checked, or that another SNAP
-    version made, at ``log_level``; a batch that warns once about them all
-    passes DEBUG. Raises as ``_check_burst_product`` does.
+    Logs a skip that another SNAP version made at ``log_level``; a batch
+    that warns once about them all passes DEBUG. Raises as
+    ``_check_burst_product`` does.
     """
     if not file_manager.product_exists(product):
         return None
     path = file_manager.get_product_path(product)
-    skip = _check_burst_product(path, product, config, snap_version=snap_version)
-    if skip.unchecked is not None:
-        logger.log(
-            log_level,
-            "Skipped '%s' without checking its settings (%s)",
-            path.name,
-            skip.unchecked,
-        )
-    if skip.other_snap_version is not None:
+    other_snap_version = _check_burst_product(path, product, config, snap_version=snap_version)
+    if other_snap_version is not None:
         logger.log(
             log_level,
             "Skipped '%s', made by SNAP %s rather than the running %s",
             path.name,
-            skip.other_snap_version,
+            other_snap_version,
             _software_version(snap_version),
         )
     logger.debug("%s product already exists: '%s'", product.product_type, path.name)
@@ -198,8 +169,7 @@ def _skip_existing[P: RTCProduct | GTCProduct | CoherenceProduct](
         source=source,
         result=product,
         skipped=True,
-        unchecked=skip.unchecked,
-        other_snap_version=skip.other_snap_version,
+        other_snap_version=other_snap_version,
     )
 
 
@@ -240,50 +210,24 @@ def _check_composite(
     *,
     aggregation: Aggregation,
     clip_max_resolution: float | None = None,
-) -> bool:
-    """Check every requested layer of an existing composite; False if one could not be checked.
+) -> None:
+    """Check every requested layer of an existing composite.
 
     Only the arguments of the ``compose_*`` call are compared, not what the
     composite inherits from its inputs, so no input needs to be read. Raises
     ``ProductSettingsMismatchError`` if a layer records another grid, other
-    compositing parameters or decibel values, and the read error if a layer
-    cannot be read.
+    or no compositing parameters, or decibel values, and the read error if a
+    layer cannot be read.
     """
     expected = _composite_settings(
         product, aggregation=aggregation, clip_max_resolution=clip_max_resolution
     )
-    checked = True
     for layer in sorted(product.layers):
         path = file_manager.get_product_path(product, layer)
         header = _read_header(path)
-        if _TAGGED_MARKER not in header.tags:
-            checked = False
-            continue
         differences = _grid_differences(header, geobox) | _tag_differences(header.tags, expected)
         if differences:
             raise _mismatch(path, differences)
-    return checked
-
-
-def _warn_unchecked(count: int, *, stacklevel: int, per_burst: bool = True) -> None:
-    """Warn that ``count`` existing products were skipped without checking their settings.
-
-    Only a per-burst product can go unchecked for an external DEM without
-    ``dem_name``; a composite only for being written before s1bursts 0.3.0.
-    """
-    if not count:
-        return
-    if per_burst:
-        reason = (
-            "they were written before s1bursts 0.3.0, or made with an external DEM that "
-            "has no dem_name. Pass overwrite=True to rebuild them, and set dem_name for "
-            "an external DEM."
-        )
-    else:
-        reason = "they were written before s1bursts 0.3.0. Pass overwrite=True to rebuild them."
-    msg = f"Skipped {count} existing product(s) without checking their settings: {reason}"
-
-    warnings.warn(msg, stacklevel=stacklevel + 1)
 
 
 def _warn_other_snap(count: int, running: str, *, stacklevel: int) -> None:

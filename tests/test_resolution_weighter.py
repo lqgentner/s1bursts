@@ -2611,35 +2611,31 @@ class TestSkipChecksTheSettings:
         with pytest.raises(ProductSettingsMismatchError, match="BACKSCATTER_SCALING"):
             scene.weighter.compose_rtc_lrw(products, scene.geobox)
 
-    def test_a_composite_without_tags_is_skipped_with_one_warning(
+    # Previously skipped without checking, with a warning.
+    def test_a_composite_without_tags_raises(
         self, scene: _Scene, products: list[RTCProduct]
     ) -> None:
         composite = scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
         for layer in composite.layers:
-            # As written before s1bursts 0.3.0.
             _write_raster(scene.manager.get_product_path(composite, layer), [_full(5.0)])
 
-        with pytest.warns(UserWarning, match="Skipped 1 existing product") as record:
+        with pytest.raises(ProductSettingsMismatchError, match="overwrite=True") as excinfo:
             scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
 
-        assert len(record) == 1
-        # A composite has no DEM of its own to name.
-        assert "dem_name" not in str(record[0].message)
+        assert excinfo.value.differences == {
+            "COMPOSITING_PARAMETERS": (None, "aggregation=mean;clip_max_resolution=none")
+        }
 
-    def test_pass_composites_warn_once_per_call(
+    # Previously skipped without checking, with a warning.
+    def test_a_pass_composite_without_tags_raises(
         self, scene: _Scene, products: list[RTCProduct]
     ) -> None:
-        descending = _rtc("2022-08-14", burst_id=_DESCENDING_BURST)
-        _write_raster(scene.manager.get_product_path(descending), [_full(2.0), _full(1.0)])
-        everything = [*products, descending]
-        composites = scene.weighter.compose_rtc_by_pass(everything, scene.geobox)
+        composites = scene.weighter.compose_rtc_by_pass(products, scene.geobox)
         for composite in composites.values():
             _write_raster(scene.manager.get_product_path(composite), [_full(5.0)])
 
-        with pytest.warns(UserWarning, match="Skipped 2 existing product") as record:
-            scene.weighter.compose_rtc_by_pass(everything, scene.geobox)
-
-        assert len(record) == 1
+        with pytest.raises(ProductSettingsMismatchError, match="COMPOSITING_PARAMETERS"):
+            scene.weighter.compose_rtc_by_pass(products, scene.geobox)
 
     def test_pass_composites_compare_the_aggregation(self, scene: _Scene) -> None:
         gtc = _gtc("2022-08-13")

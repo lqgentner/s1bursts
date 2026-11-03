@@ -106,8 +106,39 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - `SnapProcessingError` carries `returncode`, the exit code of `gpt`
   (negative for the signal that ended it), and `output_tail`, the last lines
   it printed, so a failure can be inspected without parsing the message.
+- Every product records every setting it was made with, so a file read on its
+  own says how it was made. Besides `GRID_SPACING`, `DEM`, `MULTILOOK_*` and
+  `COHERENCE_WINDOW_*`, per-burst products carry `IMAGE_RESAMPLING`
+  (`img_resampling`), `DEM_RESAMPLING` (`dem_resampling`),
+  `ALIGNED_TO_STANDARD_GRID` (`align_to_standard_grid`) and
+  `ZEROS_REPLACED_WITH_NAN` (`replace_zeros_with_nan`); for an external DEM,
+  `EXTERNAL_DEM_NODATA` (`external_dem_nodata`) and
+  `EXTERNAL_DEM_EGM96_APPLIED` (`external_dem_apply_egm`); RTC products
+  `TERRAIN_FLATTENING_OVERSAMPLING` (`dem_oversampling`) and
+  `TERRAIN_FLATTENING_OVERLAP` (`additional_overlap`); and coherence products
+  `FLAT_EARTH_PHASE_REMOVED` (`subtract_flat_earth_phase`),
+  `TOPOGRAPHIC_PHASE_REMOVED` (`subtract_topographic_phase`),
+  `COHERENCE_BIAS_CORRECTED` (`correct_coherence_bias`) and
+  `LOCAL_PHASE_RAMP_REMOVED` (`remove_local_phase_ramp`). The last two are
+  `false` under SNAP 13, which lacks the options, and `N/A` when the SNAP
+  version is unknown, since SNAP 14 then applies its own default. A rerun
+  with `overwrite=False` compares all of them, see below. Composites carry
+  each setting tag on which all their inputs agree, in every layer, and leave
+  it out otherwise; RTC and GTC composites carried none of them before.
 
 ### Changed
+
+- **Breaking:** an external DEM needs a name. A `RTCConfig`, `GTCConfig` or
+  `CoherenceConfig` whose `dem` is a path and whose `dem_name` is `None` fails
+  validation with a `pydantic.ValidationError`, instead of writing products
+  that record the DEM as `N/A`, which a rerun could not compare.
+
+  ```python
+  # before
+  RTCConfig(dem=path)
+  # after
+  RTCConfig(dem=path, dem_name="swissALTI3D 30 m")
+  ```
 
 - SNAP failures say more. A `gpt` run ended by a signal names it, as in
   `exit -9 (SIGKILL; usually out of memory: lower SNAPConfig.max_workers or
@@ -543,12 +574,12 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `s1bursts.errors.ProductSettingsMismatchError`, naming each differing
   setting with its recorded and requested value; the error carries the file as
   `path` and the settings as `differences`.
-  - Per-burst products compare their `GRID_SPACING`, `DEM`, `MULTILOOK_*`
-    and `COHERENCE_WINDOW_*` tags; composites
-    their grid (CRS, transform and shape) and `COMPOSITING_PARAMETERS`, in
-    every requested layer, and refuse a layer stored in decibels. A composite
-    is still skipped before any input is read, so what it inherits from its
-    inputs, such as their DEM, is not compared.
+  - Per-burst products compare every setting tag, one per field of their
+    config (see Added); composites their grid (CRS, transform and shape) and
+    `COMPOSITING_PARAMETERS`, in every requested layer, and refuse a layer
+    stored in decibels. A composite is still skipped before any input is
+    read, so what it inherits from its inputs, such as their DEM, is not
+    compared.
   - The error is directly an `S1BurstsError`, not a `CompositeError`, so a
     loop over cells does not pass over it. `BurstProcessor.create_*` check
     every existing product before submitting any work, so it is raised before
@@ -557,20 +588,25 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   - An existing file that cannot be read raises its read error, with a note
     naming the file and that `overwrite=True` rebuilds it, instead of being
     skipped.
-  - A product whose settings are not recorded is skipped as before: one
-    written before s1bursts 0.3.0, and a per-burst product whose DEM is
-    external without `dem_name`, on either side. Set
-    `GeocodingConfig.dem_name` for an external DEM so that it can be
-    compared. A product made by another SNAP version than the running one is
-    skipped too, since SNAP 13 and 14 outputs should not be mixed in one time
-    series.
-  - Such a skip is recorded in the new `OkResult` fields `unchecked`
-    (`"untagged"` or `"unknown_dem"`) and `other_snap_version`, counted in
-    the new `OperationSummary` fields `n_unchecked` and
-    `n_other_snap_version`, which `print_summary()` shows, and logged by
-    `SNAPClient.create_*`. `BurstProcessor.create_*` warn once per call for
-    each kind, and `ResolutionWeighter.compose_*` once per call for unchecked
-    composites.
+  - A product that does not record a compared setting raises too, as made
+    with other settings. That includes every product written by 0.7.0 or
+    earlier, which recorded only some settings, and a per-burst product whose
+    DEM is recorded as `N/A`. Rebuild such products with `overwrite=True`:
+
+    ```python
+    # before: products written by 0.7.0 came back as skipped
+    processor.create_coherence(pairs, crs=crs)
+    # after: raises ProductSettingsMismatchError: '...tif' exists but records other
+    # settings than requested: IMAGE_RESAMPLING (img_resampling): recorded none,
+    # requested 'BILINEAR_INTERPOLATION'; ...
+    processor.create_coherence(pairs, crs=crs, overwrite=True)
+    ```
+  - A product made by another SNAP version than the running one is skipped,
+    since SNAP 13 and 14 outputs should not be mixed in one time series. Such
+    a skip is recorded in the new `OkResult.other_snap_version`, counted in
+    the new `OperationSummary.n_other_snap_version`, which `print_summary()`
+    shows, and logged by `SNAPClient.create_*`; `BurstProcessor.create_*`
+    warn once per call.
   - Composites written by 0.7.0 with its default `aggregation="median"`
     record it, so rerunning them with the new default, the mean, raises. Pass
     `aggregation="median"` to keep them, or `overwrite=True` to rebuild them.
@@ -622,9 +658,9 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   `InterferogramConfig`, `InterferogramProduct`,
   `BurstProcessor.create_interferograms()`, `SNAPClient.create_interferogram()`,
   `product_tags.interferogram_metadata()`, `build_interferogram_graph()`,
-  `stack_band_suffixes()`, the `FLAT_EARTH_PHASE_REMOVED` and
-  `TOPOGRAPHIC_PHASE_REMOVED` tags, and the `S1_IFG..._CMPLX` file name, which
-  `FileManager.find()` no longer accepts.
+  `stack_band_suffixes()`, and the `S1_IFG..._CMPLX` file name, which
+  `FileManager.find()` no longer accepts. Its `FLAT_EARTH_PHASE_REMOVED` and
+  `TOPOGRAPHIC_PHASE_REMOVED` tags are now written on coherence products.
 
   ```python
   # before
@@ -643,6 +679,19 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   isinstance(product, CoregisteredProduct)
   # after
   isinstance(product, CoherenceProduct)
+  ```
+- **Breaking:** `CoherenceConfig.square_pixel`. SNAP's `squarePixel` option is
+  always off: under SNAP 14, turning it on replaced the requested azimuth
+  window with one derived from the range window and the scene geometry, so
+  `window=(25, 5)` ran as about `(25, 7)` and the window tags were wrong.
+  SNAP 13 ignores it. The default graphs are unchanged, since they already
+  wrote `false`.
+
+  ```python
+  # before
+  CoherenceConfig(window=(25, 5), square_pixel=False)
+  # after
+  CoherenceConfig(window=(25, 5))
   ```
 
 ### Fixed

@@ -521,15 +521,15 @@ class TestSkipSettings:
         assert summary.n_skipped == 2
         assert summary.products == [RTCProduct.from_burst(burst, self.CRS) for burst in bursts]
 
-    def test_unchecked_and_other_snap_skips_warn_once_per_call(
+    def test_other_snap_skips_warn_once_per_call(
         self, real: BurstProcessor, caplog: pytest.LogCaptureFixture
     ) -> None:
         real.config.resolved_max_workers = 2
         real.config.resolved_snap_version = (14, 0, 0)
         bursts = [_burst(f"2022-01-{day:02d}") for day in (5, 17, 29)]
-        self._existing(real, bursts[0], RTCConfig(), tagged=False)
-        self._existing(real, bursts[1], RTCConfig(), tagged=False)
-        self._existing(real, bursts[2], RTCConfig(), snap_version=(13, 0, 0))
+        self._existing(real, bursts[0], RTCConfig(), snap_version=(13, 0, 0))
+        self._existing(real, bursts[1], RTCConfig(), snap_version=(13, 0, 0))
+        self._existing(real, bursts[2], RTCConfig(), snap_version=(14, 0, 0))
 
         with (
             caplog.at_level(logging.INFO, logger="s1bursts"),
@@ -537,15 +537,28 @@ class TestSkipSettings:
         ):
             summary = real.create_backscatter(bursts, crs=self.CRS)
 
-        # One warning per kind, not a log line per product.
+        # One warning, not a log line per product.
         assert "Skipped '" not in caplog.text
 
-        assert (summary.n_skipped, summary.n_unchecked, summary.n_other_snap_version) == (3, 2, 1)
+        assert (summary.n_skipped, summary.n_other_snap_version) == (3, 2)
         messages = [str(warning.message) for warning in record]
-        assert len(messages) == 2
-        assert "Skipped 2 existing product(s) without checking" in messages[0]
-        assert "another SNAP version than the running 14.0.0" in messages[1]
+        assert len(messages) == 1
+        assert "Skipped 2 existing product(s) made by another SNAP version" in messages[0]
+        assert "than the running 14.0.0" in messages[0]
         assert {warning.filename for warning in record} == {__file__}
+
+    # Previously skipped without checking its settings, with a warning.
+    def test_an_untagged_product_raises_before_any_gpt_run(self, real: BurstProcessor) -> None:
+        missing, existing = _burst("2022-01-05"), _burst("2022-01-17")
+        self._existing(real, existing, RTCConfig(), tagged=False)
+
+        with (
+            patch.object(real.snap_client, "_run_gpt") as mock_gpt,
+            pytest.raises(ProductSettingsMismatchError, match="recorded none"),
+        ):
+            real.create_backscatter([missing, existing], crs=self.CRS)
+
+        mock_gpt.assert_not_called()
 
     def test_auto_checks_each_existing_product_in_its_own_zone(self, real: BurstProcessor) -> None:
         west = replace(_burst("2022-01-05"), _geometry=shapely.box(8.0, 46.0, 9.0, 47.0))

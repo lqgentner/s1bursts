@@ -836,8 +836,8 @@ class SNAPClient:
         -------
         OperationResult
             Result of the backscatter processing. A skipped product's result
-            records in ``unchecked`` and ``other_snap_version`` what its check
-            could not confirm; such a skip is also logged.
+            records in ``other_snap_version`` another SNAP version that made
+            it; such a skip is also logged.
 
         Raises
         ------
@@ -854,8 +854,8 @@ class SNAPClient:
             caused by one or whose message or GPT output says so.
         ProductSettingsMismatchError
             If the product exists, ``overwrite`` is ``False``, and the product
-            records other settings than ``config``: grid spacing, DEM,
-            multilook or coherence window.
+            records other settings than ``config``, or does not record one
+            of its fields.
         OSError or RasterioError
             If the product exists, ``overwrite`` is ``False``, and it cannot
             be read to check its settings.
@@ -989,8 +989,8 @@ class SNAPClient:
         -------
         OperationResult
             Result of the coherence processing. A skipped product's result
-            records in ``unchecked`` and ``other_snap_version`` what its check
-            could not confirm; such a skip is also logged.
+            records in ``other_snap_version`` another SNAP version that made
+            it; such a skip is also logged.
 
         Raises
         ------
@@ -1005,8 +1005,8 @@ class SNAPClient:
             caused by one or whose message or GPT output says so.
         ProductSettingsMismatchError
             If the product exists, ``overwrite`` is ``False``, and the product
-            records other settings than ``config``: grid spacing, DEM,
-            multilook or coherence window.
+            records other settings than ``config``, or does not record one
+            of its fields.
         OSError or RasterioError
             If the product exists, ``overwrite`` is ``False``, and it cannot
             be read to check its settings.
