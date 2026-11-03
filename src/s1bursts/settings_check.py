@@ -17,6 +17,7 @@ from freezebase.raster import rasterio_open
 from rasterio.errors import RasterioError
 
 from s1bursts.errors import ProductSettingsMismatchError
+from s1bursts.product import Layer
 from s1bursts.product_tags import (
     _SETTING_TAGS,
     _SNAP_OPTION_KEYS,
@@ -199,8 +200,8 @@ def _check_composite(
     *,
     aggregation: Aggregation,
     clip_max_resolution: float | None = None,
-) -> None:
-    """Check every requested layer of an existing composite.
+) -> dict[str, str]:
+    """Check every requested layer of an existing composite, returning its measurement's tags.
 
     Only the arguments of the ``compose_*`` call are compared, not what the
     composite inherits from its inputs, so no input needs to be read. Raises
@@ -211,9 +212,13 @@ def _check_composite(
     expected = _composite_settings(
         product, aggregation=aggregation, clip_max_resolution=clip_max_resolution
     )
+    measurement: dict[str, str] = {}
     for layer in sorted(product.layers):
         path = file_manager.get_product_path(product, layer)
         header = _read_header(path)
         differences = _grid_differences(header, geobox) | _tag_differences(header.tags, expected)
         if differences:
             raise _mismatch(path, differences)
+        if layer == Layer.MEASUREMENT:
+            measurement = header.tags
+    return measurement

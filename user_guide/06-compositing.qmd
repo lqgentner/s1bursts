@@ -123,7 +123,8 @@ so that the averaging has already happened on linear values.
 
 All inputs of one call must share a polarization, the processing settings and
 the SNAP version, the inputs of both pass directions included, and coherence
-inputs must share a temporal baseline. A SNAP version that could not be
+inputs must share a temporal baseline. A pass composite that already exists
+must match the settings and SNAP version of the direction being added. A SNAP version that could not be
 determined matches any. The RTC products that weight a coherence composite
 must share their settings among themselves, and the DEM and SNAP version with
 the coherence products; the composite records the settings of the coherence

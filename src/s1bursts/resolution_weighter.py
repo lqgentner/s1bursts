@@ -212,6 +212,36 @@ def _agreed_tags(
     return agreed
 
 
+def _check_existing_composite(
+    name: str,
+    recorded: Mapping[str, str],
+    inputs: Sequence[Mapping[str, str]],
+) -> None:
+    """Raise if an existing composite records other settings or another SNAP version.
+
+    ``inputs`` are the tags of the per-burst inputs, which already agree. The
+    rules are those of ``_agreed_tags``: an undetermined SNAP version, on
+    either side, matches any version and any value of the tags that depend
+    on it, and an absent tag is a difference.
+    """
+    composite_version = _snap_version_of(recorded)
+    known = [tags for tags in inputs if _snap_version_of(tags) != UNKNOWN]
+    for key in ("DEM", *(k for k in _BURST_SETTING_KEYS if k != "DEM"), _SNAP_VERSION_KEY):
+        compared = inputs
+        if key == _SNAP_VERSION_KEY or key in _SNAP_OPTION_KEYS:
+            compared = known if composite_version != UNKNOWN else []
+        default = UNKNOWN if key == "DEM" else None
+        values = {tags.get(key, default) for tags in compared}
+        value = recorded.get(key, default)
+        if values and value not in values:
+            msg = (
+                f"The existing composite '{name}' records {key} {_shown(value)}, but the "
+                f"inputs record {_shown(values.pop())}. Pass overwrite=True to rebuild "
+                "every direction from these inputs."
+            )
+            raise InconsistentInputsError(msg)
+
+
 class ResolutionWeighter:
     """Compute LRW and per-pass composites for Sentinel-1 products.
 
@@ -700,9 +730,10 @@ class ResolutionWeighter:
             If the inputs differ in polarization, an input is on another
             CRS, pixel size or grid than ``geobox``, or the inputs were made
             with different DEMs, processing settings or SNAP versions, where
-            an undetermined SNAP version matches any. Not a
-            ``CompositeError``: other cells given these inputs would meet it
-            too.
+            an undetermined SNAP version matches any. When a direction is
+            built, the composite of a direction skipped as existing must agree
+            with its inputs too. Not a ``CompositeError``: other cells given
+            these inputs would meet it too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -799,9 +830,10 @@ class ResolutionWeighter:
             If the inputs differ in polarization, an input is on another
             CRS, pixel size or grid than ``geobox``, or the inputs were made
             with different DEMs, processing settings or SNAP versions, where
-            an undetermined SNAP version matches any. Not a
-            ``CompositeError``: other cells given these inputs would meet it
-            too.
+            an undetermined SNAP version matches any. When a direction is
+            built, the composite of a direction skipped as existing must agree
+            with its inputs too. Not a ``CompositeError``: other cells given
+            these inputs would meet it too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError
@@ -888,9 +920,10 @@ class ResolutionWeighter:
     ) -> dict[PassDirection, C]:
         """Composite each pass direction on its own, skipping finished ones before any read.
 
-        Every existing direction is checked before any is built, and the
-        inputs of every direction to be built are checked against each other,
-        so a mismatch writes nothing.
+        Every existing direction is checked before any is built. The inputs
+        of every direction to be built are checked against each other and
+        against the composite of every existing direction, whose own inputs
+        are not read, so a mismatch writes nothing.
 
         Raises
         ------
@@ -900,17 +933,19 @@ class ResolutionWeighter:
             If a direction's composite exists with other settings.
         InconsistentInputsError
             If the inputs of the directions to be built differ in DEM,
-            processing settings or SNAP version.
+            processing settings or SNAP version, from each other or from the
+            composite of an existing direction.
         """
         by_pass: defaultdict[PassDirection, list[ComposableProduct]] = defaultdict(list)
         for prod in products:
             by_pass[prod.pass_direction].append(prod)
 
         result: dict[PassDirection, C] = {}
+        existing_tags: dict[str, dict[str, str]] = {}
         if not overwrite:
-            result = self._existing_by_pass(by_pass, make, geobox, aggregation)
+            result, existing_tags = self._existing_by_pass(by_pass, make, geobox, aggregation)
         building = {d: subset for d, subset in sorted(by_pass.items()) if d not in result}
-        source_tags = self._source_tags_by_pass(building)
+        source_tags = self._source_tags_by_pass(building, existing_tags)
         for direction, subset in building.items():
             product = make(direction)
 
@@ -957,14 +992,24 @@ class ResolutionWeighter:
         return dict(sorted(result.items()))
 
     def _source_tags_by_pass(
-        self, by_pass: Mapping[PassDirection, Sequence[ComposableProduct]]
+        self,
+        by_pass: Mapping[PassDirection, Sequence[ComposableProduct]],
+        existing: Mapping[str, Mapping[str, str]],
     ) -> dict[PassDirection, dict[str, str]]:
-        """Check that every input agrees across the directions, then return each one's tags."""
+        """Check that every input agrees across the directions, then return each one's tags.
+
+        ``existing`` maps the file name of each existing direction composite
+        to its tags, which the inputs must agree with too.
+        """
         tags = iter(self._read_tags([prod for subset in by_pass.values() for prod in subset]))
         per_direction = {
             direction: [next(tags) for _ in subset] for direction, subset in by_pass.items()
         }
-        _agreed_tags([entry for entries in per_direction.values() for entry in entries])
+        every_input = [entry for entries in per_direction.values() for entry in entries]
+        _agreed_tags(every_input)
+        if every_input:
+            for name, recorded in existing.items():
+                _check_existing_composite(name, recorded, every_input)
         return {direction: _agreed_tags(entries) for direction, entries in per_direction.items()}
 
     def _existing_by_pass[C: (RTCPassComposite, GTCPassComposite, CohPassComposite)](
@@ -973,15 +1018,17 @@ class ResolutionWeighter:
         make: Callable[[PassDirection], C],
         geobox: MGRSGeoBox,
         aggregation: Literal["mean", "median"] | float,
-    ) -> dict[PassDirection, C]:
-        """Check the existing direction composites and return them."""
+    ) -> tuple[dict[PassDirection, C], dict[str, dict[str, str]]]:
+        """Check the existing direction composites, returning them and their tags by file name."""
         existing: dict[PassDirection, C] = {}
+        tags: dict[str, dict[str, str]] = {}
         for direction in sorted(directions):
             product = make(direction)
             if self._all_exist(product):
-                _check_composite(self._fm, product, geobox, aggregation=aggregation)
+                name = self._fm.get_product_path(product).name
+                tags[name] = _check_composite(self._fm, product, geobox, aggregation=aggregation)
                 existing[direction] = product
-        return existing
+        return existing, tags
 
     def compose_coherence_by_pass(
         self,
@@ -1058,8 +1105,10 @@ class ResolutionWeighter:
             input is on another CRS, pixel size or grid than ``geobox``, or
             the inputs were made with different DEMs, processing settings or
             SNAP versions, where an undetermined SNAP version matches any.
-            Not a ``CompositeError``: other cells given these inputs would
-            meet it too.
+            When a direction is built, the composite of a direction skipped
+            as existing must agree with its inputs too. Not a
+            ``CompositeError``: other cells given these inputs would meet it
+            too.
         CompositeInputError
             If an input product is missing or cannot be read.
         ProductSettingsMismatchError

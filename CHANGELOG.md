@@ -486,9 +486,11 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   and with the coherence products on the SNAP version and the DEM; RTC
   products that weight none are not compared. The `compose_*_by_pass()`
   methods compare the inputs of every direction they build with each other,
-  before writing any. Inputs written by 0.7.0, which record fewer settings,
-  cannot be combined with newer ones. Composite each SNAP version and set of settings on its own, or
-  rebuild the inputs:
+  and with the composite of every direction they skip as existing, before
+  writing any; the skipped direction's own inputs are not read. Inputs and
+  composites written by 0.7.0, which record fewer settings, cannot be
+  combined with newer ones. Composite each SNAP version and set of settings
+  on its own, or rebuild the inputs:
 
   ```python
   # before: composited with a warning, recording PROCESSING_SOFTWARE_VERSION=N/A
