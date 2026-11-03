@@ -944,6 +944,10 @@ class TestLegacyProductNames:
         with pytest.warns(UserWarning, match="named without their pass direction") as record:
             found = fm.find(RTCProduct)
         assert len(record) == 1
+        # Previously pointed to a rename recipe that the changelog does not hold.
+        assert str(record[0].message).endswith(
+            "does not find. Process them again with this version."
+        )
         assert [p.date for p in found] == [pd.Timestamp("20220112")]
 
         # A second search on the same FileManager stays quiet.
@@ -979,7 +983,9 @@ class TestLegacyProductNames:
 
         with pytest.warns(UserWarning, match="SLC bursts named without") as record:
             found = fm.find(Burst)
-        assert "downloads again" in str(record[0].message)
+        assert str(record[0].message).endswith(
+            "does not find and BurstCatalog.download() downloads again."
+        )
         assert [burst.date for burst in found] == [pd.Timestamp("20220117")]
 
         # Each directory is checked once; prod_dir has nothing old.

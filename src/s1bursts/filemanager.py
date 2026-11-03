@@ -412,15 +412,19 @@ def _merge_layers[C: MGRSTileProduct](found: list[C]) -> list[C]:
 
 
 # An SLC or per-burst product named before the pass direction joined the
-# relative orbit, by the directory that holds them.
+# relative orbit, by the directory that holds them, with what becomes of them.
 _LEGACY_NAMES = {
-    "slc_dir": (re.compile(r"S1_SLC_\d{3}_\d{6}_(?:IW|EW)\d_.*\.zip"), "SLC bursts"),
+    "slc_dir": (
+        re.compile(r"S1_SLC_\d{3}_\d{6}_(?:IW|EW)\d_.*\.zip"),
+        "SLC bursts",
+        " and BurstCatalog.download() downloads again.",
+    ),
     "prod_dir": (
         re.compile(r"S1_(?:RTC|GTC|COH\d{2})_\d{3}_\d{6}_(?:IW|EW)\d_.*\.tif"),
         "per-burst products",
+        ". Process them again with this version.",
     ),
 }
-_CHANGELOG_URL = "https://github.com/lqgentner/s1bursts/blob/main/CHANGELOG.md"
 
 
 @dataclass
@@ -671,17 +675,14 @@ class FileManager:
         if directory_name not in _LEGACY_NAMES or directory_name in self._legacy_names_checked:
             return
         self._legacy_names_checked.add(directory_name)
-        legacy_name, kind = _LEGACY_NAMES[directory_name]
+        legacy_name, kind, consequence = _LEGACY_NAMES[directory_name]
         directory: Path | UPath = getattr(self, directory_name)
         # Only names without a letter after the orbit match this glob.
         candidates = directory.glob("S1_*_[0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_*")
         if any(legacy_name.fullmatch(path.name) for path in candidates):
             msg = (
                 f"{directory} holds {kind} named without their pass direction, which "
-                "FileManager.find() does not find"
-                + (" and BurstCatalog.download() downloads again" if kind == "SLC bursts" else "")
-                + ". Rename them with the recipe in the changelog entry on the pass "
-                f"direction: {_CHANGELOG_URL}"
+                f"FileManager.find() does not find{consequence}"
             )
             warnings.warn(msg, stacklevel=3)
 

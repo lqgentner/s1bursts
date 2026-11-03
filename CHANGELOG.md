@@ -19,6 +19,13 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 - The package summary reads "Sentinel-1 download, processing and compositing
   in Python." instead of "... made easy."
 
+### Fixed
+
+- The warning about SLC bursts and products named without their pass
+  direction no longer points to a rename recipe the changelog does not hold.
+  It says that such products must be processed again, and that such SLC
+  bursts are downloaded again.
+
 ## [0.8.0] - 2026-11-03
 
 The first release on PyPI, and the first with a
