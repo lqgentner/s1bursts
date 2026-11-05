@@ -413,17 +413,16 @@ class TestTrimmed:
         assert np.count_nonzero(np.isnan(burst.data)) == 1
         assert burst.depth[10 - _MARGIN, 11 - _MARGIN] > BURST_EDGE_TRIM_PX
 
-    def test_data_reaching_the_read_border_is_not_trimmed(self) -> None:
+    def test_data_reaching_the_read_border_is_deep_and_kept(self) -> None:
         """A run reaching the border of the read continues beyond it, so it has no edge there."""
-        burst = _burst(self._P, np.ones((5, 5)), margin=0)
+        burst = _burst(self._P, np.ones((11, 11)))
         assert np.isfinite(burst.data).all()
-        assert burst.unbounded.all()
+        np.testing.assert_array_equal(burst.depth, _MARGIN + 1)
 
     def test_depth_counts_from_one_at_the_outermost_pixel(self) -> None:
         """The depth is the distance to the nearer data edge along the row."""
         burst = _burst(self._P, _strip(5, 18, 1.0))
-        np.testing.assert_array_equal(burst.depth[1, 3:6], [3, 4, 5])  # read columns 7-9
-        assert not burst.unbounded[1, 3:6].any()
+        np.testing.assert_array_equal(burst.depth[1, 2:6], [2, 3, 4, 5])  # read columns 6-9
 
 
 class TestStitchByOrbitDate:
@@ -451,6 +450,15 @@ class TestStitchByOrbitDate:
         ).values()
         # Cell columns 0-15 are read columns 4-19.
         np.testing.assert_array_equal(_row(mosaic), [1.0] * 7 + [2.0] * 9)
+
+    def test_an_azimuth_overlap_is_split_at_its_midline(self) -> None:
+        """Columns find the midline of an overlap between bursts above each other."""
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        [mosaic] = self._stitch(
+            _burst(a, _strip(0, 13, 1.0).T), _burst(b, _strip(8, 23, 2.0).T)
+        ).values()
+        np.testing.assert_array_equal(mosaic.data[:, 1], [1.0] * 7 + [2.0] * 9)
 
     def test_midline_follows_a_tilted_overlap(self) -> None:
         """Rows and columns find the midline of a strip at an angle to the grid too."""
@@ -971,24 +979,23 @@ class TestComposeReturns:
         power: dict[int, np.ndarray],
         area: dict[int, np.ndarray] | None = None,
     ) -> None:
-        def fake_load(
-            products: list[Any],
+        def fake_load_one(
+            product: Any,
             geobox: object,  # noqa: ARG001
-            band: int = 1,
-            *,
-            margin: int = 0,
-        ) -> list[tuple[Any, np.ndarray]]:
+            band: int,
+            margin: int,
+        ) -> tuple[Any, np.ndarray]:
             src = power if band == 1 else area
             assert src is not None
             # Valid data around the cell, as a burst larger than the cell has.
-            return [(p, np.pad(src[id(p)], margin, constant_values=1.0)) for p in products]
+            return product, np.pad(src[id(product)], margin, constant_values=1.0)
 
         # Instance attributes shadow the real windowed reader and the provenance
         # lookup, which the stubs have no file for. Written through ``vars`` because
         # Pyrefly 1.4 rejects assigning to a method, and 1.3 reports it under a
         # different code, so no single ignore comment fits both.
         vars(weighter).update(
-            _load_band=fake_load, _read_tags=lambda products: [{} for _ in products]
+            _load_one=fake_load_one, _read_tags=lambda products: [{} for _ in products]
         )
 
     def test_rtc_lrw_without_qa_holds_the_measurement(self, tmp_path: Path) -> None:
@@ -3229,6 +3236,18 @@ class TestBurstOverlap:
 
         with pytest.raises(CompositeInputError, match=rf"{self._RIGHT} IW1 \(orbit 15"):
             scene.weighter.compose_coherence_lrw(cohs, [rtc], scene.geobox)
+
+    def test_coherence_pass_composite_takes_the_burst_nearer_the_midline(
+        self, scene: _Scene
+    ) -> None:
+        cohs = [_coh("2022-08-13", "2022-08-25", burst_id=b) for b in (self._LEFT, self._RIGHT)]
+        self._write(scene.manager.get_product_path(cohs[0]), [0.2], -_FRAME, 6)
+        self._write(scene.manager.get_product_path(cohs[1]), [0.8], 1, _TILE + _FRAME)
+
+        [composite] = scene.weighter.compose_coherence_by_pass(cohs, scene.geobox).values()
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            np.testing.assert_allclose(src.read(1), np.tile([0.2] * 4 + [0.8] * 4, (8, 1)))
 
     def test_pass_composite_takes_the_burst_nearer_the_midline(self, scene: _Scene) -> None:
         left = _rtc("2022-08-13", burst_id=self._LEFT)

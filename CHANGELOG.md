@@ -24,15 +24,23 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   sub-swath seams and at burst edges. `COMPOSITING_PARAMETERS` records the rule,
   so with `overwrite=False` a composite made by an earlier release now raises
   `ProductSettingsMismatchError`; pass `overwrite=True` to rebuild it.
-  - Before: `aggregation=mean;clip_max_resolution=none`
-  - After: `aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2`
+  - LRW before: `aggregation=mean;clip_max_resolution=none`
+  - LRW after: `aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2`
+  - Pass before: `aggregation=mean`
+  - Pass after: `aggregation=mean;burst_overlap=midline;burst_edge_trim_px=2`
+
+  A cell that bursts reach only with their two outermost pixels now has no
+  valid input: an LRW composite raises `EmptyCompositeError` (with
+  `overwrite=True`, after deleting the earlier composite), and a pass
+  composite skips that direction.
 - **Breaking:** `compose_coherence_lrw()` weights each pixel by the scattering
   area of the RTC product of its own burst, and raises `CompositeInputError`
   when a burst some pixel is taken from has none. Before, the RTC products of
   the same orbit and date were mosaicked on their own, so another burst's area
   could stand in.
 - Composites read every input 3 km beyond the cell, to find the burst edges
-  an overlap is split between; a 10 km cell reads about 2.6 times as much.
+  an overlap is split between; a 10 km cell reads about 2.6 times as much, and
+  loading holds about twice the memory.
 - The package summary reads "Sentinel-1 download, processing and compositing
   in Python." instead of "... made easy."
 

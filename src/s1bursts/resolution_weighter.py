@@ -107,12 +107,10 @@ class _Burst:
     product: ComposableProduct
     data: NDArray[np.float32]
     # Distance to the product's own data edge along the pixel's row or column,
-    # whichever is shorter, in pixels; 1 at the outermost pixel.
-    depth: NDArray[np.int32]
-    # The edge lies beyond the read, so ``depth`` is only a lower bound.
-    unbounded: NDArray[np.bool_]
-    # ``depth`` exceeds the search margin.
-    beyond_margin: NDArray[np.bool_]
+    # whichever is shorter, in pixels; 1 at the outermost pixel, and capped at
+    # ``deep``, one more than the search margin.
+    depth: NDArray[np.integer[Any]]
+    deep: int
 
 
 @dataclass(frozen=True)
@@ -350,7 +348,9 @@ class ResolutionWeighter:
 
         Band 1 supplies intensity and band 2 the local scattering area $A$.
         Observations are weighted by normalized $1/A$ ([1] eq. 3-4, [2]
-        eq. A5.1-A5.3) after mosaicking each orbit and acquisition date.
+        eq. A5.1-A5.3) after mosaicking each orbit and acquisition date,
+        without the two outermost pixels of each burst and splitting each
+        overlap at its midline.
 
         Parameters
         ----------
@@ -522,8 +522,10 @@ class ResolutionWeighter:
         r"""Compute a locally resolution weighted (LRW) coherence composite.
 
         Coherence observations are weighted by normalized $1/A$ ([1] eq. 3-4)
-        from matching RTC products. Products are matched and mosaicked by
-        relative orbit and primary acquisition date.
+        from matching RTC products. The bursts of one relative orbit and
+        primary acquisition date are mosaicked without the two outermost
+        pixels of each burst, splitting each overlap at its midline, and each
+        pixel is weighted by the RTC product of its own burst.
 
         Parameters
         ----------
@@ -532,7 +534,8 @@ class ResolutionWeighter:
             polarization and ``baseline_days``.
         rtc_products
             RTC products providing the local scattering area (band 2) used as
-            weights. They must cover the coherence orbit/date combinations.
+            weights. Each coherence burst needs the RTC product of the same
+            burst and primary date.
         geobox
             Target MGRS grid cell.
         aggregation
@@ -708,10 +711,11 @@ class ResolutionWeighter:
     ) -> dict[PassDirection, RTCPassComposite]:
         """Compute unweighted RTC composites stratified by pass direction.
 
-        Bursts from the same orbit and acquisition date are mosaicked using the
-        first non-NaN pixel strategy.  The resulting orbit-date observations are
-        then aggregated temporally (mean or median) per pass direction
-        (ascending / descending).
+        Bursts from the same orbit and acquisition date are mosaicked without
+        the two outermost pixels of each burst, splitting each overlap at its
+        midline.  The resulting orbit-date observations are then aggregated
+        temporally (mean or median) per pass direction (ascending /
+        descending).
 
         Parameters
         ----------
@@ -809,10 +813,11 @@ class ResolutionWeighter:
     ) -> dict[PassDirection, GTCPassComposite]:
         """Compute unweighted GTC beta0 composites stratified by pass direction.
 
-        Bursts from the same orbit and acquisition date are mosaicked using the
-        first non-NaN pixel strategy.  The resulting orbit-date observations are
-        then aggregated temporally (mean or median) per pass direction
-        (ascending / descending).  The stored value is beta-0 power.
+        Bursts from the same orbit and acquisition date are mosaicked without
+        the two outermost pixels of each burst, splitting each overlap at its
+        midline.  The resulting orbit-date observations are then aggregated
+        temporally (mean or median) per pass direction (ascending /
+        descending).  The stored value is beta-0 power.
 
         Parameters
         ----------
@@ -1107,9 +1112,10 @@ class ResolutionWeighter:
         """Compute unweighted coherence composites stratified by pass direction.
 
         Bursts from the same orbit and primary acquisition date are mosaicked
-        using the first non-NaN pixel strategy.  The resulting orbit-date
-        observations are then aggregated temporally (mean or median) per pass
-        direction (ascending / descending).
+        without the two outermost pixels of each burst, splitting each overlap
+        at its midline.  The resulting orbit-date observations are then
+        aggregated temporally (mean or median) per pass direction (ascending /
+        descending).
 
         Parameters
         ----------
@@ -1272,30 +1278,37 @@ class ResolutionWeighter:
         products: Collection[ComposableProduct],
         geobox: MGRSGeoBox,
         band: int = 1,
-        *,
-        margin: int = 0,
     ) -> list[_LoadedEntry]:
         """Parallel windowed rasterio reads of a single band clipped to the geobox extent.
 
-        Each product is read into a float32 array using a boundless windowed
-        read aligned to ``geobox`` and widened by ``margin`` pixels on every
-        side, so ``(H + 2 margin, W + 2 margin)``. Out-of-bounds pixels are
-        filled with NaN.
+        Each product is read into a ``(H, W)`` float32 array using a boundless
+        windowed read aligned to ``geobox``.  Out-of-bounds pixels are filled
+        with NaN.
         """
 
-        def _load_one(prod: ComposableProduct) -> _LoadedEntry:
-            path = self._fm.get_product_path(prod)
-            if not path.exists():
-                msg = f"product file not found: {path}"
-                raise CompositeInputError(msg)
-            try:
-                return prod, self._read_window(path, geobox, band, margin)
-            except OSError as err:
-                msg = f"cannot read '{path.name}': {err}"
-                raise CompositeInputError(msg) from err
+        def load(prod: ComposableProduct) -> _LoadedEntry:
+            return self._load_one(prod, geobox, band, 0)
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            return list(executor.map(_load_one, products))
+            return list(executor.map(load, products))
+
+    def _load_one(
+        self,
+        product: ComposableProduct,
+        geobox: MGRSGeoBox,
+        band: int,
+        margin: int,
+    ) -> _LoadedEntry:
+        """Read one band of one product, widened by ``margin`` pixels on every side."""
+        path = self._fm.get_product_path(product)
+        if not path.exists():
+            msg = f"product file not found: {path}"
+            raise CompositeInputError(msg)
+        try:
+            return product, self._read_window(path, geobox, band, margin)
+        except OSError as err:
+            msg = f"cannot read '{path.name}': {err}"
+            raise CompositeInputError(msg) from err
 
     @staticmethod
     def _read_window(
@@ -1581,13 +1594,16 @@ class ResolutionWeighter:
         """Read the measurement band of each product, trimmed and with its depth.
 
         The band is read ``_EDGE_SEARCH_MARGIN_M`` beyond the cell, so that a
-        data edge outside the cell still counts.
+        data edge outside the cell still counts. Each widened read is cropped
+        as soon as it arrives, so only one per worker is held at a time.
         """
         margin = math.ceil(_EDGE_SEARCH_MARGIN_M / geobox.resolution.x)
-        return [
-            self._trimmed(prod, padded, margin)
-            for prod, padded in self._load_band(products, geobox, band=1, margin=margin)
-        ]
+
+        def load(prod: ComposableProduct) -> _Burst:
+            return self._trimmed(*self._load_one(prod, geobox, 1, margin), margin)
+
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            return list(executor.map(load, products))
 
     @classmethod
     def _trimmed(
@@ -1602,28 +1618,22 @@ class ResolutionWeighter:
         no-data, which fades them, so they are dropped. Holes inside the
         footprint are not edges and keep their neighbors.
         """
-        bounded, unbounded = cls._edge_depth(np.isfinite(padded), margin)
+        depth = cls._edge_depth(np.isfinite(padded), margin)
         height, width = padded.shape
-        values = padded[margin : height - margin, margin : width - margin].copy()
-        values[bounded <= BURST_EDGE_TRIM_PX] = np.nan
-        depth = np.minimum(bounded, unbounded)
-        return _Burst(product, values, depth, unbounded < bounded, depth > margin)
+        data = padded[margin : height - margin, margin : width - margin].copy()
+        data[depth <= BURST_EDGE_TRIM_PX] = np.nan
+        return _Burst(product, data, depth, margin + 1)
 
     @staticmethod
-    def _edge_depth(
-        finite: NDArray[np.bool_],
-        margin: int,
-    ) -> tuple[NDArray[np.int32], NDArray[np.int32]]:
+    def _edge_depth(finite: NDArray[np.bool_], margin: int) -> NDArray[np.integer[Any]]:
         """Distance of each cell pixel to the data edge along its row and column.
 
         ``finite`` covers the cell and ``margin`` pixels around it. The edges
         are the first and last finite pixel of a row or column, so holes
-        inside the footprint are not edges; the distance is 1 at the
-        outermost pixel. Returns the shortest distance to an edge inside the
-        read and the shortest along a run that reaches the border of the read,
-        which is only a lower bound, since the edge lies outside it. Either is
-        the int32 maximum where no run of that kind exists. Meaningless at
-        non-finite pixels.
+        inside the footprint are not edges. The depth is the shortest of the
+        four distances, 1 at the outermost pixel, capped at ``margin + 1``: a
+        run reaching the border of the read is at least that deep, and its
+        edge lies outside the read. Meaningless at non-finite pixels.
         """
         height, width = finite.shape
         inner_rows = slice(margin, height - margin)
@@ -1639,20 +1649,15 @@ class ResolutionWeighter:
         col_last = (height - 1 - finite[::-1].argmax(axis=0)).astype(np.int32)[
             np.newaxis, inner_cols
         ]
-        sides = (
-            (cols - row_first + 1, row_first == 0),
-            (row_last - cols + 1, row_last == width - 1),
-            (rows - col_first + 1, col_first == 0),
-            (col_last - rows + 1, col_last == height - 1),
-        )
-        unreached = np.iinfo(np.int32).max
-        shape = (height - 2 * margin, width - 2 * margin)
-        bounded = np.full(shape, unreached, dtype=np.int32)
-        unbounded = np.full(shape, unreached, dtype=np.int32)
-        for distance, at_border in sides:
-            np.minimum(bounded, np.where(at_border, unreached, distance), out=bounded)
-            np.minimum(unbounded, np.where(at_border, distance, unreached), out=unbounded)
-        return bounded, unbounded
+        deep = margin + 1
+        dtype = np.int16 if deep <= np.iinfo(np.int16).max else np.int32
+        depth = np.full((height - 2 * margin, width - 2 * margin), deep, dtype=dtype)
+        # One side at a time, so only one full-size temporary exists.
+        np.minimum(depth, cols - row_first + 1, out=depth, casting="unsafe")
+        np.minimum(depth, row_last - cols + 1, out=depth, casting="unsafe")
+        np.minimum(depth, rows - col_first + 1, out=depth, casting="unsafe")
+        np.minimum(depth, col_last - rows + 1, out=depth, casting="unsafe")
+        return depth
 
     def _stitch_by_orbit_date(
         self,
@@ -1698,10 +1703,9 @@ class ResolutionWeighter:
         mosaic = np.take_along_axis(values, index[np.newaxis], axis=0)[0]
         index[~finite.any(axis=0)] = -1
 
-        # Two depths beyond the margin, one of them only a lower bound, cannot be ranked.
-        beyond = (finite & np.stack([m.beyond_margin for m in members])).sum(axis=0) > 1
-        unbounded = (finite & np.stack([m.unbounded for m in members])).any(axis=0)
-        undecided = np.count_nonzero(beyond & unbounded)
+        # Beyond the margin every depth is the same cap, so the tie-break decides.
+        capped = finite & (depth == members[0].deep)
+        undecided = np.count_nonzero(capped.sum(axis=0) > 1)
         if undecided:
             orbit, day = key
             logger.warning(
