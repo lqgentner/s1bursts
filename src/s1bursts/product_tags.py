@@ -251,6 +251,14 @@ def _aggregation_string(aggregation: Aggregation) -> str:
     return aggregation if isinstance(aggregation, str) else f"quantile={aggregation:g}"
 
 
+# Pixels dropped from every edge of a burst before its orbit and date are mosaicked.
+BURST_EDGE_TRIM_PX = 2
+
+# How the bursts of one orbit and date are joined. Part of the compositing
+# parameters, so a composite joined another way is not skipped as existing.
+_BURST_MOSAICKING = f"burst_overlap=midline;burst_edge_trim_px={BURST_EDGE_TRIM_PX}"
+
+
 def _compositing_parameters(
     aggregation: Aggregation,
     clip_max_resolution: float | None = None,
@@ -265,6 +273,7 @@ def _compositing_parameters(
         parts.append(f"clip_max_resolution={clip_max_resolution:g}")
     else:
         parts.append("clip_max_resolution=none")
+    parts.append(_BURST_MOSAICKING)
     return ";".join(parts)
 
 
@@ -318,7 +327,9 @@ def _unweighted(aggregation: Aggregation) -> dict[str, str]:
     """Compositing-method tags for a pass composite, which applies no weighting."""
     return {
         "COMPOSITING_METHOD": "Unweighted temporal aggregation",
-        "COMPOSITING_PARAMETERS": f"aggregation={_aggregation_string(aggregation)}",
+        "COMPOSITING_PARAMETERS": (
+            f"aggregation={_aggregation_string(aggregation)};{_BURST_MOSAICKING}"
+        ),
     }
 
 

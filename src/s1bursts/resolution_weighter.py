@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import logging
+import math
 from typing import TYPE_CHECKING, Any, Literal
 
 from freezebase.raster import build_rasterio_profile, rasterio_open, write_cog
@@ -52,6 +53,7 @@ from s1bursts.product_tags import (
     _BURST_SETTING_KEYS,
     _SNAP_OPTION_KEYS,
     _SNAP_VERSION_KEY,
+    BURST_EDGE_TRIM_PX,
     UNKNOWN,
 )
 from s1bursts.query import _PASS_DIRECTIONS
@@ -89,6 +91,39 @@ def _calendar_day(value: Timestamp) -> Timestamp:
 
 
 _LoadedEntry = tuple[ComposableProduct, NDArray[np.float32]]
+
+_BurstKey = tuple[int, Timestamp, int, str]
+
+# How far beyond the cell a burst's data edge is looked for, in metres. The
+# overlap rule is exact for overlaps up to twice as wide; the widest measured
+# across the Alps is 4.8 km.
+_EDGE_SEARCH_MARGIN_M = 3000.0
+
+
+@dataclass(frozen=True)
+class _Burst:
+    """One burst product on the cell grid, its outermost pixels already dropped."""
+
+    product: ComposableProduct
+    data: NDArray[np.float32]
+    # Distance to the product's own data edge along the pixel's row or column,
+    # whichever is shorter, in pixels; 1 at the outermost pixel.
+    depth: NDArray[np.int32]
+    # The edge lies beyond the read, so ``depth`` is only a lower bound.
+    unbounded: NDArray[np.bool_]
+    # ``depth`` exceeds the search margin.
+    beyond_margin: NDArray[np.bool_]
+
+
+@dataclass(frozen=True)
+class _Mosaic:
+    """The bursts of one orbit and date, joined at the midline of each overlap."""
+
+    data: NDArray[np.float32]
+    # The group's bursts, in tie-break order.
+    sources: tuple[ComposableProduct, ...]
+    # Position in ``sources`` of the burst each pixel is taken from; -1 where none.
+    index: NDArray[np.intp]
 
 
 @dataclass(frozen=True)
@@ -423,20 +458,22 @@ class ResolutionWeighter:
 
         try:
             rtc_groups = self._contributing(
-                self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=1)),
+                self._stitch_by_orbit_date(
+                    self._load_bursts(rtc_products, geobox), geobox.mgrs_code
+                ),
                 geobox,
             )
         except EmptyCompositeError:
             if overwrite:
                 self._remove(product)
             raise
-        area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
+        weighting = [prod for prod in rtc_products if self._group_key(prod) in rtc_groups]
+        area_groups = self._areas(rtc_groups, self._load_band(weighting, geobox, band=2))
         # The tags name the acquisitions that reach the cell, not every input.
         observed = self._contributing_span(rtc_products, rtc_groups)
 
-        self._check_area_coverage(rtc_groups, area_groups)
-        rtc_obs = np.stack(list(rtc_groups.values()))  # (N, H, W)
-        area_obs = np.stack([area_groups[key] for key in rtc_groups])  # (N, H, W)
+        rtc_obs = np.stack([mosaic.data for mosaic in rtc_groups.values()])  # (N, H, W)
+        area_obs = np.stack(list(area_groups.values()))  # (N, H, W)
 
         weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(rtc_obs, weights, aggregation)
@@ -560,8 +597,9 @@ class ResolutionWeighter:
             observation are not compared. Not a ``CompositeError``: other
             cells given these inputs would meet it too.
         CompositeInputError
-            If an input product is missing or cannot be read, or no RTC product
-            supplies the scattering area of an observation.
+            If an input product is missing or cannot be read, or a burst some
+            pixel is taken from has no RTC product of the same burst and
+            primary date to supply its scattering area.
         ProductSettingsMismatchError
             If ``overwrite`` is ``False`` and an existing layer file records
             another grid than ``geobox``, other or no compositing parameters,
@@ -607,25 +645,26 @@ class ResolutionWeighter:
 
         try:
             coh_groups = self._contributing(
-                self._stitch_by_orbit_date(self._load_band(coh_products, geobox, band=1)),
+                self._stitch_by_orbit_date(
+                    self._load_bursts(coh_products, geobox), geobox.mgrs_code
+                ),
                 geobox,
             )
         except EmptyCompositeError:
             if overwrite:
                 self._remove(product)
             raise
-        area_groups = self._stitch_by_orbit_date(self._load_band(rtc_products, geobox, band=2))
+        # Only the RTC products that weight an observation are read and compared.
+        weighting = [prod for prod in rtc_products if self._group_key(prod) in coh_groups]
+        area_groups = self._areas(coh_groups, self._load_band(weighting, geobox, band=2))
         # The tags name the acquisitions that reach the cell, not every input.
         observed = self._contributing_span(coh_products, coh_groups)
 
-        self._check_area_coverage(coh_groups, area_groups)
-        coh_obs = np.stack(list(coh_groups.values()))  # (N, H, W)
-        area_obs = np.stack([area_groups[key] for key in coh_groups])  # (N, H, W)
+        coh_obs = np.stack([mosaic.data for mosaic in coh_groups.values()])  # (N, H, W)
+        area_obs = np.stack(list(area_groups.values()))  # (N, H, W)
 
         weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(coh_obs, weights, aggregation)
-        # Only the RTC products that weight an observation are compared.
-        weighting = [prod for prod in rtc_products if self._group_key(prod) in coh_groups]
         source_tags = self._input_tags(coh_products, rtc_weights=weighting)
         n_observations = len(coh_obs)
         self._save(
@@ -954,7 +993,7 @@ class ResolutionWeighter:
             product = make(direction)
 
             groups = self._reaching(
-                self._stitch_by_orbit_date(self._load_band(subset, geobox, band=1))
+                self._stitch_by_orbit_date(self._load_bursts(subset, geobox), geobox.mgrs_code)
             )
             if not groups:
                 # Like a direction without inputs: no composite, rather than an all-NaN file.
@@ -962,7 +1001,7 @@ class ResolutionWeighter:
                 if overwrite:
                     self._remove(product)
                 continue
-            observations = np.stack(list(groups.values()))  # (N, H, W)
+            observations = np.stack([mosaic.data for mosaic in groups.values()])  # (N, H, W)
             composite = self._aggregate_unweighted(observations, aggregation)
             entry = _PassObservations(
                 composite=composite,
@@ -1233,12 +1272,15 @@ class ResolutionWeighter:
         products: Collection[ComposableProduct],
         geobox: MGRSGeoBox,
         band: int = 1,
+        *,
+        margin: int = 0,
     ) -> list[_LoadedEntry]:
         """Parallel windowed rasterio reads of a single band clipped to the geobox extent.
 
-        Each product is read into a ``(H, W)`` float32 array using a boundless
-        windowed read aligned to ``geobox``.  Out-of-bounds pixels are filled
-        with NaN.
+        Each product is read into a float32 array using a boundless windowed
+        read aligned to ``geobox`` and widened by ``margin`` pixels on every
+        side, so ``(H + 2 margin, W + 2 margin)``. Out-of-bounds pixels are
+        filled with NaN.
         """
 
         def _load_one(prod: ComposableProduct) -> _LoadedEntry:
@@ -1247,7 +1289,7 @@ class ResolutionWeighter:
                 msg = f"product file not found: {path}"
                 raise CompositeInputError(msg)
             try:
-                return prod, self._read_window(path, geobox, band)
+                return prod, self._read_window(path, geobox, band, margin)
             except OSError as err:
                 msg = f"cannot read '{path.name}': {err}"
                 raise CompositeInputError(msg) from err
@@ -1260,9 +1302,12 @@ class ResolutionWeighter:
         path: Path | UPath,
         geobox: MGRSGeoBox,
         band: int,
+        margin: int = 0,
     ) -> NDArray[np.float32]:
-        """Read one band of ``path`` on the grid of ``geobox``, NaN outside the file."""
+        """Read one band of ``path`` on the grid of ``geobox`` widened by ``margin`` pixels."""
         left, bottom, right, top = geobox.boundingbox
+        pad_x = margin * geobox.resolution.x
+        pad_y = margin * abs(geobox.resolution.y)
         with rasterio_open(path) as src:
             if src.crs != geobox.crs:
                 msg = (
@@ -1276,7 +1321,9 @@ class ResolutionWeighter:
                     f"{geobox.resolution.x} m; all inputs must share the output grid."
                 )
                 raise InconsistentInputsError(msg)
-            win = from_bounds(left, bottom, right, top, transform=src.transform)
+            win = from_bounds(
+                left - pad_x, bottom - pad_y, right + pad_x, top + pad_y, transform=src.transform
+            )
             # Rounding the window would silently shift an input whose pixel
             # corners do not coincide with the target grid's.
             offsets = (win.col_off, win.row_off)
@@ -1526,32 +1573,192 @@ class ResolutionWeighter:
         """
         return product.date_primary if isinstance(product, CoherenceProduct) else product.date
 
+    def _load_bursts(
+        self,
+        products: Collection[ComposableProduct],
+        geobox: MGRSGeoBox,
+    ) -> list[_Burst]:
+        """Read the measurement band of each product, trimmed and with its depth.
+
+        The band is read ``_EDGE_SEARCH_MARGIN_M`` beyond the cell, so that a
+        data edge outside the cell still counts.
+        """
+        margin = math.ceil(_EDGE_SEARCH_MARGIN_M / geobox.resolution.x)
+        return [
+            self._trimmed(prod, padded, margin)
+            for prod, padded in self._load_band(products, geobox, band=1, margin=margin)
+        ]
+
+    @classmethod
+    def _trimmed(
+        cls,
+        product: ComposableProduct,
+        padded: NDArray[np.float32],
+        margin: int,
+    ) -> _Burst:
+        """Crop a widened read to the cell, without its outermost ``BURST_EDGE_TRIM_PX`` pixels.
+
+        Terrain correction resamples the outermost pixels of a burst against
+        no-data, which fades them, so they are dropped. Holes inside the
+        footprint are not edges and keep their neighbors.
+        """
+        bounded, unbounded = cls._edge_depth(np.isfinite(padded), margin)
+        height, width = padded.shape
+        values = padded[margin : height - margin, margin : width - margin].copy()
+        values[bounded <= BURST_EDGE_TRIM_PX] = np.nan
+        depth = np.minimum(bounded, unbounded)
+        return _Burst(product, values, depth, unbounded < bounded, depth > margin)
+
+    @staticmethod
+    def _edge_depth(
+        finite: NDArray[np.bool_],
+        margin: int,
+    ) -> tuple[NDArray[np.int32], NDArray[np.int32]]:
+        """Distance of each cell pixel to the data edge along its row and column.
+
+        ``finite`` covers the cell and ``margin`` pixels around it. The edges
+        are the first and last finite pixel of a row or column, so holes
+        inside the footprint are not edges; the distance is 1 at the
+        outermost pixel. Returns the shortest distance to an edge inside the
+        read and the shortest along a run that reaches the border of the read,
+        which is only a lower bound, since the edge lies outside it. Either is
+        the int32 maximum where no run of that kind exists. Meaningless at
+        non-finite pixels.
+        """
+        height, width = finite.shape
+        inner_rows = slice(margin, height - margin)
+        inner_cols = slice(margin, width - margin)
+        rows = np.arange(height, dtype=np.int32)[inner_rows, np.newaxis]
+        cols = np.arange(width, dtype=np.int32)[np.newaxis, inner_cols]
+        # argmax returns the first True; on the reversed axis, the last.
+        row_first = finite.argmax(axis=1).astype(np.int32)[inner_rows, np.newaxis]
+        row_last = (width - 1 - finite[:, ::-1].argmax(axis=1)).astype(np.int32)[
+            inner_rows, np.newaxis
+        ]
+        col_first = finite.argmax(axis=0).astype(np.int32)[np.newaxis, inner_cols]
+        col_last = (height - 1 - finite[::-1].argmax(axis=0)).astype(np.int32)[
+            np.newaxis, inner_cols
+        ]
+        sides = (
+            (cols - row_first + 1, row_first == 0),
+            (row_last - cols + 1, row_last == width - 1),
+            (rows - col_first + 1, col_first == 0),
+            (col_last - rows + 1, col_last == height - 1),
+        )
+        unreached = np.iinfo(np.int32).max
+        shape = (height - 2 * margin, width - 2 * margin)
+        bounded = np.full(shape, unreached, dtype=np.int32)
+        unbounded = np.full(shape, unreached, dtype=np.int32)
+        for distance, at_border in sides:
+            np.minimum(bounded, np.where(at_border, unreached, distance), out=bounded)
+            np.minimum(unbounded, np.where(at_border, distance, unreached), out=unbounded)
+        return bounded, unbounded
+
     def _stitch_by_orbit_date(
         self,
-        loaded: Sequence[_LoadedEntry],
-    ) -> dict[_OrbitDateKey, NDArray[np.floating[Any]]]:
-        """Group loaded arrays by orbit/date and mosaic within each group.
+        bursts: Sequence[_Burst],
+        cell: str,
+    ) -> dict[_OrbitDateKey, _Mosaic]:
+        """Group bursts by orbit/date and join each group at the midline of its overlaps.
 
         The grouping key is ``(rel_orbit_number, acquisition_date)``, where
         ``acquisition_date`` is ``date_primary`` for coherence products and
-        ``date`` for RTC products.  Within each group the arrays are combined
-        using pixel-wise first non-NaN selection, which avoids averaging along
-        burst seams.  Where bursts overlap, the one with the lowest
-        ``(burst_id, sub_swath)`` is kept, whatever order ``loaded`` is in.
+        ``date`` for RTC products. Each pixel is taken from the burst whose
+        data edge is farthest from it, which puts the seam on the midline of
+        every overlap, as SNAP's TOPSAR-Deburst and TOPSAR-Merge do in radar
+        geometry. Seams are never averaged. A tie goes to the lowest
+        ``(burst_id, sub_swath)``, whatever order ``bursts`` is in.
         """
-        groups: defaultdict[_OrbitDateKey, list[NDArray[np.floating[Any]]]] = defaultdict(list)
-        # The caller's list order is arbitrary, so it must not decide the overlap.
-        for prod, data in sorted(
-            loaded, key=lambda entry: (entry[0].burst_id, entry[0].sub_swath)
-        ):
-            groups[self._group_key(prod)].append(data)
-        return {key: self._first_notna(arrays) for key, arrays in sorted(groups.items())}
+        groups: defaultdict[_OrbitDateKey, list[_Burst]] = defaultdict(list)
+        # The caller's list order is arbitrary, so it must not decide a tie.
+        for burst in sorted(bursts, key=lambda b: (b.product.burst_id, b.product.sub_swath)):
+            groups[self._group_key(burst.product)].append(burst)
+        return {
+            key: self._join_at_midline(members, key, cell)
+            for key, members in sorted(groups.items())
+        }
+
+    @staticmethod
+    def _join_at_midline(
+        members: Sequence[_Burst],
+        key: _OrbitDateKey,
+        cell: str,
+    ) -> _Mosaic:
+        """Take each pixel from the finite burst it lies deepest in."""
+        sources = tuple(member.product for member in members)
+        if len(members) == 1:
+            data = members[0].data
+            index = np.where(np.isfinite(data), 0, -1).astype(np.intp)
+            return _Mosaic(data, sources, index)
+        values = np.stack([member.data for member in members])  # (n, H, W)
+        finite = np.isfinite(values)
+        depth = np.where(finite, np.stack([member.depth for member in members]), -1)
+        # argmax takes the first maximum, so a tie goes to the lowest (burst_id, sub_swath).
+        index = depth.argmax(axis=0)
+        mosaic = np.take_along_axis(values, index[np.newaxis], axis=0)[0]
+        index[~finite.any(axis=0)] = -1
+
+        # Two depths beyond the margin, one of them only a lower bound, cannot be ranked.
+        beyond = (finite & np.stack([m.beyond_margin for m in members])).sum(axis=0) > 1
+        unbounded = (finite & np.stack([m.unbounded for m in members])).any(axis=0)
+        undecided = np.count_nonzero(beyond & unbounded)
+        if undecided:
+            orbit, day = key
+            logger.warning(
+                "cell %s, orbit %d on %s: %d pixels lie more than %g km inside two "
+                "overlapping bursts, so their burst is chosen by burst ID, not the midline",
+                cell,
+                orbit,
+                day.date(),
+                undecided,
+                _EDGE_SEARCH_MARGIN_M / 1000,
+            )
+        return _Mosaic(mosaic, sources, index)
+
+    def _areas(
+        self,
+        groups: Mapping[_OrbitDateKey, _Mosaic],
+        area_bands: Iterable[_LoadedEntry],
+    ) -> dict[_OrbitDateKey, NDArray[np.float32]]:
+        """Take each pixel's scattering area from the RTC product of the burst it came from.
+
+        Raises
+        ------
+        CompositeInputError
+            If a burst some pixel is taken from has no RTC product of the same
+            burst and date.
+        """
+        by_burst: dict[_BurstKey, NDArray[np.float32]] = {}
+        for prod, data in area_bands:
+            by_burst.setdefault(self._burst_key(prod), data)
+        areas: dict[_OrbitDateKey, NDArray[np.float32]] = {}
+        missing: list[_BurstKey] = []
+        for key, mosaic in groups.items():
+            area = np.full(mosaic.data.shape, np.nan, dtype=np.float32)
+            for position, source in enumerate(mosaic.sources):
+                chosen = mosaic.index == position
+                if not chosen.any():
+                    continue
+                band = by_burst.get(self._burst_key(source))
+                if band is None:
+                    missing.append(self._burst_key(source))
+                    continue
+                area[chosen] = band[chosen]
+            areas[key] = area
+        if missing:
+            formatted = ", ".join(
+                f"{burst_id} {sub_swath} (orbit {orbit}, {day.date()})"
+                for orbit, day, burst_id, sub_swath in missing
+            )
+            msg = f"No matching RTC scattering area for burst(s): {formatted}"
+            raise CompositeInputError(msg)
+        return areas
 
     @staticmethod
     def _contributing(
-        groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
+        groups: dict[_OrbitDateKey, _Mosaic],
         geobox: MGRSGeoBox,
-    ) -> dict[_OrbitDateKey, NDArray[np.floating[Any]]]:
+    ) -> dict[_OrbitDateKey, _Mosaic]:
         """Keep the orbit/date groups with at least one valid pixel in the cell.
 
         Bursts are matched to a cell by footprint, and a burst may touch a
@@ -1572,10 +1779,10 @@ class ResolutionWeighter:
 
     @staticmethod
     def _reaching(
-        groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
-    ) -> dict[_OrbitDateKey, NDArray[np.floating[Any]]]:
+        groups: dict[_OrbitDateKey, _Mosaic],
+    ) -> dict[_OrbitDateKey, _Mosaic]:
         """Keep the orbit/date groups with at least one valid pixel in the cell."""
-        return {key: data for key, data in groups.items() if np.isfinite(data).any()}
+        return {key: mosaic for key, mosaic in groups.items() if np.isfinite(mosaic.data).any()}
 
     @classmethod
     def _group_key(cls, product: ComposableProduct) -> _OrbitDateKey:
@@ -1583,44 +1790,23 @@ class ResolutionWeighter:
         return product.rel_orbit_number, cls._acquisition_date(product).normalize()
 
     @classmethod
+    def _burst_key(cls, product: ComposableProduct) -> _BurstKey:
+        """Return the burst and acquisition a product holds, matching coherence to RTC."""
+        orbit, day = cls._group_key(product)
+        return orbit, day, product.burst_id, product.sub_swath
+
+    @classmethod
     def _contributing_span(
         cls,
         products: Collection[ComposableProduct],
-        groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
+        groups: Mapping[_OrbitDateKey, _Mosaic],
     ) -> product_tags.Acquisitions:
         """First and last acquisition day among the products of the contributing groups."""
         return cls._acquisition_span([p for p in products if cls._group_key(p) in groups])
 
-    @staticmethod
-    def _first_notna(arrays: Sequence[NDArray[np.floating[Any]]]) -> NDArray[np.floating[Any]]:
-        """Pixel-wise first non-NaN value across a list of ``(H, W)`` arrays.
-
-        For each ``(row, col)`` position the value from the first array in the
-        list that is finite is used.  Positions that are NaN in all arrays
-        remain NaN.
-        """
-        stacked = np.stack(arrays, axis=0)  # (N, H, W)
-        finite = np.isfinite(stacked)
-        idx = finite.argmax(axis=0, keepdims=True)  # (1, H, W)
-        result = np.take_along_axis(stacked, idx, axis=0).squeeze(0)  # (H, W)
-        result[~finite.any(axis=0)] = np.nan
-        return result
-
     # ------------------------------------------------------------------
     # Private helpers — weighting
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _check_area_coverage(
-        obs_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
-        area_groups: dict[_OrbitDateKey, NDArray[np.floating[Any]]],
-    ) -> None:
-        """Verify every observation group has a matching scattering-area group."""
-        missing = [key for key in obs_groups if key not in area_groups]
-        if missing:
-            formatted = ", ".join(f"(orbit {orbit}, {date.date()})" for orbit, date in missing)
-            msg = f"No matching RTC scattering area for orbit/date group(s): {formatted}"
-            raise CompositeInputError(msg)
 
     @staticmethod
     def _calc_weights(

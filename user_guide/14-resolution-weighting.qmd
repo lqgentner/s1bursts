@@ -46,7 +46,12 @@ well.
 
 An acquisition in radar shadow has no valid area there and does not count
 toward $M$. Bursts of the same orbit and date are joined first, so the overlap
-of neighboring bursts counts once.
+of neighboring bursts counts once. The two outermost pixels of every burst are
+dropped, because terrain correction fades them, and each pixel is taken from
+the burst whose data edge is farther away, which splits every overlap at its
+midline, as SNAP's TOPSAR-Deburst and TOPSAR-Merge do. A pixel's scattering
+area comes from the same burst as its value; for coherence, from the RTC
+product of that burst.
 
 ## Capping the local resolution
 

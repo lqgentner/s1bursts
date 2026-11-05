@@ -59,7 +59,9 @@ _ARGUMENTS = {
     **{key: name for name, keys in _SETTING_TAGS.items() for key in keys},
     "DEM": "dem, dem_name",
     _SNAP_VERSION_KEY: "the SNAP installation",
-    "COMPOSITING_PARAMETERS": "aggregation, clip_max_resolution",
+    "COMPOSITING_PARAMETERS": (
+        "aggregation, clip_max_resolution, or the burst mosaicking of another s1bursts version"
+    ),
     "CRS": "geobox",
     "TRANSFORM": "geobox",
     "SHAPE": "geobox",
