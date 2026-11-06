@@ -254,8 +254,8 @@ def _aggregation_string(aggregation: Aggregation) -> str:
 # Pixels dropped from every edge of a burst before its orbit and date are mosaicked.
 BURST_EDGE_TRIM_PX = 2
 
-# How the bursts of one orbit and date are joined. Part of the compositing
-# parameters, so a composite joined another way is not skipped as existing.
+# How the bursts of one orbit and date are mosaicked. Part of the compositing
+# parameters, so a composite mosaicked another way is not skipped as existing.
 _BURST_MOSAICKING = f"burst_overlap=midline;burst_edge_trim_px={BURST_EDGE_TRIM_PX}"
 
 

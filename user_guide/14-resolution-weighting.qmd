@@ -45,7 +45,7 @@ acquisition, which is why `compose_coherence_lrw()` takes RTC products as
 well.
 
 An acquisition in radar shadow has no valid area there and does not count
-toward $M$. Bursts of the same orbit and date are joined first, so the overlap
+toward $M$. Bursts of the same orbit and date are mosaicked first, so the overlap
 of neighboring bursts counts once. The two outermost pixels of every burst are
 dropped, because terrain correction fades them, and each pixel is taken from
 the burst whose data edge is farther away, which splits every overlap at its
