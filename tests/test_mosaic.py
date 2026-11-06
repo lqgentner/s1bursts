@@ -213,12 +213,13 @@ class TestMosaicByOrbitDate:
         self,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """The warning propagates to ``s1bursts``, where users configure logging."""
+        """The warning comes from a logger under ``s1bursts``, where users configure logging."""
         a = RTCStub(10, self._D1, "VV", burst_id=1)
         b = RTCStub(10, self._D1, "VV", burst_id=2)
         with caplog.at_level(logging.WARNING, logger="s1bursts"):
             self._mosaic(_burst(a, np.ones((11, 11))), _burst(b, np.full((11, 11), 2.0)))
-        assert "by burst ID, not the midline" in caplog.text
+        # caplog listens on the root logger, so only the record's name shows where it came from.
+        assert [record.name for record in caplog.records] == ["s1bursts._mosaic"]
 
     def test_a_ranked_overlap_is_not_logged(self, caplog: pytest.LogCaptureFixture) -> None:
         """An overlap narrower than twice the margin is decided without a warning."""
