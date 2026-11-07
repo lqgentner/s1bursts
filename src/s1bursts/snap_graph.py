@@ -653,17 +653,24 @@ _PositiveFloat = Annotated[float, Field(gt=0)]
 ResamplingMethod = Literal[
     "NEAREST_NEIGHBOUR",
     "BILINEAR_INTERPOLATION",
-    "CUBIC_CONVOLUTION",
-    "BISINC_5_POINT_INTERPOLATION",
-    "BISINC_11_POINT_INTERPOLATION",
-    "BISINC_21_POINT_INTERPOLATION",
-    "BICUBIC_INTERPOLATION",
 ]
-"""Resampling methods SNAP's Terrain-Correction operator accepts.
+"""Resampling methods supported for the image during terrain correction.
 
 An unsupported name is not rejected by GPT until the graph has already run for
 minutes, so it is checked when the config is built instead.
 """
+
+# SNAP's kernels for these treat only NaN as missing, so they weight the finite
+# NODATA_SENTINEL into every pixel next to missing data.
+_REFUSED_IMAGE_RESAMPLING: Final = frozenset(
+    {
+        "CUBIC_CONVOLUTION",
+        "BISINC_5_POINT_INTERPOLATION",
+        "BISINC_11_POINT_INTERPOLATION",
+        "BISINC_21_POINT_INTERPOLATION",
+        "BICUBIC_INTERPOLATION",
+    }
+)
 
 DEMResamplingMethod = Literal[
     "NEAREST_NEIGHBOUR",
@@ -699,7 +706,9 @@ class GeocodingConfig(BaseModel):
         value is already their name. Name each DEM differently, such as by its
         source and version.
     img_resampling
-        Resampling of the image during terrain correction.
+        Resampling of the image during terrain correction. SNAP's cubic and
+        sinc kernels are not supported, because they corrupt the pixels next
+        to missing data.
     dem_resampling
         Resampling of the DEM during terrain correction.
     align_to_standard_grid
@@ -740,6 +749,24 @@ class GeocodingConfig(BaseModel):
         if isinstance(v, str) and Path(v).suffix:
             return Path(v)
         return v
+
+    # A model validator, because a field validator in "before" mode would widen
+    # the field's static type to its own argument's and let type checkers pass
+    # any string.
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_kernels_that_blend_no_data(cls, data: object) -> object:
+        """Explain why SNAP's cubic and sinc image kernels are refused."""
+        v = data.get("img_resampling") if isinstance(data, dict) else None
+        if v in _REFUSED_IMAGE_RESAMPLING:
+            msg = (
+                f"img_resampling {v} is not supported: SNAP's kernel for it blends the "
+                "no-data marker into every pixel next to missing data, which gives those "
+                "pixels values far outside the data range. Use BILINEAR_INTERPOLATION "
+                "or NEAREST_NEIGHBOUR."
+            )
+            raise ValueError(msg)
+        return data
 
     grid_spacing: _PositiveFloat = 10.0
     dem: str | Path = "Copernicus 30m Global DEM"

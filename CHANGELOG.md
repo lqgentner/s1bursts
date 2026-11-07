@@ -43,6 +43,16 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   loading holds about twice the memory.
 - The package summary reads "Sentinel-1 download, processing and compositing
   in Python." instead of "... made easy."
+- **Breaking:** `img_resampling` accepts only `"NEAREST_NEIGHBOUR"` and
+  `"BILINEAR_INTERPOLATION"`, and `ResamplingMethod` lists only those two.
+  SNAP's cubic and sinc kernels blended the no-data marker into every pixel
+  next to missing data (burst edges, layover and shadow, DEM voids), giving
+  values as far off as -1e12 that were kept as valid. Products made with them
+  should be reprocessed.
+  - Before: `RTCConfig(img_resampling="CUBIC_CONVOLUTION")` built a graph.
+  - After: it raises `ValidationError`; the same holds for
+    `BICUBIC_INTERPOLATION` and the three `BISINC_*_POINT_INTERPOLATION`
+    methods, in every config.
 
 ### Fixed
 
