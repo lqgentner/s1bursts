@@ -807,7 +807,7 @@ class BackscatterConfig(GeocodingConfig):
     Parameters
     ----------
     multilook
-        ``(n_rg_looks, n_az_looks)`` applied after debursting, before terrain
+        ``(n_rg_looks, n_az_looks)`` applied after ``TOPSAR-Deburst``, before terrain
         flattening; ``None`` skips the ``Multilook`` step. Multilooking here
         cuts runtime sharply, because the reduced raster passes through both
         terrain flattening and terrain correction.
