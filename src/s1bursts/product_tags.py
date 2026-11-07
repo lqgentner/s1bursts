@@ -447,7 +447,7 @@ def rtc_lrw_metadata(
     aggregation
         Temporal aggregation actually applied.
     burst_edge_trim_px
-        Pixels dropped along each burst\'s data edge before mosaicking.
+        Pixels dropped along each burst's data edge before mosaicking.
     clip_max_resolution
         Weight clip actually applied.
     n_observations
@@ -508,7 +508,7 @@ def coh_lrw_metadata(
     aggregation
         Temporal aggregation actually applied.
     burst_edge_trim_px
-        Pixels dropped along each burst\'s data edge before mosaicking.
+        Pixels dropped along each burst's data edge before mosaicking.
     clip_max_resolution
         Weight clip actually applied.
     n_observations
@@ -577,7 +577,7 @@ def rtc_pass_metadata(
     aggregation
         Temporal aggregation actually applied.
     burst_edge_trim_px
-        Pixels dropped along each burst\'s data edge before mosaicking.
+        Pixels dropped along each burst's data edge before mosaicking.
     n_observations
         Number of orbit-date observations entering the composite.
     source_tags
@@ -628,7 +628,7 @@ def gtc_pass_metadata(
     aggregation
         Temporal aggregation actually applied.
     burst_edge_trim_px
-        Pixels dropped along each burst\'s data edge before mosaicking.
+        Pixels dropped along each burst's data edge before mosaicking.
     n_observations
         Number of orbit-date observations entering the composite.
     source_tags
@@ -681,7 +681,7 @@ def coh_pass_metadata(
     aggregation
         Temporal aggregation actually applied.
     burst_edge_trim_px
-        Pixels dropped along each burst\'s data edge before mosaicking.
+        Pixels dropped along each burst's data edge before mosaicking.
     n_observations
         Number of orbit-date observations entering the composite.
     statistics
