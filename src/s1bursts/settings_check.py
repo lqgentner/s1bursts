@@ -16,8 +16,9 @@ from typing import TYPE_CHECKING
 from freezebase.raster import rasterio_open
 from rasterio.errors import RasterioError
 
+from s1bursts._mosaic import auto_edge_trim_px
 from s1bursts.errors import ProductSettingsMismatchError
-from s1bursts.product import Layer
+from s1bursts.product import CohLRWComposite, CohPassComposite, Layer
 from s1bursts.product_tags import (
     _SETTING_TAGS,
     _SNAP_OPTION_KEYS,
@@ -201,26 +202,45 @@ def _check_composite(
     geobox: MGRSGeoBox,
     *,
     aggregation: Aggregation,
+    burst_edge_trim: bool,
     clip_max_resolution: float | None = None,
 ) -> dict[str, str]:
     """Check every requested layer of an existing composite, returning its measurement's tags.
 
     Only the arguments of the ``compose_*`` call are compared, not what the
-    composite inherits from its inputs, so no input needs to be read. Raises
+    composite inherits from its inputs, so no input needs to be read. The
+    width ``burst_edge_trim`` asks for is derived from the setting tags the
+    measurement inherited from its inputs. Raises
     ``ProductSettingsMismatchError`` if a layer records another grid, other
-    or no compositing parameters, or decibel values, and the read error if a
-    layer cannot be read.
+    or no compositing parameters, or decibel values, ``ValueError`` if the
+    width cannot be derived, and the read error if a layer cannot be read.
     """
+    paths = {layer: file_manager.get_product_path(product, layer) for layer in product.layers}
+    headers = {layer: _read_header(path) for layer, path in sorted(paths.items())}
+    measurement = headers[Layer.MEASUREMENT].tags
+    trim_px = 0
+    if burst_edge_trim:
+        try:
+            trim_px = auto_edge_trim_px(
+                measurement,
+                coherence=isinstance(product, CohLRWComposite | CohPassComposite),
+                grid_spacing=geobox.resolution.x,
+            )
+        except KeyError as err:
+            msg = (
+                f"the existing composite '{paths[Layer.MEASUREMENT].name}' does not record "
+                f"{err.args[0]}, which the burst edge trim is derived from; pass "
+                "burst_edge_trim=False"
+            )
+            raise ValueError(msg) from err
     expected = _composite_settings(
-        product, aggregation=aggregation, clip_max_resolution=clip_max_resolution
+        product,
+        aggregation=aggregation,
+        burst_edge_trim_px=trim_px,
+        clip_max_resolution=clip_max_resolution,
     )
-    measurement: dict[str, str] = {}
-    for layer in sorted(product.layers):
-        path = file_manager.get_product_path(product, layer)
-        header = _read_header(path)
+    for layer, header in headers.items():
         differences = _grid_differences(header, geobox) | _tag_differences(header.tags, expected)
         if differences:
-            raise _mismatch(path, differences)
-        if layer == Layer.MEASUREMENT:
-            measurement = header.tags
+            raise _mismatch(paths[layer], differences)
     return measurement

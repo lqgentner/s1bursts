@@ -251,17 +251,19 @@ def _aggregation_string(aggregation: Aggregation) -> str:
     return aggregation if isinstance(aggregation, str) else f"quantile={aggregation:g}"
 
 
-# Pixels dropped from every edge of a burst before its orbit and date are mosaicked.
-BURST_EDGE_TRIM_PX = 2
+def _burst_mosaicking(burst_edge_trim_px: int) -> str:
+    """Render the pixels dropped along each burst's data edge before mosaicking.
 
-# How the bursts of one orbit and date are mosaicked. Part of the compositing
-# parameters, so a composite mosaicked another way is not skipped as existing.
-_BURST_MOSAICKING = f"burst_overlap=midline;burst_edge_trim_px={BURST_EDGE_TRIM_PX}"
+    Part of the compositing parameters, so a composite trimmed another way
+    is not skipped as existing.
+    """
+    return f"burst_edge_trim_px={burst_edge_trim_px}"
 
 
 def _compositing_parameters(
     aggregation: Aggregation,
-    clip_max_resolution: float | None = None,
+    clip_max_resolution: float | None,
+    burst_edge_trim_px: int,
 ) -> str:
     """Render the arguments the composite was actually built with.
 
@@ -273,7 +275,7 @@ def _compositing_parameters(
         parts.append(f"clip_max_resolution={clip_max_resolution:g}")
     else:
         parts.append("clip_max_resolution=none")
-    parts.append(_BURST_MOSAICKING)
+    parts.append(_burst_mosaicking(burst_edge_trim_px))
     return ";".join(parts)
 
 
@@ -314,21 +316,26 @@ def _tile(
     }
 
 
-def _lrw(aggregation: Aggregation, clip_max_resolution: float | None) -> dict[str, str]:
+def _lrw(
+    aggregation: Aggregation, clip_max_resolution: float | None, burst_edge_trim_px: int
+) -> dict[str, str]:
     """Compositing-method tags for a locally resolution weighted product (spec 1.7.24)."""
     return {
         "COMPOSITING_METHOD": "Local resolution weighting",
         "COMPOSITING_METHOD_REFERENCE": LRW_REFERENCE,
-        "COMPOSITING_PARAMETERS": _compositing_parameters(aggregation, clip_max_resolution),
+        "COMPOSITING_PARAMETERS": _compositing_parameters(
+            aggregation, clip_max_resolution, burst_edge_trim_px
+        ),
     }
 
 
-def _unweighted(aggregation: Aggregation) -> dict[str, str]:
+def _unweighted(aggregation: Aggregation, burst_edge_trim_px: int) -> dict[str, str]:
     """Compositing-method tags for a pass composite, which applies no weighting."""
     return {
         "COMPOSITING_METHOD": "Unweighted temporal aggregation",
         "COMPOSITING_PARAMETERS": (
-            f"aggregation={_aggregation_string(aggregation)};{_BURST_MOSAICKING}"
+            f"aggregation={_aggregation_string(aggregation)};"
+            f"{_burst_mosaicking(burst_edge_trim_px)}"
         ),
     }
 
@@ -425,6 +432,7 @@ def rtc_lrw_metadata(
     product: RTCLRWComposite,
     *,
     aggregation: Aggregation,
+    burst_edge_trim_px: int,
     clip_max_resolution: float | None,
     n_observations: int,
     source_tags: Mapping[str, str] | None = None,
@@ -438,6 +446,8 @@ def rtc_lrw_metadata(
         The product being written.
     aggregation
         Temporal aggregation actually applied.
+    burst_edge_trim_px
+        Pixels dropped along each burst's data edge before mosaicking.
     clip_max_resolution
         Weight clip actually applied.
     n_observations
@@ -457,7 +467,7 @@ def rtc_lrw_metadata(
     tags = {
         **_tile(product, family="Composite Backscatter", acquisitions=acquisitions),
         **_backscatter(gamma0=True),
-        **_lrw(aggregation, clip_max_resolution),
+        **_lrw(aggregation, clip_max_resolution, burst_edge_trim_px),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "gamma0",
         "LAYER_DESCRIPTION": (
@@ -476,6 +486,7 @@ def coh_lrw_metadata(
     product: CohLRWComposite,
     *,
     aggregation: Aggregation,
+    burst_edge_trim_px: int,
     clip_max_resolution: float | None,
     n_observations: int,
     statistics: Mapping[str, str] | None = None,
@@ -496,6 +507,8 @@ def coh_lrw_metadata(
         The product being written.
     aggregation
         Temporal aggregation actually applied.
+    burst_edge_trim_px
+        Pixels dropped along each burst's data edge before mosaicking.
     clip_max_resolution
         Weight clip actually applied.
     n_observations
@@ -522,7 +535,7 @@ def coh_lrw_metadata(
         # local scattering area is this package's extension, so say so rather
         # than let the reference imply a method the paper does not cover.
         **(
-            _lrw(aggregation, clip_max_resolution)
+            _lrw(aggregation, clip_max_resolution, burst_edge_trim_px)
             | {
                 "COMPOSITING_METHOD": (
                     f"Local resolution weighting (Small et al. 2022) applied to "
@@ -550,6 +563,7 @@ def rtc_pass_metadata(
     product: RTCPassComposite,
     *,
     aggregation: Aggregation,
+    burst_edge_trim_px: int,
     n_observations: int,
     source_tags: Mapping[str, str] | None = None,
     acquisitions: Acquisitions | None = None,
@@ -562,6 +576,8 @@ def rtc_pass_metadata(
         The product being written.
     aggregation
         Temporal aggregation actually applied.
+    burst_edge_trim_px
+        Pixels dropped along each burst's data edge before mosaicking.
     n_observations
         Number of orbit-date observations entering the composite.
     source_tags
@@ -578,7 +594,7 @@ def rtc_pass_metadata(
     tags = {
         **_tile(product, family="Composite Backscatter", acquisitions=acquisitions),
         **_backscatter(gamma0=True),
-        **_unweighted(aggregation),
+        **_unweighted(aggregation, burst_edge_trim_px),
         "PASS_DIRECTION": product.pass_direction,
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "gamma0",
@@ -598,6 +614,7 @@ def gtc_pass_metadata(
     product: GTCPassComposite,
     *,
     aggregation: Aggregation,
+    burst_edge_trim_px: int,
     n_observations: int,
     source_tags: Mapping[str, str] | None = None,
     acquisitions: Acquisitions | None = None,
@@ -610,6 +627,8 @@ def gtc_pass_metadata(
         The product being written.
     aggregation
         Temporal aggregation actually applied.
+    burst_edge_trim_px
+        Pixels dropped along each burst's data edge before mosaicking.
     n_observations
         Number of orbit-date observations entering the composite.
     source_tags
@@ -626,7 +645,7 @@ def gtc_pass_metadata(
     tags = {
         **_tile(product, family="Composite Backscatter", acquisitions=acquisitions),
         **_backscatter(gamma0=False),
-        **_unweighted(aggregation),
+        **_unweighted(aggregation, burst_edge_trim_px),
         "PASS_DIRECTION": product.pass_direction,
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "beta0",
@@ -647,6 +666,7 @@ def coh_pass_metadata(
     product: CohPassComposite,
     *,
     aggregation: Aggregation,
+    burst_edge_trim_px: int,
     n_observations: int,
     statistics: Mapping[str, str] | None = None,
     source_tags: Mapping[str, str] | None = None,
@@ -660,6 +680,8 @@ def coh_pass_metadata(
         The product being written.
     aggregation
         Temporal aggregation actually applied.
+    burst_edge_trim_px
+        Pixels dropped along each burst's data edge before mosaicking.
     n_observations
         Number of orbit-date observations entering the composite.
     statistics
@@ -679,7 +701,7 @@ def coh_pass_metadata(
         **_tile(product, family="Composite Coherence", acquisitions=acquisitions),
         "MEASUREMENT_TYPE": "Coherence",
         "TEMPORAL_BASELINE_DAYS": str(product.baseline_days),
-        **_unweighted(aggregation),
+        **_unweighted(aggregation, burst_edge_trim_px),
         "PASS_DIRECTION": product.pass_direction,
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         "LAYER_NAME": "coherence",
@@ -706,6 +728,7 @@ def qa_metadata(
     layer: Layer,
     *,
     aggregation: Aggregation,
+    burst_edge_trim_px: int,
     n_observations: int,
     clip_max_resolution: float | None = None,
     source_tags: Mapping[str, str] | None = None,
@@ -724,6 +747,8 @@ def qa_metadata(
         The QA layer being written, ``Layer.QA_NUM`` or ``Layer.QA_CQM``.
     aggregation
         Temporal aggregation actually applied to the parent composite.
+    burst_edge_trim_px
+        Pixels the parent composite dropped along each burst's data edge.
     n_observations
         Number of orbit-date observations entering the composite (spec 2.21).
     clip_max_resolution
@@ -760,7 +785,11 @@ def qa_metadata(
             acquisitions=acquisitions,
             layer=layer,
         ),
-        **(_lrw(aggregation, clip_max_resolution) if weighted else _unweighted(aggregation)),
+        **(
+            _lrw(aggregation, clip_max_resolution, burst_edge_trim_px)
+            if weighted
+            else _unweighted(aggregation, burst_edge_trim_px)
+        ),
         "CONTRIBUTING_OBSERVATIONS": str(n_observations),
         **_inherited(source_tags, _INHERITED_KEYS, required=_INPUT_KEYS),
     }
@@ -1043,11 +1072,16 @@ def _composite_settings(
     product: MGRSTileProduct,
     *,
     aggregation: Aggregation,
+    burst_edge_trim_px: int,
     clip_max_resolution: float | None = None,
 ) -> dict[str, str]:
     """Return the setting tags a composite made with these arguments carries in every layer."""
     weighted = isinstance(product, RTCLRWComposite | CohLRWComposite)
-    tags = _lrw(aggregation, clip_max_resolution) if weighted else _unweighted(aggregation)
+    tags = (
+        _lrw(aggregation, clip_max_resolution, burst_edge_trim_px)
+        if weighted
+        else _unweighted(aggregation, burst_edge_trim_px)
+    )
     return {"COMPOSITING_PARAMETERS": tags["COMPOSITING_PARAMETERS"]}
 
 

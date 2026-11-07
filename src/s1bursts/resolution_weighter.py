@@ -95,6 +95,7 @@ class _PassObservations:
     n_observations: int
     source_tags: dict[str, str]
     acquisitions: product_tags.Acquisitions
+    burst_edge_trim_px: int
 
 
 _DEFAULT_PROFILE_KEY = "default"
@@ -306,14 +307,15 @@ class ResolutionWeighter:
         write_qa: bool = False,
         overwrite: bool = False,
         time_range: TimeRange | None = None,
+        burst_edge_trim: bool = True,
     ) -> RTCLRWComposite:
         r"""Compute a locally resolution weighted (LRW) RTC intensity composite.
 
         Band 1 supplies intensity and band 2 the local scattering area $A$.
         Observations are weighted by normalized $1/A$ ([1] eq. 3-4, [2]
         eq. A5.1-A5.3) after mosaicking each orbit and acquisition date,
-        without the two outermost pixels of each burst and splitting each
-        overlap at its midline.
+        without the darkened edge of each burst and splitting each overlap at
+        its midline.
 
         Parameters
         ----------
@@ -356,6 +358,11 @@ class ResolutionWeighter:
             from one search shares them; the observed span is kept in the
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
+        burst_edge_trim
+            Drop the edge of each burst before mosaicking, where multilooking
+            has darkened it. Its width follows the inputs' looks and the grid
+            spacing: 4 pixels at the default looks on a 10 m grid. ``False``
+            keeps every pixel.
 
         Returns
         -------
@@ -416,13 +423,18 @@ class ResolutionWeighter:
                 geobox,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
+                burst_edge_trim=burst_edge_trim,
             )
             return product
 
+        source_tags = self._input_tags(rtc_products)
+        burst_edge_trim_px = self._edge_trim_px(
+            source_tags, geobox, coherence=False, enabled=burst_edge_trim
+        )
         try:
             rtc_groups = _mosaic.contributing(
                 _mosaic.mosaic_by_orbit_date(
-                    self._load_bursts(rtc_products, geobox), geobox.mgrs_code
+                    self._load_bursts(rtc_products, geobox, burst_edge_trim_px), geobox.mgrs_code
                 ),
                 geobox.mgrs_code,
             )
@@ -442,7 +454,6 @@ class ResolutionWeighter:
 
         weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(rtc_obs, weights, aggregation)
-        source_tags = self._input_tags(rtc_products)
         n_observations = len(rtc_obs)
         self._save(
             composite,
@@ -453,6 +464,7 @@ class ResolutionWeighter:
                 product,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
+                burst_edge_trim_px=burst_edge_trim_px,
                 n_observations=n_observations,
                 source_tags=source_tags,
                 acquisitions=observed,
@@ -467,6 +479,7 @@ class ResolutionWeighter:
                 geobox,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
+                burst_edge_trim_px=burst_edge_trim_px,
                 source_tags=source_tags,
                 acquisitions=observed,
             )
@@ -483,13 +496,14 @@ class ResolutionWeighter:
         write_qa: bool = False,
         overwrite: bool = False,
         time_range: TimeRange | None = None,
+        burst_edge_trim: bool = True,
     ) -> CohLRWComposite:
         r"""Compute a locally resolution weighted (LRW) coherence composite.
 
         Coherence observations are weighted by normalized $1/A$ ([1] eq. 3-4)
         from matching RTC products. The bursts of one relative orbit and
-        primary acquisition date are mosaicked without the two outermost
-        pixels of each burst, splitting each overlap at its midline, and each
+        primary acquisition date are mosaicked without the darkened edge of
+        each burst, splitting each overlap at its midline, and each
         pixel is weighted by the RTC product of its own burst.
 
         Parameters
@@ -537,6 +551,11 @@ class ResolutionWeighter:
             from one search shares them; the observed span is kept in the
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
+        burst_edge_trim
+            Drop the edge of each burst before mosaicking, where the coherence
+            window has darkened it. Its width follows the inputs' estimation
+            window and the grid spacing: 5 pixels at the default window on a
+            10 m grid. ``False`` keeps every pixel.
 
         Returns
         -------
@@ -552,7 +571,10 @@ class ResolutionWeighter:
         ValueError
             If ``coh_products`` or ``rtc_products`` is empty, ``aggregation``
             is neither ``"mean"``, ``"median"`` nor a quantile level in
-            ``(0, 1)``, or an input lies outside ``time_range``.
+            ``(0, 1)``, an input lies outside ``time_range``, or
+            ``burst_edge_trim`` is ``True`` and the coherence inputs, or with
+            ``overwrite=False`` the existing composite, do not record the
+            estimation window.
         EmptyCompositeError
             If no input has a valid pixel in ``geobox``; nothing is written.
         InconsistentInputsError
@@ -608,13 +630,18 @@ class ResolutionWeighter:
                 geobox,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
+                burst_edge_trim=burst_edge_trim,
             )
             return product
 
+        coh_tags = self._read_tags(coh_products)
+        burst_edge_trim_px = self._edge_trim_px(
+            _agreed_tags(coh_tags), geobox, coherence=True, enabled=burst_edge_trim
+        )
         try:
             coh_groups = _mosaic.contributing(
                 _mosaic.mosaic_by_orbit_date(
-                    self._load_bursts(coh_products, geobox), geobox.mgrs_code
+                    self._load_bursts(coh_products, geobox, burst_edge_trim_px), geobox.mgrs_code
                 ),
                 geobox.mgrs_code,
             )
@@ -635,7 +662,7 @@ class ResolutionWeighter:
 
         weights = self._calc_weights(area_obs, clip_max_resolution)
         composite = self._aggregate_weighted(coh_obs, weights, aggregation)
-        source_tags = self._input_tags(coh_products, rtc_weights=weighting)
+        source_tags = _agreed_tags(coh_tags, self._read_tags(weighting))
         n_observations = len(coh_obs)
         self._save(
             composite,
@@ -646,6 +673,7 @@ class ResolutionWeighter:
                 product,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
+                burst_edge_trim_px=burst_edge_trim_px,
                 n_observations=n_observations,
                 statistics=product_tags.coherence_statistics(composite),
                 source_tags=source_tags,
@@ -661,6 +689,7 @@ class ResolutionWeighter:
                 geobox,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
+                burst_edge_trim_px=burst_edge_trim_px,
                 source_tags=source_tags,
                 acquisitions=observed,
             )
@@ -675,11 +704,12 @@ class ResolutionWeighter:
         write_qa: bool = False,
         overwrite: bool = False,
         time_range: TimeRange | None = None,
+        burst_edge_trim: bool = True,
     ) -> dict[PassDirection, RTCPassComposite]:
         """Compute unweighted RTC composites stratified by pass direction.
 
         Bursts from the same orbit and acquisition date are mosaicked without
-        the two outermost pixels of each burst, splitting each overlap at its
+        the darkened edge of each burst, splitting each overlap at its
         midline.  The resulting orbit-date observations are then aggregated
         temporally (mean or median) per pass direction (ascending /
         descending).
@@ -717,6 +747,11 @@ class ResolutionWeighter:
             from one search shares them; the observed span is kept in the
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
+        burst_edge_trim
+            Drop the edge of each burst before mosaicking, where multilooking
+            has darkened it. Its width follows the inputs' looks and the grid
+            spacing: 4 pixels at the default looks on a 10 m grid. ``False``
+            keeps every pixel.
 
         Returns
         -------
@@ -766,6 +801,7 @@ class ResolutionWeighter:
             write_qa=write_qa,
             overwrite=overwrite,
             time_range=time_range,
+            burst_edge_trim=burst_edge_trim,
         )
 
     def compose_gtc_by_pass(
@@ -777,11 +813,12 @@ class ResolutionWeighter:
         write_qa: bool = False,
         overwrite: bool = False,
         time_range: TimeRange | None = None,
+        burst_edge_trim: bool = True,
     ) -> dict[PassDirection, GTCPassComposite]:
         """Compute unweighted GTC beta0 composites stratified by pass direction.
 
         Bursts from the same orbit and acquisition date are mosaicked without
-        the two outermost pixels of each burst, splitting each overlap at its
+        the darkened edge of each burst, splitting each overlap at its
         midline.  The resulting orbit-date observations are then aggregated
         temporally (mean or median) per pass direction (ascending /
         descending).  The stored value is beta-0 power.
@@ -818,6 +855,11 @@ class ResolutionWeighter:
             than with the first and last acquisition; the observed span is
             kept in the ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE``
             tags. An input outside the window is a ``ValueError``.
+        burst_edge_trim
+            Drop the edge of each burst before mosaicking, where multilooking
+            has darkened it. Its width follows the inputs' looks and the grid
+            spacing: 4 pixels at the default looks on a 10 m grid. ``False``
+            keeps every pixel.
 
         Returns
         -------
@@ -867,6 +909,7 @@ class ResolutionWeighter:
             write_qa=write_qa,
             overwrite=overwrite,
             time_range=time_range,
+            burst_edge_trim=burst_edge_trim,
         )
 
     def _compose_backscatter_by_pass[C: (RTCPassComposite, GTCPassComposite)](
@@ -881,6 +924,7 @@ class ResolutionWeighter:
         write_qa: bool,
         overwrite: bool,
         time_range: TimeRange | None,
+        burst_edge_trim: bool,
     ) -> dict[PassDirection, C]:
         """Per-pass unweighted backscatter composite shared by the RTC and GTC entry points."""
         inputs = list(products)
@@ -906,6 +950,7 @@ class ResolutionWeighter:
             return metadata_fn(
                 product,
                 aggregation=aggregation,
+                burst_edge_trim_px=entry.burst_edge_trim_px,
                 n_observations=entry.n_observations,
                 source_tags=entry.source_tags,
                 acquisitions=entry.acquisitions,
@@ -918,6 +963,8 @@ class ResolutionWeighter:
             metadata=metadata,
             aggregation=aggregation,
             overwrite=overwrite,
+            burst_edge_trim=burst_edge_trim,
+            coherence=False,
         )
 
     def _compose_by_pass[C: (RTCPassComposite, GTCPassComposite, CohPassComposite)](
@@ -929,6 +976,8 @@ class ResolutionWeighter:
         metadata: Callable[[C, _PassObservations], RasterMetadata],
         aggregation: Literal["mean", "median"] | float,
         overwrite: bool,
+        burst_edge_trim: bool,
+        coherence: bool,
     ) -> dict[PassDirection, C]:
         """Composite each pass direction on its own, skipping finished ones before any read.
 
@@ -956,16 +1005,22 @@ class ResolutionWeighter:
         result: dict[PassDirection, C] = {}
         existing_tags: dict[str, dict[str, str]] = {}
         if not overwrite:
-            result, existing_tags = self._existing_by_pass(by_pass, make, geobox, aggregation)
+            result, existing_tags = self._existing_by_pass(
+                by_pass, make, geobox, aggregation, burst_edge_trim=burst_edge_trim
+            )
         building = {d: subset for d, subset in sorted(by_pass.items()) if d not in result}
         if building:
             existing_tags |= self._other_direction_tags(by_pass, make)
         source_tags = self._source_tags_by_pass(building, existing_tags)
         for direction, subset in building.items():
             product = make(direction)
-
+            burst_edge_trim_px = self._edge_trim_px(
+                source_tags[direction], geobox, coherence=coherence, enabled=burst_edge_trim
+            )
             groups = _mosaic.reaching(
-                _mosaic.mosaic_by_orbit_date(self._load_bursts(subset, geobox), geobox.mgrs_code)
+                _mosaic.mosaic_by_orbit_date(
+                    self._load_bursts(subset, geobox, burst_edge_trim_px), geobox.mgrs_code
+                )
             )
             if not groups:
                 # Like a direction without inputs: no composite, rather than an all-NaN file.
@@ -981,6 +1036,7 @@ class ResolutionWeighter:
                 source_tags=source_tags[direction],
                 # This file holds one direction, so its span is that direction's.
                 acquisitions=self._contributing_span(subset, groups),
+                burst_edge_trim_px=burst_edge_trim_px,
             )
             self._save(
                 composite,
@@ -995,6 +1051,7 @@ class ResolutionWeighter:
                     product,
                     geobox,
                     aggregation=aggregation,
+                    burst_edge_trim_px=entry.burst_edge_trim_px,
                     source_tags=entry.source_tags,
                     acquisitions=entry.acquisitions,
                 )
@@ -1054,6 +1111,8 @@ class ResolutionWeighter:
         make: Callable[[PassDirection], C],
         geobox: MGRSGeoBox,
         aggregation: Literal["mean", "median"] | float,
+        *,
+        burst_edge_trim: bool,
     ) -> tuple[dict[PassDirection, C], dict[str, dict[str, str]]]:
         """Check the existing direction composites, returning them and their tags by file name."""
         existing: dict[PassDirection, C] = {}
@@ -1062,7 +1121,13 @@ class ResolutionWeighter:
             product = make(direction)
             if self._all_exist(product):
                 name = self._fm.get_product_path(product).name
-                tags[name] = _check_composite(self._fm, product, geobox, aggregation=aggregation)
+                tags[name] = _check_composite(
+                    self._fm,
+                    product,
+                    geobox,
+                    aggregation=aggregation,
+                    burst_edge_trim=burst_edge_trim,
+                )
                 existing[direction] = product
         return existing, tags
 
@@ -1075,12 +1140,13 @@ class ResolutionWeighter:
         write_qa: bool = False,
         overwrite: bool = False,
         time_range: TimeRange | None = None,
+        burst_edge_trim: bool = True,
     ) -> dict[PassDirection, CohPassComposite]:
         """Compute unweighted coherence composites stratified by pass direction.
 
         Bursts from the same orbit and primary acquisition date are mosaicked
-        without the two outermost pixels of each burst, splitting each overlap
-        at its midline.  The resulting orbit-date observations are then
+        without the darkened edge of each burst, splitting each overlap at its
+        midline.  The resulting orbit-date observations are then
         aggregated temporally (mean or median) per pass direction (ascending /
         descending).
 
@@ -1117,6 +1183,11 @@ class ResolutionWeighter:
             from one search shares them; the observed span is kept in the
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
+        burst_edge_trim
+            Drop the edge of each burst before mosaicking, where the coherence
+            window has darkened it. Its width follows the inputs' estimation
+            window and the grid spacing: 5 pixels at the default window on a
+            10 m grid. ``False`` keeps every pixel.
 
         Returns
         -------
@@ -1132,8 +1203,10 @@ class ResolutionWeighter:
             If ``time_range`` is not a ``TimeRange``.
         ValueError
             If ``coh_products`` is empty, ``aggregation`` is neither ``"mean"``,
-            ``"median"`` nor a quantile level in ``(0, 1)``, or an input lies
-            outside ``time_range``.
+            ``"median"`` nor a quantile level in ``(0, 1)``, an input lies
+            outside ``time_range``, or ``burst_edge_trim`` is ``True`` and the
+            coherence inputs, or with ``overwrite=False`` the existing
+            composite, do not record the estimation window.
         EmptyCompositeError
             If no input of any direction has a valid pixel in ``geobox``;
             nothing is written.
@@ -1183,6 +1256,7 @@ class ResolutionWeighter:
             return product_tags.coh_pass_metadata(
                 product,
                 aggregation=aggregation,
+                burst_edge_trim_px=entry.burst_edge_trim_px,
                 n_observations=entry.n_observations,
                 statistics=product_tags.coherence_statistics(entry.composite),
                 source_tags=entry.source_tags,
@@ -1196,6 +1270,8 @@ class ResolutionWeighter:
             metadata=metadata,
             aggregation=aggregation,
             overwrite=overwrite,
+            burst_edge_trim=burst_edge_trim,
+            coherence=True,
         )
 
     # ------------------------------------------------------------------
@@ -1426,6 +1502,7 @@ class ResolutionWeighter:
         *,
         aggregation: Literal["mean", "median"] | float,
         clip_max_resolution: float | None,
+        burst_edge_trim_px: int,
         source_tags: Mapping[str, str],
         acquisitions: product_tags.Acquisitions,
     ) -> None:
@@ -1441,6 +1518,7 @@ class ResolutionWeighter:
                 Layer.QA_NUM,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
+                burst_edge_trim_px=burst_edge_trim_px,
                 n_observations=n_observations,
                 source_tags=source_tags,
                 acquisitions=acquisitions,
@@ -1459,6 +1537,7 @@ class ResolutionWeighter:
                 Layer.QA_CQM,
                 aggregation=aggregation,
                 clip_max_resolution=clip_max_resolution,
+                burst_edge_trim_px=burst_edge_trim_px,
                 n_observations=n_observations,
                 source_tags=source_tags,
                 acquisitions=acquisitions,
@@ -1474,6 +1553,7 @@ class ResolutionWeighter:
         geobox: MGRSGeoBox,
         *,
         aggregation: Literal["mean", "median"] | float,
+        burst_edge_trim_px: int,
         source_tags: Mapping[str, str],
         acquisitions: product_tags.Acquisitions,
     ) -> None:
@@ -1487,6 +1567,7 @@ class ResolutionWeighter:
                 product,
                 Layer.QA_NUM,
                 aggregation=aggregation,
+                burst_edge_trim_px=burst_edge_trim_px,
                 n_observations=len(observations),
                 source_tags=source_tags,
                 acquisitions=acquisitions,
@@ -1543,10 +1624,29 @@ class ResolutionWeighter:
             raise ValueError(msg)
         return Timestamp(time_range.start), Timestamp(time_range.end)
 
+    @staticmethod
+    def _edge_trim_px(
+        tags: Mapping[str, str], geobox: MGRSGeoBox, *, coherence: bool, enabled: bool
+    ) -> int:
+        """Pixels to drop along each burst's data edge, as ``burst_edge_trim`` asks."""
+        if not enabled:
+            return 0
+        try:
+            return _mosaic.auto_edge_trim_px(
+                tags, coherence=coherence, grid_spacing=geobox.resolution.x
+            )
+        except KeyError as err:
+            msg = (
+                f"the coherence inputs do not record {err.args[0]}, which the burst edge "
+                "trim is derived from; pass burst_edge_trim=False"
+            )
+            raise ValueError(msg) from err
+
     def _load_bursts(
         self,
         products: Collection[ComposableProduct],
         geobox: MGRSGeoBox,
+        trim_px: int,
     ) -> list[_mosaic.TrimmedBurst]:
         """Read the measurement band of each product, trimmed and with its depth.
 
@@ -1557,7 +1657,7 @@ class ResolutionWeighter:
         margin = math.ceil(_mosaic.EDGE_SEARCH_MARGIN_M / geobox.resolution.x)
 
         def load(prod: ComposableProduct) -> _mosaic.TrimmedBurst:
-            return _mosaic.trim(*self._load_one(prod, geobox, 1, margin), margin)
+            return _mosaic.trim(*self._load_one(prod, geobox, 1, margin), margin, trim_px)
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             return list(executor.map(load, products))

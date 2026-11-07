@@ -17,22 +17,34 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 ### Changed
 
 - **Breaking:** the bursts of one orbit and date are mosaicked at the midline
-  of their overlap, and the two outermost pixels of every burst are dropped, in
-  every `compose_*` method. Before, an overlap was taken from the burst with
-  the lowest `(burst_id, sub_swath)`, including the faded pixels at its edge,
-  which are 2 to 9 dB too dark. Composite values change along burst and
-  sub-swath seams and at burst edges. `COMPOSITING_PARAMETERS` records the rule,
-  so with `overwrite=False` a composite made by an earlier release now raises
+  of their overlap, and every burst loses its darkened edge first, in every
+  `compose_*` method. Before, an overlap was taken from the burst with the
+  lowest `(burst_id, sub_swath)`, including the edge pixels that multilooking
+  or the coherence window darkens by 1 to 9 dB. The width of that edge follows
+  the inputs' looks or coherence window and the grid spacing: 4 pixels for RTC
+  and 5 for coherence at the default settings on a 10 m grid. The new
+  `burst_edge_trim` argument (default `True`) turns it off. Composite values
+  change along burst and sub-swath seams and at burst edges.
+  `COMPOSITING_PARAMETERS` records the pixels dropped, so with
+  `overwrite=False` a composite made by an earlier release now raises
   `ProductSettingsMismatchError`; pass `overwrite=True` to rebuild it.
   - LRW before: `aggregation=mean;clip_max_resolution=none`
-  - LRW after: `aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2`
+  - LRW after: `aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=4`
   - Pass before: `aggregation=mean`
-  - Pass after: `aggregation=mean;burst_overlap=midline;burst_edge_trim_px=2`
+  - Pass after: `aggregation=mean;burst_edge_trim_px=4`
 
-  A cell that bursts reach only with their two outermost pixels now has no
-  valid input: an LRW composite raises `EmptyCompositeError` (with
-  `overwrite=True`, after deleting the earlier composite), and a pass
-  composite skips that direction.
+  The number follows the inputs. A cell that bursts reach only with their
+  darkened edge now has no valid input: an LRW composite raises
+  `EmptyCompositeError` (with `overwrite=True`, after deleting the earlier
+  composite), and a pass composite skips that direction. `compose_coherence_*`
+  raises `ValueError` for inputs that do not record their estimation window,
+  unless `burst_edge_trim=False`.
+- **Breaking:** the composite metadata builders `rtc_lrw_metadata()`,
+  `coh_lrw_metadata()`, `rtc_pass_metadata()`, `gtc_pass_metadata()`,
+  `coh_pass_metadata()` and `qa_metadata()` take a required keyword
+  `burst_edge_trim_px`, the pixels dropped along each burst's edge.
+  - Before: `rtc_pass_metadata(product, aggregation="mean", n_observations=3)`
+  - After: `rtc_pass_metadata(product, aggregation="mean", burst_edge_trim_px=4, n_observations=3)`
 - **Breaking:** `compose_coherence_lrw()` weights each pixel by the scattering
   area of the RTC product of its own burst, and raises `CompositeInputError`
   when a burst some pixel is taken from has none. Before, the RTC products of

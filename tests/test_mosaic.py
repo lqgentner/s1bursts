@@ -14,13 +14,13 @@ from s1bursts._mosaic import (
     AcquisitionMosaic,
     TrimmedBurst,
     acquisition_date,
+    auto_edge_trim_px,
     mosaic_by_orbit_date,
     scattering_areas,
     trim,
 )
 from s1bursts.errors import CompositeInputError
 from s1bursts.product import CoherenceProduct
-from s1bursts.product_tags import BURST_EDGE_TRIM_PX
 from tests.product_stubs import RTCStub
 
 if TYPE_CHECKING:
@@ -33,15 +33,20 @@ if TYPE_CHECKING:
 
 # Pixels read around the cell in these tests, as ``EDGE_SEARCH_MARGIN_M`` does.
 _MARGIN = 4
+# Pixels trimmed from each burst edge in these tests.
+_TRIM = 2
 
 
 def _burst(
-    product: object, padded: NDArray[np.floating[Any]], margin: int = _MARGIN
+    product: object,
+    padded: NDArray[np.floating[Any]],
+    margin: int = _MARGIN,
+    trim_px: int = _TRIM,
 ) -> TrimmedBurst:
     """Measure and trim a widened read, as ``ResolutionWeighter._load_bursts`` does."""
     # Stubs carry only the fields the mosaicking reads.
     # pyrefly: ignore [bad-argument-type]
-    return trim(product, padded.astype(np.float32), margin)
+    return trim(product, padded.astype(np.float32), margin, trim_px)
 
 
 def _strip(first: int, last: int, value: float, width: int = 24) -> NDArray[np.float32]:
@@ -77,7 +82,7 @@ class TestTrim:
         padded[10, 10] = np.nan
         burst = _burst(self._P, padded)
         assert np.count_nonzero(np.isnan(burst.data)) == 1
-        assert burst.depth[10 - _MARGIN, 11 - _MARGIN] > BURST_EDGE_TRIM_PX
+        assert burst.depth[10 - _MARGIN, 11 - _MARGIN] > _TRIM
 
     def test_data_reaching_the_read_border_is_deep_and_kept(self) -> None:
         """A run reaching the border of the read continues beyond it, so it has no edge there."""
@@ -89,6 +94,49 @@ class TestTrim:
         """The depth is the distance to the nearer data edge along the row."""
         burst = _burst(self._P, _strip(5, 18, 1.0))
         np.testing.assert_array_equal(burst.depth[1, 2:6], [2, 3, 4, 5])  # read columns 6-9
+
+    @pytest.mark.parametrize("trim_px", [0, 3])
+    def test_drops_the_given_number_of_edge_pixels(self, trim_px: int) -> None:
+        """Pixels up to depth ``trim_px`` become NaN; the next one is kept."""
+        burst = _burst(self._P, _strip(5, 18, 1.0), trim_px=trim_px)
+        finite = np.isfinite(burst.data[1])
+        # Cell column 1 is read column 5, the burst's outermost pixel (depth 1).
+        assert not finite[1 : 1 + trim_px].any()
+        assert finite[1 + trim_px]
+
+
+class TestAutoEdgeTrim:
+    """Tests for ``auto_edge_trim_px``, the trim derived from the settings."""
+
+    @pytest.mark.parametrize(
+        ("tags", "spacing", "expected"),
+        [
+            ({"MULTILOOK_RANGE": "5", "MULTILOOK_AZIMUTH": "1"}, 10.0, 4),
+            ({"MULTILOOK_RANGE": "10", "MULTILOOK_AZIMUTH": "2"}, 10.0, 8),
+            ({"MULTILOOK_RANGE": "5", "MULTILOOK_AZIMUTH": "1"}, 20.0, 2),
+            ({"MULTILOOK_RANGE": "5", "MULTILOOK_AZIMUTH": "1"}, 30.0, 2),
+            # multilook=None writes no MULTILOOK tags.
+            ({}, 10.0, 3),
+        ],
+    )
+    def test_backscatter_follows_the_looks_and_grid_spacing(
+        self, tags: dict[str, str], spacing: float, expected: int
+    ) -> None:
+        assert auto_edge_trim_px(tags, coherence=False, grid_spacing=spacing) == expected
+
+    @pytest.mark.parametrize(("window", "expected"), [((25, 5), 5), ((10, 2), 3), ((35, 7), 7)])
+    def test_coherence_follows_the_estimation_window(
+        self, window: tuple[int, int], expected: int
+    ) -> None:
+        tags = {
+            "COHERENCE_WINDOW_RANGE": str(window[0]),
+            "COHERENCE_WINDOW_AZIMUTH": str(window[1]),
+        }
+        assert auto_edge_trim_px(tags, coherence=True, grid_spacing=10.0) == expected
+
+    def test_coherence_needs_the_window(self) -> None:
+        with pytest.raises(KeyError, match="COHERENCE_WINDOW_RANGE"):
+            auto_edge_trim_px({}, coherence=True, grid_spacing=10.0)
 
 
 class TestMosaicByOrbitDate:

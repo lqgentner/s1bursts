@@ -17,6 +17,7 @@ import pytest
 import rasterio
 
 from s1bursts import product_tags
+from s1bursts._mosaic import auto_edge_trim_px
 from s1bursts.errors import (
     CompositeError,
     CompositeInputError,
@@ -30,11 +31,11 @@ from s1bursts.product import (
     GTCPassComposite,
     GTCProduct,
     Layer,
+    MGRSTileProduct,
     RTCLRWComposite,
     RTCPassComposite,
     RTCProduct,
 )
-from s1bursts.product_tags import BURST_EDGE_TRIM_PX
 from s1bursts.resolution_weighter import (
     ResolutionWeighter,
     _check_existing_composite,
@@ -832,8 +833,22 @@ def _geobox() -> MGRSGeoBox:
     )
 
 
-# Data around the test cell, so its pixels are not a burst's trimmed edge.
-_FRAME = BURST_EDGE_TRIM_PX + 1
+# Data around the test cell, so its pixels are not a burst's trimmed edge,
+# for every setting the fixtures record: default RTC looks, untagged
+# products without looks, and the default coherence window.
+# The default estimation window, which every coherence product records.
+_COH_WINDOW = {"COHERENCE_WINDOW_RANGE": "25", "COHERENCE_WINDOW_AZIMUTH": "5"}
+
+_FRAME = (
+    max(
+        auto_edge_trim_px(
+            {"MULTILOOK_RANGE": "5", "MULTILOOK_AZIMUTH": "1"}, coherence=False, grid_spacing=10.0
+        ),
+        auto_edge_trim_px({}, coherence=False, grid_spacing=10.0),
+        auto_edge_trim_px(_COH_WINDOW, coherence=True, grid_spacing=10.0),
+    )
+    + 1
+)
 
 
 def _write_raster(
@@ -849,6 +864,9 @@ def _write_raster(
     larger than the cell has; a composite covers the cell exactly.
     """
     pad = _FRAME if frame else 0
+    if tags is None and frame and len(bands) == 1:
+        # A one-band burst product is coherence, which records its window.
+        tags = _COH_WINDOW
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(
         path,
@@ -1136,7 +1154,8 @@ class TestComposeRtcLrw:
 
     def test_reports_a_missing_product_file(self, scene: _Scene) -> None:
         """A catalogued product whose raster was never written must fail loudly."""
-        with pytest.raises(CompositeInputError, match="product file not found"):
+        # Its tags are read first, as for a pass composite.
+        with pytest.raises(CompositeInputError, match=r"cannot read 'S1_RTC_015A_030346_IW1_VV"):
             scene.weighter.compose_rtc_lrw([_rtc("2022-08-25")], scene.geobox)
 
 
@@ -1660,7 +1679,7 @@ class TestCompositeTags:
             assert tags["CONTRIBUTING_OBSERVATIONS"] == "2"
             # The parameters must be the ones this call actually used.
             assert tags["COMPOSITING_PARAMETERS"] == (
-                "aggregation=mean;clip_max_resolution=2;burst_overlap=midline;burst_edge_trim_px=2"
+                "aggregation=mean;clip_max_resolution=2;burst_edge_trim_px=3"
             )
             assert tags["METADATA_VOCABULARY"] == product_tags.METADATA_VOCABULARY
             assert src.units == ("linear power",)
@@ -1676,8 +1695,7 @@ class TestCompositeTags:
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             assert src.tags()["COMPOSITING_PARAMETERS"] == (
-                "aggregation=mean;clip_max_resolution=none"
-                ";burst_overlap=midline;burst_edge_trim_px=2"
+                "aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=3"
             )
             assert src.read(1) == pytest.approx(_full(4.0))
 
@@ -1987,7 +2005,7 @@ class TestInputConsistency:
         _write_raster(
             scene.manager.get_product_path(coh),
             [_full(0.5)],
-            tags={"DEM": "Copernicus 30m Global DEM"},
+            tags={"DEM": "Copernicus 30m Global DEM", **_COH_WINDOW},
         )
         _write_raster(
             scene.manager.get_product_path(rtc),
@@ -2624,8 +2642,8 @@ class TestSkipChecksTheSettings:
         assert excinfo.value.path == scene.manager.get_product_path(composite)
         assert excinfo.value.differences == {
             "COMPOSITING_PARAMETERS": (
-                "aggregation=median;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2",
-                "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2",
+                "aggregation=median;clip_max_resolution=none;burst_edge_trim_px=3",
+                "aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=3",
             )
         }
         assert "overwrite=True" in str(excinfo.value)
@@ -2653,7 +2671,8 @@ class TestSkipChecksTheSettings:
         with pytest.raises(ProductSettingsMismatchError) as excinfo:
             scene.weighter.compose_rtc_lrw(products, finer)
 
-        assert set(excinfo.value.differences) == {"TRANSFORM", "SHAPE"}
+        # The finer grid also trims more pixels from the same bursts.
+        assert set(excinfo.value.differences) == {"TRANSFORM", "SHAPE", "COMPOSITING_PARAMETERS"}
         assert excinfo.value.differences["SHAPE"] == ("8x8", "16x16")
 
     def test_another_crs_raises(self, scene: _Scene, products: list[RTCProduct]) -> None:
@@ -2711,7 +2730,7 @@ class TestSkipChecksTheSettings:
         assert excinfo.value.differences == {
             "COMPOSITING_PARAMETERS": (
                 None,
-                "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2",
+                "aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=3",
             )
         }
 
@@ -2803,9 +2822,9 @@ class TestBurstOverlap:
     """Two bursts of one orbit and date that overlap within the cell.
 
     Burst ``left`` has data up to cell column 6 and ``right`` from cell
-    column 1, both continuing beyond the cell. After their outer two pixels
-    are dropped, cell columns 3 and 4 remain in both, and the midline of the
-    overlap lies between them.
+    column 1, both continuing beyond the cell, and the midline of their
+    overlap lies between cell columns 3 and 4. The midline tests keep every
+    pixel, since a trimmed edge would leave no overlap in this small cell.
     """
 
     _LEFT = 30346
@@ -2837,6 +2856,9 @@ class TestBurstOverlap:
         ) as dst:
             for index, band in enumerate(framed, 1):
                 dst.write(band, index)
+            if len(framed) == 1:
+                # A one-band burst product is coherence, which records its window.
+                dst.update_tags(**_COH_WINDOW)
 
     def test_rtc_value_and_area_come_from_the_burst_nearer_the_midline(
         self, scene: _Scene
@@ -2846,7 +2868,9 @@ class TestBurstOverlap:
         self._write(scene.manager.get_product_path(left), [1.0, 2.0], -_FRAME, 6)
         self._write(scene.manager.get_product_path(right), [3.0, 4.0], 1, _TILE + _FRAME)
 
-        composite = scene.weighter.compose_rtc_lrw([right, left], scene.geobox, write_qa=True)
+        composite = scene.weighter.compose_rtc_lrw(
+            [right, left], scene.geobox, write_qa=True, burst_edge_trim=False
+        )
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             np.testing.assert_array_equal(src.read(1), np.tile([1.0] * 4 + [3.0] * 4, (8, 1)))
@@ -2866,7 +2890,9 @@ class TestBurstOverlap:
         for rtc, area in zip(rtcs, (2.0, 4.0), strict=True):
             _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(area)])
 
-        composite = scene.weighter.compose_coherence_lrw(cohs, rtcs, scene.geobox, write_qa=True)
+        composite = scene.weighter.compose_coherence_lrw(
+            cohs, rtcs, scene.geobox, write_qa=True, burst_edge_trim=False
+        )
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             np.testing.assert_allclose(src.read(1), np.tile([0.2] * 4 + [0.8] * 4, (8, 1)))
@@ -2891,7 +2917,9 @@ class TestBurstOverlap:
         self._write(scene.manager.get_product_path(cohs[0]), [0.2], -_FRAME, 6)
         self._write(scene.manager.get_product_path(cohs[1]), [0.8], 1, _TILE + _FRAME)
 
-        [composite] = scene.weighter.compose_coherence_by_pass(cohs, scene.geobox).values()
+        [composite] = scene.weighter.compose_coherence_by_pass(
+            cohs, scene.geobox, burst_edge_trim=False
+        ).values()
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             np.testing.assert_allclose(src.read(1), np.tile([0.2] * 4 + [0.8] * 4, (8, 1)))
@@ -2902,7 +2930,9 @@ class TestBurstOverlap:
         self._write(scene.manager.get_product_path(left), [1.0, 2.0], -_FRAME, 6)
         self._write(scene.manager.get_product_path(right), [3.0, 4.0], 1, _TILE + _FRAME)
 
-        [composite] = scene.weighter.compose_rtc_by_pass([left, right], scene.geobox).values()
+        [composite] = scene.weighter.compose_rtc_by_pass(
+            [left, right], scene.geobox, burst_edge_trim=False
+        ).values()
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             np.testing.assert_array_equal(src.read(1), np.tile([1.0] * 4 + [3.0] * 4, (8, 1)))
@@ -2910,12 +2940,152 @@ class TestBurstOverlap:
     def test_the_outermost_pixels_of_a_burst_do_not_reach_the_composite(
         self, scene: _Scene
     ) -> None:
-        """The two pixels at a burst's data edge are dropped, also where no burst overlaps."""
+        """The pixels at a burst's data edge are dropped, also where no burst overlaps."""
         product = _rtc("2022-08-13", burst_id=self._LEFT)
         self._write(scene.manager.get_product_path(product), [1.0, 2.0], -_FRAME, 5)
+        # An untagged product records no looks.
+        trim = auto_edge_trim_px({}, coherence=False, grid_spacing=10.0)
 
         composite = scene.weighter.compose_rtc_lrw([product], scene.geobox)
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
-            expected = np.tile([1.0] * 4 + [np.nan] * 4, (8, 1))
+            expected = np.tile([1.0] * (6 - trim) + [np.nan] * (2 + trim), (8, 1))
             np.testing.assert_array_equal(src.read(1), expected)
+
+
+class TestBurstEdgeTrim:
+    """The edge each burst loses before mosaicking, and its record."""
+
+    _ROW_FIRST = 2  # cell column where the burst's data starts; it continues beyond the cell
+
+    @classmethod
+    def _write(cls, path: Path | UPath, values: list[float], tags: dict[str, str]) -> None:
+        """Write a burst whose data starts at cell column ``_ROW_FIRST`` and fills the frame."""
+        size = _TILE + 2 * _FRAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=size,
+            height=size,
+            count=len(values),
+            dtype="float32",
+            crs=_UTM32,
+            transform=Affine(
+                10.0, 0.0, 400000.0 - 10 * _FRAME, 0.0, -10.0, 5200000.0 + 10 * _FRAME
+            ),
+            nodata=np.nan,
+        ) as dst:
+            for index, value in enumerate(values, 1):
+                band = np.full((size, size), value, dtype=np.float32)
+                band[:, : _FRAME + cls._ROW_FIRST] = np.nan
+                dst.write(band, index)
+            dst.update_tags(**tags)
+
+    @staticmethod
+    def _row(scene: _Scene, product: MGRSTileProduct) -> list[bool]:
+        with rasterio.open(scene.manager.get_product_path(product)) as src:
+            return np.isfinite(src.read(1)[_TILE // 2]).tolist()
+
+    @staticmethod
+    def _parameters(scene: _Scene, product: MGRSTileProduct) -> str:
+        with rasterio.open(scene.manager.get_product_path(product)) as src:
+            return src.tags()["COMPOSITING_PARAMETERS"]
+
+    def test_rtc_trim_follows_the_looks_and_is_recorded(self, scene: _Scene) -> None:
+        """(5, 1) looks on a 10 m grid darken 4 pixels."""
+        rtc = _rtc("2022-08-13")
+        self._write(scene.manager.get_product_path(rtc), [2.0, 4.0], _rtc_settings(rtc))
+
+        composite = scene.weighter.compose_rtc_lrw([rtc], scene.geobox)
+
+        assert self._row(scene, composite) == [False] * 6 + [True] * 2
+        assert self._parameters(scene, composite).endswith("burst_edge_trim_px=4")
+
+    def test_coherence_trim_follows_the_window_not_the_rtc_looks(self, scene: _Scene) -> None:
+        """A (25, 5) window darkens 5 pixels; the area's (10, 2) looks would give 8."""
+        coh = _coh("2022-08-13", "2022-08-25")
+        rtc = _rtc("2022-08-13")
+        coh_tags = product_tags.coherence_metadata(
+            coh, CoherenceConfig(window=(25, 5)), snap_version=(14, 0, 0)
+        ).tags
+        self._write(scene.manager.get_product_path(coh), [0.5], coh_tags)
+        _write_raster(
+            scene.manager.get_product_path(rtc),
+            [_full(1.0), _full(2.0)],
+            _rtc_settings(rtc, RTCConfig(multilook=(10, 2))),
+        )
+
+        composite = scene.weighter.compose_coherence_lrw([coh], [rtc], scene.geobox)
+
+        assert self._row(scene, composite) == [False] * 7 + [True]
+        assert self._parameters(scene, composite).endswith("burst_edge_trim_px=5")
+
+    def test_no_trim_keeps_the_outermost_pixel(self, scene: _Scene) -> None:
+        rtc = _rtc("2022-08-13")
+        self._write(scene.manager.get_product_path(rtc), [2.0, 4.0], _rtc_settings(rtc))
+
+        composite = scene.weighter.compose_rtc_lrw([rtc], scene.geobox, burst_edge_trim=False)
+
+        assert self._row(scene, composite) == [False] * 2 + [True] * 6
+        assert self._parameters(scene, composite).endswith("burst_edge_trim_px=0")
+
+    def test_skip_check_resolves_the_trim_from_the_existing_composite(self, scene: _Scene) -> None:
+        rtc = _rtc("2022-08-13")
+        self._write(scene.manager.get_product_path(rtc), [2.0, 4.0], _rtc_settings(rtc))
+        scene.weighter.compose_rtc_lrw([rtc], scene.geobox)
+
+        # The same call is skipped; one without the trim is another composite.
+        scene.weighter.compose_rtc_lrw([rtc], scene.geobox)
+        with pytest.raises(ProductSettingsMismatchError, match="burst_edge_trim_px=4"):
+            scene.weighter.compose_rtc_lrw([rtc], scene.geobox, burst_edge_trim=False)
+
+    def test_skip_check_refuses_an_untrimmed_composite_for_a_trimmed_call(
+        self, scene: _Scene
+    ) -> None:
+        rtc = _rtc("2022-08-13")
+        self._write(scene.manager.get_product_path(rtc), [2.0, 4.0], _rtc_settings(rtc))
+        scene.weighter.compose_rtc_lrw([rtc], scene.geobox, burst_edge_trim=False)
+
+        scene.weighter.compose_rtc_lrw([rtc], scene.geobox, burst_edge_trim=False)
+        with pytest.raises(ProductSettingsMismatchError, match="burst_edge_trim_px=0"):
+            scene.weighter.compose_rtc_lrw([rtc], scene.geobox)
+
+    @pytest.mark.parametrize("trim", [True, False])
+    def test_pass_composite_records_and_skips_on_its_trim(self, scene: _Scene, trim: bool) -> None:
+        rtc = _rtc("2022-08-13")
+        self._write(scene.manager.get_product_path(rtc), [2.0, 4.0], _rtc_settings(rtc))
+
+        [composite] = scene.weighter.compose_rtc_by_pass(
+            [rtc], scene.geobox, burst_edge_trim=trim
+        ).values()
+        # The second call is skipped, after the check resolved the same trim.
+        scene.weighter.compose_rtc_by_pass([rtc], scene.geobox, burst_edge_trim=trim)
+
+        assert self._parameters(scene, composite) == (
+            f"aggregation=mean;burst_edge_trim_px={4 if trim else 0}"
+        )
+
+    def test_coherence_without_a_recorded_window_needs_the_trim_off(self, scene: _Scene) -> None:
+        coh = _coh("2022-08-13", "2022-08-25")
+        _write_raster(scene.manager.get_product_path(coh), [_full(0.5)], {})
+
+        with pytest.raises(ValueError, match="burst_edge_trim=False"):
+            scene.weighter.compose_coherence_by_pass([coh], scene.geobox)
+        scene.weighter.compose_coherence_by_pass([coh], scene.geobox, burst_edge_trim=False)
+
+
+def test_a_composite_without_a_window_is_named_when_the_trim_cannot_be_derived(
+    scene: _Scene,
+) -> None:
+    """The skip check blames the existing composite, not the inputs."""
+    coh = _coh("2022-08-13", "2022-08-25")
+    _write_raster(scene.manager.get_product_path(coh), [_full(0.5)], {})
+    [composite] = scene.weighter.compose_coherence_by_pass(
+        [coh], scene.geobox, burst_edge_trim=False
+    ).values()
+    name = scene.manager.get_product_path(composite).name
+
+    with pytest.raises(ValueError, match=rf"^the existing composite '{name}' does not record"):
+        scene.weighter.compose_coherence_by_pass([coh], scene.geobox)

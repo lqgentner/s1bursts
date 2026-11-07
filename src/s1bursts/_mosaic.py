@@ -1,8 +1,9 @@
 """The mosaic of the bursts of one relative orbit and date on a cell grid.
 
-Every burst loses its outermost ``BURST_EDGE_TRIM_PX`` pixels, which terrain
-correction fades, and each remaining pixel comes from the burst whose data
-edge is farthest from it, which puts the seam on the midline of every overlap.
+Every burst loses the pixels along its data edge that multilooking or the
+coherence window has darkened, and each remaining pixel comes from the burst
+whose data edge is farthest from it, which puts the seam on the midline of
+every overlap.
 """
 
 from __future__ import annotations
@@ -10,13 +11,13 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 import logging
+import math
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from s1bursts.errors import CompositeInputError, EmptyCompositeError
 from s1bursts.product import CoherenceProduct
-from s1bursts.product_tags import BURST_EDGE_TRIM_PX
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -36,6 +37,12 @@ type LoadedBand = tuple[ComposableProduct, NDArray[np.float32]]
 # overlap rule is exact for overlaps up to twice as wide; the widest measured
 # across the Alps is 4.8 km.
 EDGE_SEARCH_MARGIN_M = 3000.0
+
+# Ground size of one slant-range sample (2.33 m) at the far edge of IW1, the
+# widest of the far edges, where terrain correction moves the darkened pixels.
+GROUND_RANGE_SAMPLE_M = 3.9
+# Azimuth line spacing of IW SLCs.
+AZIMUTH_LINE_M = 14.0
 
 
 @dataclass(frozen=True)
@@ -81,17 +88,47 @@ def burst_key(product: ComposableProduct) -> BurstKey:
     return orbit, day, product.burst_id, product.sub_swath
 
 
-def trim(product: ComposableProduct, padded: NDArray[np.float32], margin: int) -> TrimmedBurst:
-    """Crop a widened read to the cell, without its outermost ``BURST_EDGE_TRIM_PX`` pixels.
+def auto_edge_trim_px(tags: Mapping[str, str], *, coherence: bool, grid_spacing: float) -> int:
+    """Return how many pixels along a burst's data edge its settings darken.
 
-    Terrain correction resamples the outermost pixels of a burst against
-    no-data, which fades them, so they are dropped. Holes inside the
-    footprint are not edges and keep their neighbors.
+    Multilooking divides the look block that straddles the data edge by the
+    full number of looks, and terrain correction moves that block about one
+    radar pixel outward, so a backscatter edge is darkened over two
+    multilooked pixels. The coherence window reaches degraded samples
+    outside the valid area over half its size, plus the SLC's dark first
+    line. Both take the worst case, since how much of the edge block is
+    valid differs from burst to burst and is not recorded.
+
+    Raises
+    ------
+    KeyError
+        If ``coherence`` is true and ``tags`` do not record the estimation
+        window, naming the missing tag.
+    """
+    if coherence:
+        win_rg = int(tags["COHERENCE_WINDOW_RANGE"])
+        win_az = int(tags["COHERENCE_WINDOW_AZIMUTH"])
+        fade_m = max(win_rg / 2 * GROUND_RANGE_SAMPLE_M, (win_az / 2 + 1) * AZIMUTH_LINE_M)
+    else:
+        # A product made without multilooking records no looks.
+        looks_rg = int(tags.get("MULTILOOK_RANGE", "1"))
+        looks_az = int(tags.get("MULTILOOK_AZIMUTH", "1"))
+        fade_m = 2 * max(looks_rg * GROUND_RANGE_SAMPLE_M, looks_az * AZIMUTH_LINE_M)
+    # Rounded first, so float error cannot add a pixel to an exact multiple.
+    return math.ceil(round(fade_m / grid_spacing, 6))
+
+
+def trim(
+    product: ComposableProduct, padded: NDArray[np.float32], margin: int, trim_px: int
+) -> TrimmedBurst:
+    """Crop a widened read to the cell, without the ``trim_px`` pixels along its data edge.
+
+    Holes inside the footprint are not edges and keep their neighbors.
     """
     depth = edge_depth(np.isfinite(padded), margin)
     height, width = padded.shape
     data = padded[margin : height - margin, margin : width - margin].copy()
-    data[depth <= BURST_EDGE_TRIM_PX] = np.nan
+    data[depth <= trim_px] = np.nan
     return TrimmedBurst(product, data, depth, margin + 1)
 
 
