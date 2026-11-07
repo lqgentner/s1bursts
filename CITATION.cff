@@ -28,5 +28,5 @@ keywords:
   - Copernicus
 # Bumped in each release PR; tests/test_citation.py checks them against the
 # newest release in CHANGELOG.md.
-version: 0.8.0
-date-released: 2026-11-03
+version: 0.9.0
+date-released: 2026-11-07

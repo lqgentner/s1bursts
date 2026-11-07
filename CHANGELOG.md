@@ -8,68 +8,34 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ## [Unreleased]
 
-### Added
+## [0.9.0] - 2026-11-07
 
-- s1bursts can be cited: each release is archived on Zenodo under the DOI
-  [10.5281/zenodo.23918246](https://doi.org/10.5281/zenodo.23918246), and
-  `CITATION.cff` holds the citation metadata.
+Composites now join bursts at the midline of their overlap, without their
+darkened edges. s1bursts is now citable: releases are archived on Zenodo under
+the DOI [10.5281/zenodo.23918246](https://doi.org/10.5281/zenodo.23918246); see
+`CITATION.cff`.
 
 ### Changed
 
-- **Breaking:** the bursts of one orbit and date are mosaicked at the midline
-  of their overlap, and every burst loses its darkened edge first, in every
-  `compose_*` method. Before, an overlap was taken from the burst with the
-  lowest `(burst_id, sub_swath)`, including the edge pixels that multilooking
-  or the coherence window darkens by 1 to 9 dB. The width of that edge follows
-  the inputs' looks or coherence window and the grid spacing: 4 pixels for RTC
-  and 5 for coherence at the default settings on a 10 m grid. The new
-  `burst_edge_trim` argument (default `True`) turns it off. Composite values
-  change along burst and sub-swath seams and at burst edges.
-  `COMPOSITING_PARAMETERS` records the pixels dropped, so with
-  `overwrite=False` a composite made by an earlier release now raises
-  `ProductSettingsMismatchError`; pass `overwrite=True` to rebuild it.
-  - LRW before: `aggregation=mean;clip_max_resolution=none`
-  - LRW after: `aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=4`
-  - Pass before: `aggregation=mean`
-  - Pass after: `aggregation=mean;burst_edge_trim_px=4`
-
-  The number follows the inputs. A cell that bursts reach only with their
-  darkened edge now has no valid input: an LRW composite raises
-  `EmptyCompositeError` (with `overwrite=True`, after deleting the earlier
-  composite), and a pass composite skips that direction. `compose_coherence_*`
-  raises `ValueError` for inputs that do not record their estimation window,
-  unless `burst_edge_trim=False`.
-- **Breaking:** the composite metadata builders `rtc_lrw_metadata()`,
-  `coh_lrw_metadata()`, `rtc_pass_metadata()`, `gtc_pass_metadata()`,
-  `coh_pass_metadata()` and `qa_metadata()` take a required keyword
-  `burst_edge_trim_px`, the pixels dropped along each burst's edge.
-  - Before: `rtc_pass_metadata(product, aggregation="mean", n_observations=3)`
-  - After: `rtc_pass_metadata(product, aggregation="mean", burst_edge_trim_px=4, n_observations=3)`
-- **Breaking:** `compose_coherence_lrw()` weights each pixel by the scattering
-  area of the RTC product of its own burst, and raises `CompositeInputError`
-  when a burst some pixel is taken from has none. Before, the RTC products of
-  the same orbit and date were mosaicked on their own, so another burst's area
-  could stand in.
-- Composites read every input 3 km beyond the cell, to find the burst edges
-  an overlap is split between; a 10 km cell reads about 2.6 times as much, and
-  loading holds about twice the memory.
-- The package summary reads "Sentinel-1 download, processing and compositing
-  in Python." instead of "... made easy."
-- **Breaking:** `img_resampling` accepts only `"NEAREST_NEIGHBOUR"` and
-  `"BILINEAR_INTERPOLATION"`, and `ResamplingMethod` lists only those two.
-  SNAP's cubic and sinc kernels blended the no-data marker into every pixel
-  next to missing data (burst edges, layover and shadow, DEM voids), giving
-  values as far off as -1e12 that were kept as valid. Products made with them
-  should be reprocessed.
-  - Before: `RTCConfig(img_resampling="CUBIC_CONVOLUTION")` built a graph.
-  - After: it raises `ValidationError`; the same holds for
-    `BICUBIC_INTERPOLATION` and the three `BISINC_*_POINT_INTERPOLATION`
-    methods, in every config.
-
-### Fixed
-
-- The warning about files named without their pass direction no longer
-  points to a nonexistent rename recipe.
+- **Breaking:** during compositing, the bursts of one orbit and date are joined
+  at the midline of their overlap: each pixel comes from the burst whose edge is
+  farther away, which is how SNAP's TOPSAR-Deburst and TOPSAR-Merge join bursts
+  and sub-swaths. Before, the burst with the lowest ID filled the whole overlap.
+  Composites from 0.8 raise `ProductSettingsMismatchError` with
+  `overwrite=False`; rebuild them with `overwrite=True`.
+- **Breaking:** the darkened edges of bursts are removed before compositing: 4
+  pixels for RTC and GTC and 5 for coherence at the default settings on a 10 m
+  grid, more with more looks or a larger window. Keep them with
+  `burst_edge_trim=False`.
+- **Breaking:** `compose_coherence_lrw()` raises `CompositeInputError` when a
+  burst that supplies coherence pixels has no RTC product of the same date.
+  Before, the scattering areas were mosaicked separately, so a neighbouring
+  burst's area could silently stand in.
+- **Breaking:** `img_resampling` accepts only `"BILINEAR_INTERPOLATION"` (the
+  default) and `"NEAREST_NEIGHBOUR"`. The cubic and sinc kernels corrupted
+  pixels next to missing data; reprocess products made with them.
+- **Breaking:** the composite metadata builders in `product_tags` take a
+  required keyword `burst_edge_trim_px`.
 
 ## [0.8.0] - 2026-11-03
 
