@@ -472,11 +472,6 @@ class TestGeocodingValidation:
         [
             "NEAREST_NEIGHBOUR",
             "BILINEAR_INTERPOLATION",
-            "CUBIC_CONVOLUTION",
-            "BISINC_5_POINT_INTERPOLATION",
-            "BISINC_11_POINT_INTERPOLATION",
-            "BISINC_21_POINT_INTERPOLATION",
-            "BICUBIC_INTERPOLATION",
         ],
     )
     def test_accepts_every_supported_image_resampling_method(self, method: str) -> None:
@@ -485,6 +480,25 @@ class TestGeocodingValidation:
         config = RTCConfig(img_resampling=method)
 
         assert f"<imgResamplingMethod>{method}</imgResamplingMethod>" in config.to_xml()
+
+    @pytest.mark.parametrize("config_cls", [RTCConfig, GTCConfig, CoherenceConfig])
+    @pytest.mark.parametrize(
+        "method",
+        [
+            "CUBIC_CONVOLUTION",
+            "BISINC_5_POINT_INTERPOLATION",
+            "BISINC_11_POINT_INTERPOLATION",
+            "BISINC_21_POINT_INTERPOLATION",
+            "BICUBIC_INTERPOLATION",
+        ],
+    )
+    def test_refuses_image_resampling_that_blends_in_the_no_data_marker(
+        self, config_cls: type[GeocodingConfig], method: str
+    ) -> None:
+        """These kernels weight the finite no-data marker into pixels next to missing data."""
+        with pytest.raises(ValidationError, match=f"img_resampling {method} .*no-data"):
+            # pyrefly: ignore [bad-argument-type]
+            config_cls(img_resampling=method)
 
     def test_dem_resampling_additionally_accepts_delaunay(self) -> None:
         """SNAP offers Delaunay interpolation for the DEM but not for the image."""
