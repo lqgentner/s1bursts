@@ -1499,10 +1499,8 @@ class ResolutionWeighter:
     # Private helpers — acquisitions
     # ------------------------------------------------------------------
 
-    @classmethod
-    def _acquisition_span(
-        cls, products: Collection[ComposableProduct]
-    ) -> product_tags.Acquisitions:
+    @staticmethod
+    def _acquisition_span(products: Collection[ComposableProduct]) -> product_tags.Acquisitions:
         """First and last acquisition date among ``products``, as calendar days.
 
         A burst found through CDSE carries its UTC acquisition time; one indexed

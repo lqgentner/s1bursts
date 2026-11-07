@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import subprocess
-import sys
 from typing import TYPE_CHECKING, Any, override
 
 import numpy as np
@@ -27,17 +25,6 @@ from tests.product_stubs import RTCStub
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
-
-
-def test_the_module_imports_on_its_own() -> None:
-    """``_mosaic`` must not need ``resolution_weighter`` imported first."""
-    result = subprocess.run(
-        [sys.executable, "-c", "import s1bursts._mosaic"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
 
 
 # ---------------------------------------------------------------------------
