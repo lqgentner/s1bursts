@@ -3074,3 +3074,18 @@ class TestBurstEdgeTrim:
         with pytest.raises(ValueError, match="burst_edge_trim=False"):
             scene.weighter.compose_coherence_by_pass([coh], scene.geobox)
         scene.weighter.compose_coherence_by_pass([coh], scene.geobox, burst_edge_trim=False)
+
+
+def test_a_composite_without_a_window_is_named_when_the_trim_cannot_be_derived(
+    scene: _Scene,
+) -> None:
+    """The skip check blames the existing composite, not the inputs."""
+    coh = _coh("2022-08-13", "2022-08-25")
+    _write_raster(scene.manager.get_product_path(coh), [_full(0.5)], {})
+    [composite] = scene.weighter.compose_coherence_by_pass(
+        [coh], scene.geobox, burst_edge_trim=False
+    ).values()
+    name = scene.manager.get_product_path(composite).name
+
+    with pytest.raises(ValueError, match=rf"^the existing composite '{name}' does not record"):
+        scene.weighter.compose_coherence_by_pass([coh], scene.geobox)

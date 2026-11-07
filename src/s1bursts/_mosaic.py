@@ -101,20 +101,13 @@ def auto_edge_trim_px(tags: Mapping[str, str], *, coherence: bool, grid_spacing:
 
     Raises
     ------
-    ValueError
+    KeyError
         If ``coherence`` is true and ``tags`` do not record the estimation
-        window.
+        window, naming the missing tag.
     """
     if coherence:
-        try:
-            win_rg = int(tags["COHERENCE_WINDOW_RANGE"])
-            win_az = int(tags["COHERENCE_WINDOW_AZIMUTH"])
-        except KeyError as err:
-            msg = (
-                f"the coherence inputs do not record {err.args[0]}, which the burst edge "
-                "trim is derived from; pass burst_edge_trim=False"
-            )
-            raise ValueError(msg) from err
+        win_rg = int(tags["COHERENCE_WINDOW_RANGE"])
+        win_az = int(tags["COHERENCE_WINDOW_AZIMUTH"])
         fade_m = max(win_rg / 2 * GROUND_RANGE_SAMPLE_M, (win_az / 2 + 1) * AZIMUTH_LINE_M)
     else:
         # A product made without multilooking records no looks.

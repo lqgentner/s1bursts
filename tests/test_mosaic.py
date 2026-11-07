@@ -135,7 +135,7 @@ class TestAutoEdgeTrim:
         assert auto_edge_trim_px(tags, coherence=True, grid_spacing=10.0) == expected
 
     def test_coherence_needs_the_window(self) -> None:
-        with pytest.raises(ValueError, match="COHERENCE_WINDOW"):
+        with pytest.raises(KeyError, match="COHERENCE_WINDOW_RANGE"):
             auto_edge_trim_px({}, coherence=True, grid_spacing=10.0)
 
 

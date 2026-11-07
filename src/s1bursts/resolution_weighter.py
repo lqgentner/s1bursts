@@ -360,10 +360,9 @@ class ResolutionWeighter:
             input outside the window is a ``ValueError``.
         burst_edge_trim
             Drop the edge of each burst before mosaicking, where multilooking
-            or the coherence window has darkened it. Its width follows the
-            inputs' looks or coherence window and the grid spacing: 4 pixels
-            for RTC and 5 for coherence at the default settings on a 10 m
-            grid. ``False`` keeps every pixel.
+            has darkened it. Its width follows the inputs' looks and the grid
+            spacing: 4 pixels at the default looks on a 10 m grid. ``False``
+            keeps every pixel.
 
         Returns
         -------
@@ -553,11 +552,10 @@ class ResolutionWeighter:
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
         burst_edge_trim
-            Drop the edge of each burst before mosaicking, where multilooking
-            or the coherence window has darkened it. Its width follows the
-            inputs' looks or coherence window and the grid spacing: 4 pixels
-            for RTC and 5 for coherence at the default settings on a 10 m
-            grid. ``False`` keeps every pixel.
+            Drop the edge of each burst before mosaicking, where the coherence
+            window has darkened it. Its width follows the inputs' estimation
+            window and the grid spacing: 5 pixels at the default window on a
+            10 m grid. ``False`` keeps every pixel.
 
         Returns
         -------
@@ -574,8 +572,9 @@ class ResolutionWeighter:
             If ``coh_products`` or ``rtc_products`` is empty, ``aggregation``
             is neither ``"mean"``, ``"median"`` nor a quantile level in
             ``(0, 1)``, an input lies outside ``time_range``, or
-            ``burst_edge_trim`` is ``True`` and the coherence inputs do not
-            record their estimation window.
+            ``burst_edge_trim`` is ``True`` and the coherence inputs, or with
+            ``overwrite=False`` the existing composite, do not record the
+            estimation window.
         EmptyCompositeError
             If no input has a valid pixel in ``geobox``; nothing is written.
         InconsistentInputsError
@@ -750,10 +749,9 @@ class ResolutionWeighter:
             input outside the window is a ``ValueError``.
         burst_edge_trim
             Drop the edge of each burst before mosaicking, where multilooking
-            or the coherence window has darkened it. Its width follows the
-            inputs' looks or coherence window and the grid spacing: 4 pixels
-            for RTC and 5 for coherence at the default settings on a 10 m
-            grid. ``False`` keeps every pixel.
+            has darkened it. Its width follows the inputs' looks and the grid
+            spacing: 4 pixels at the default looks on a 10 m grid. ``False``
+            keeps every pixel.
 
         Returns
         -------
@@ -859,10 +857,9 @@ class ResolutionWeighter:
             tags. An input outside the window is a ``ValueError``.
         burst_edge_trim
             Drop the edge of each burst before mosaicking, where multilooking
-            or the coherence window has darkened it. Its width follows the
-            inputs' looks or coherence window and the grid spacing: 4 pixels
-            for RTC and 5 for coherence at the default settings on a 10 m
-            grid. ``False`` keeps every pixel.
+            has darkened it. Its width follows the inputs' looks and the grid
+            spacing: 4 pixels at the default looks on a 10 m grid. ``False``
+            keeps every pixel.
 
         Returns
         -------
@@ -1187,11 +1184,10 @@ class ResolutionWeighter:
             ``FIRST_ACQUISITION_DATE`` and ``LAST_ACQUISITION_DATE`` tags. An
             input outside the window is a ``ValueError``.
         burst_edge_trim
-            Drop the edge of each burst before mosaicking, where multilooking
-            or the coherence window has darkened it. Its width follows the
-            inputs' looks or coherence window and the grid spacing: 4 pixels
-            for RTC and 5 for coherence at the default settings on a 10 m
-            grid. ``False`` keeps every pixel.
+            Drop the edge of each burst before mosaicking, where the coherence
+            window has darkened it. Its width follows the inputs' estimation
+            window and the grid spacing: 5 pixels at the default window on a
+            10 m grid. ``False`` keeps every pixel.
 
         Returns
         -------
@@ -1209,7 +1205,8 @@ class ResolutionWeighter:
             If ``coh_products`` is empty, ``aggregation`` is neither ``"mean"``,
             ``"median"`` nor a quantile level in ``(0, 1)``, an input lies
             outside ``time_range``, or ``burst_edge_trim`` is ``True`` and the
-            coherence inputs do not record their estimation window.
+            coherence inputs, or with ``overwrite=False`` the existing
+            composite, do not record the estimation window.
         EmptyCompositeError
             If no input of any direction has a valid pixel in ``geobox``;
             nothing is written.
@@ -1634,9 +1631,16 @@ class ResolutionWeighter:
         """Pixels to drop along each burst's data edge, as ``burst_edge_trim`` asks."""
         if not enabled:
             return 0
-        return _mosaic.auto_edge_trim_px(
-            tags, coherence=coherence, grid_spacing=geobox.resolution.x
-        )
+        try:
+            return _mosaic.auto_edge_trim_px(
+                tags, coherence=coherence, grid_spacing=geobox.resolution.x
+            )
+        except KeyError as err:
+            msg = (
+                f"the coherence inputs do not record {err.args[0]}, which the burst edge "
+                "trim is derived from; pass burst_edge_trim=False"
+            )
+            raise ValueError(msg) from err
 
     def _load_bursts(
         self,

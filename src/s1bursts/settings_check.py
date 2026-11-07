@@ -220,11 +220,19 @@ def _check_composite(
     measurement = headers[Layer.MEASUREMENT].tags
     trim_px = 0
     if burst_edge_trim:
-        trim_px = auto_edge_trim_px(
-            measurement,
-            coherence=isinstance(product, CohLRWComposite | CohPassComposite),
-            grid_spacing=geobox.resolution.x,
-        )
+        try:
+            trim_px = auto_edge_trim_px(
+                measurement,
+                coherence=isinstance(product, CohLRWComposite | CohPassComposite),
+                grid_spacing=geobox.resolution.x,
+            )
+        except KeyError as err:
+            msg = (
+                f"the existing composite '{paths[Layer.MEASUREMENT].name}' does not record "
+                f"{err.args[0]}, which the burst edge trim is derived from; pass "
+                "burst_edge_trim=False"
+            )
+            raise ValueError(msg) from err
     expected = _composite_settings(
         product,
         aggregation=aggregation,
