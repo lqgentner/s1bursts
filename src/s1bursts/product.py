@@ -103,16 +103,16 @@ class Layer(StrEnum):
     """Number of input products contributing to each composite pixel.
 
     On an LRW composite this counts the products carrying a non-zero
-    resolution weight, the CEOS-ARD Contributing Observations Image (SAR PFS
-    v1.3.1, item 2.21). Pass composites are unweighted, so there it counts the
-    products holding a finite value.
+    resolution weight, the CEOS-ARD Contributing Observations Image. Pass
+    composites are unweighted, so there it counts the products holding a
+    finite value.
     """
     QA_CQM = "QA-CQM"
     """Composite local resolution: the reciprocal of the weighted relative area.
 
     Dimensionless; high values mean high (good) local resolution. The CEOS-ARD
-    Composite Quality Map Image (SAR PFS v1.3.1, item 2.22), which defines it
-    by reference to Small et al. (2022), eq. 6; see
+    Composite Quality Map Image, which defines it by reference to Small et
+    al. (2022), eq. 6; see
     :mod:`s1bursts.resolution_weighter`. LRW composites only.
     """
 

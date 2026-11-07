@@ -335,7 +335,7 @@ class ResolutionWeighter:
         write_qa
             If ``True``, also write the two QA layers: a
             contributing-observations map (``Layer.QA_NUM``) and a composite
-            quality map (``Layer.QA_CQM``); see [2], items 2.21 and 2.22.
+            quality map (``Layer.QA_CQM``).
             ``QA-CQM`` is $1 / \sum_i W_i A_i$ under every ``aggregation``:
             under ``median`` or a quantile it describes the weighting, not the
             observations the composite's value was taken from.
@@ -528,7 +528,7 @@ class ResolutionWeighter:
         write_qa
             If ``True``, also write the two QA layers: a
             contributing-observations map (``Layer.QA_NUM``) and a composite
-            quality map (``Layer.QA_CQM``); see [2], items 2.21 and 2.22.
+            quality map (``Layer.QA_CQM``).
             ``QA-CQM`` is $1 / \sum_i W_i A_i$ under every ``aggregation``:
             under ``median`` or a quantile it describes the weighting, not the
             observations the composite's value was taken from.
@@ -1712,7 +1712,7 @@ class ResolutionWeighter:
 
         An observation contributes when it is finite and its resolution weight
         is non-zero, which is the pairing ``_weighted_mean`` sums over.  The
-        CEOS-ARD Contributing Observations Image (SAR PFS v1.3.1, item 2.21).
+        CEOS-ARD Contributing Observations Image.
         """
         contributes = np.isfinite(values) & (weights > 0)
         return np.count_nonzero(contributes, axis=0).astype(np.uint16)
