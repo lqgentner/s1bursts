@@ -215,12 +215,12 @@ class TestCompositingParameters:
 
     def test_records_the_aggregation_and_the_absent_clip(self) -> None:
         assert _lrw(aggregation="mean")["COMPOSITING_PARAMETERS"] == (
-            "aggregation=mean;clip_max_resolution=none"
+            "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2"
         )
 
     def test_records_a_clip_that_was_applied(self) -> None:
         assert _lrw(clip_max_resolution=2.5)["COMPOSITING_PARAMETERS"] == (
-            "aggregation=median;clip_max_resolution=2.5"
+            "aggregation=median;clip_max_resolution=2.5;burst_overlap=midline;burst_edge_trim_px=2"
         )
 
     def test_a_float_aggregation_is_named_as_a_quantile(self) -> None:
@@ -263,7 +263,9 @@ class TestGTCPass:
         assert tags["BACKSCATTER_MEASUREMENT"] == "Beta-0"
         assert tags["BACKSCATTER_CONVENTION"] == "Power"
         assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
-        assert tags["COMPOSITING_PARAMETERS"] == "aggregation=mean"
+        assert tags["COMPOSITING_PARAMETERS"] == (
+            "aggregation=mean;burst_overlap=midline;burst_edge_trim_px=2"
+        )
         assert tags["PASS_DIRECTION"] == "Ascending"
         assert tags["CONTRIBUTING_OBSERVATIONS"] == "5"
         assert tags["LAYER_NAME"] == "beta0"

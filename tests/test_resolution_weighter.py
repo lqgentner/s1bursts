@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, override
 import warnings as _warnings
@@ -34,7 +35,13 @@ from s1bursts.product import (
     RTCPassComposite,
     RTCProduct,
 )
-from s1bursts.resolution_weighter import ResolutionWeighter, _check_existing_composite
+from s1bursts.product_tags import BURST_EDGE_TRIM_PX
+from s1bursts.resolution_weighter import (
+    ResolutionWeighter,
+    _Burst,
+    _check_existing_composite,
+    _Mosaic,
+)
 from s1bursts.snap_graph import CoherenceConfig, RTCConfig
 from s1bursts.time_range import TimeRange
 
@@ -357,47 +364,65 @@ class TestAggregateUnweighted:
 
 
 # ---------------------------------------------------------------------------
-# _first_notna
-# ---------------------------------------------------------------------------
-
-
-class TestFirstNotna:
-    """Tests for ``ResolutionWeighter._first_notna``."""
-
-    def test_first_finite_wins(self) -> None:
-        """The first array's value is used wherever it is finite."""
-        a = np.array([[1.0, np.nan]])
-        b = np.array([[9.0, 7.0]])
-        result = ResolutionWeighter._first_notna([a, b])
-        np.testing.assert_allclose(result, [[1.0, 7.0]])
-
-    def test_all_nan_stays_nan(self) -> None:
-        """A position that is NaN in all arrays must remain NaN."""
-        a = np.array([[np.nan, 1.0]])
-        b = np.array([[np.nan, 2.0]])
-        result = ResolutionWeighter._first_notna([a, b])
-        assert np.isnan(result[0, 0])
-        np.testing.assert_allclose(result[0, 1], 1.0)
-
-    def test_three_arrays_first_wins(self) -> None:
-        """With three arrays the first finite value across all layers is used."""
-        a = np.array([[np.nan]])
-        b = np.array([[np.nan]])
-        c = np.array([[42.0]])
-        result = ResolutionWeighter._first_notna([a, b, c])
-        np.testing.assert_allclose(result, [[42.0]])
-
-    def test_single_array_passthrough(self) -> None:
-        """A single-element list must return the array unchanged (modulo NaN mask)."""
-        a = np.array([[1.0, np.nan]])
-        result = ResolutionWeighter._first_notna([a])
-        np.testing.assert_allclose(result[0, 0], 1.0)
-        assert np.isnan(result[0, 1])
-
-
-# ---------------------------------------------------------------------------
 # _stitch_by_orbit_date
 # ---------------------------------------------------------------------------
+
+# Pixels read around the cell in these tests, as ``_EDGE_SEARCH_MARGIN_M`` does.
+_MARGIN = 4
+
+
+def _burst(product: object, padded: NDArray[np.floating[Any]], margin: int = _MARGIN) -> _Burst:
+    """Measure and trim a widened read, as ``_load_bursts`` does."""
+    # Stubs carry only the fields the stitching reads.
+    # pyrefly: ignore [bad-argument-type]
+    return ResolutionWeighter._trimmed(product, padded.astype(np.float32), margin)
+
+
+def _strip(first: int, last: int, value: float, width: int = 24) -> NDArray[np.float32]:
+    """Return a read of three cell rows with burst data in columns ``first`` to ``last``."""
+    padded = np.full((3 + 2 * _MARGIN, width), np.nan, dtype=np.float32)
+    padded[:, first : last + 1] = value
+    return padded
+
+
+def _row(mosaic: _Mosaic) -> NDArray[np.float32]:
+    """Return the middle cell row of a mosaic of ``_strip`` reads, which all rows repeat."""
+    return mosaic.data[1]
+
+
+class TestTrimmed:
+    """Tests for ``ResolutionWeighter._trimmed``, the edge trim and depth."""
+
+    _P = _RTCStub(10, Timestamp("2023-01-10"), "VV")
+
+    def test_outermost_pixels_are_dropped(self) -> None:
+        """The two outermost pixels of the burst become NaN, in rows and columns."""
+        padded = np.full((20, 20), np.nan)
+        padded[6:15, 7:15] = 1.0
+        burst = _burst(self._P, padded)
+        cell = padded[_MARGIN:-_MARGIN, _MARGIN:-_MARGIN].copy()
+        cell[:, [3, 4, 9, 10]] = np.nan  # columns 7, 8, 13, 14 of the read
+        cell[[2, 3, 9, 10], :] = np.nan  # rows 6, 7, 13, 14 of the read
+        np.testing.assert_array_equal(burst.data, cell)
+
+    def test_holes_are_not_edges(self) -> None:
+        """A NaN hole inside the footprint keeps its neighbors, which stay deep."""
+        padded = np.ones((20, 20))
+        padded[10, 10] = np.nan
+        burst = _burst(self._P, padded)
+        assert np.count_nonzero(np.isnan(burst.data)) == 1
+        assert burst.depth[10 - _MARGIN, 11 - _MARGIN] > BURST_EDGE_TRIM_PX
+
+    def test_data_reaching_the_read_border_is_deep_and_kept(self) -> None:
+        """A run reaching the border of the read continues beyond it, so it has no edge there."""
+        burst = _burst(self._P, np.ones((11, 11)))
+        assert np.isfinite(burst.data).all()
+        np.testing.assert_array_equal(burst.depth, _MARGIN + 1)
+
+    def test_depth_counts_from_one_at_the_outermost_pixel(self) -> None:
+        """The depth is the distance to the nearer data edge along the row."""
+        burst = _burst(self._P, _strip(5, 18, 1.0))
+        np.testing.assert_array_equal(burst.depth[1, 2:6], [2, 3, 4, 5])  # read columns 6-9
 
 
 class TestStitchByOrbitDate:
@@ -409,104 +434,138 @@ class TestStitchByOrbitDate:
     def _weighter(self) -> ResolutionWeighter:
         return _make_weighter()
 
-    def test_two_products_same_group_are_mosaicked(self) -> None:
-        """Two products with the same orbit/date must be merged into one array."""
-        p1 = _RTCStub(rel_orbit_number=10, date=self._D1, polarization="VV")
-        p2 = _RTCStub(rel_orbit_number=10, date=self._D1, polarization="VV")
-        arr1 = np.array([[1.0, np.nan]])
-        arr2 = np.array([[9.0, 5.0]])
-        loaded = [(p1, arr1), (p2, arr2)]
+    def _stitch(self, *bursts: _Burst) -> dict[tuple[int, Timestamp], _Mosaic]:
+        return self._weighter()._stitch_by_orbit_date(bursts, "32TMS03")
 
-        # Stub carries only the fields read here.
-        # pyrefly: ignore [bad-argument-type]
-        result = self._weighter()._stitch_by_orbit_date(loaded)
+    def test_overlap_is_split_at_its_midline(self) -> None:
+        """Each pixel comes from the burst whose data edge is farther away.
 
-        assert len(result) == 1
-        (orbit, _date), mosaic = next(iter(result.items()))
-        assert orbit == 10
-        # First non-NaN: pixel0 → 1.0 (from arr1), pixel1 → 5.0 (from arr2)
-        np.testing.assert_allclose(mosaic, [[1.0, 5.0]])
-
-    @pytest.mark.parametrize(
-        ("first", "second"),
-        [((30346, "IW1"), (30347, "IW1")), ((30346, "IW1"), (30346, "IW2"))],
-    )
-    def test_overlap_is_taken_from_the_same_burst_in_any_input_order(
-        self,
-        first: tuple[int, str],
-        second: tuple[int, str],
-    ) -> None:
-        """The overlap of two bursts must not depend on the order they were passed.
-
-        Previously the first burst in the caller's list won, and a processing
-        run lists its products in completion order.
+        The overlap spans read columns 8 to 13, so its midline lies between
+        columns 10 and 11.
         """
-        p1 = _RTCStub(10, self._D1, "VV", burst_id=first[0], sub_swath=first[1])
-        p2 = _RTCStub(10, self._D1, "VV", burst_id=second[0], sub_swath=second[1])
-        arr1 = np.array([[1.0, 2.0, np.nan]])
-        arr2 = np.array([[np.nan, 8.0, 9.0]])
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        [mosaic] = self._stitch(
+            _burst(a, _strip(0, 13, 1.0)), _burst(b, _strip(8, 23, 2.0))
+        ).values()
+        # Cell columns 0-15 are read columns 4-19.
+        np.testing.assert_array_equal(_row(mosaic), [1.0] * 7 + [2.0] * 9)
 
-        # Stub carries only the fields read here.
-        # pyrefly: ignore [bad-argument-type]
-        forward = self._weighter()._stitch_by_orbit_date([(p1, arr1), (p2, arr2)])
-        # pyrefly: ignore [bad-argument-type]
-        reverse = self._weighter()._stitch_by_orbit_date([(p2, arr2), (p1, arr1)])
+    def test_an_azimuth_overlap_is_split_at_its_midline(self) -> None:
+        """Columns find the midline of an overlap between bursts above each other."""
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        [mosaic] = self._stitch(
+            _burst(a, _strip(0, 13, 1.0).T), _burst(b, _strip(8, 23, 2.0).T)
+        ).values()
+        np.testing.assert_array_equal(mosaic.data[:, 1], [1.0] * 7 + [2.0] * 9)
 
-        np.testing.assert_array_equal(next(iter(forward.values())), [[1.0, 2.0, 9.0]])
-        np.testing.assert_array_equal(next(iter(reverse.values())), [[1.0, 2.0, 9.0]])
+    def test_midline_follows_a_tilted_overlap(self) -> None:
+        """Rows and columns find the midline of a strip at an angle to the grid too."""
+        size = 60
+        rows, cols = np.mgrid[0:size, 0:size]
+        a = np.where(cols < 34 + 0.25 * rows, 1.0, np.nan)
+        b = np.where(cols >= 18 + 0.25 * rows, 2.0, np.nan)
+        pa = _RTCStub(10, self._D1, "VV", burst_id=1)
+        pb = _RTCStub(10, self._D1, "VV", burst_id=2)
+        [mosaic] = self._stitch(_burst(pa, a, 10), _burst(pb, b, 10)).values()
+        for cell_row, values in enumerate(mosaic.data):
+            switch = 10 + int(np.argmax(values == 2.0))  # first read column from b
+            midline = 26 + 0.25 * (cell_row + 10)
+            assert abs(switch - midline) <= 1
+
+    def test_a_tie_goes_to_the_lowest_burst_in_any_input_order(self) -> None:
+        """On the midline pixel itself, the lower (burst_id, sub_swath) wins.
+
+        The caller's list order is arbitrary, as a processing run lists its
+        products in completion order.
+        """
+        low = _RTCStub(10, self._D1, "VV", burst_id=1, sub_swath="IW2")
+        high = _RTCStub(10, self._D1, "VV", burst_id=2, sub_swath="IW1")
+        # Overlap in read columns 8-12; column 10 lies 3 pixels inside both.
+        first = _burst(high, _strip(0, 12, 1.0))
+        second = _burst(low, _strip(8, 23, 2.0))
+        for order in ((first, second), (second, first)):
+            [mosaic] = self._stitch(*order).values()
+            assert _row(mosaic)[10 - _MARGIN] == 2.0
+
+    def test_an_edge_outside_the_cell_still_counts(self) -> None:
+        """A data edge in the margin around the cell places the midline correctly."""
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        # b starts at read column 1, left of the cell; the overlap is columns 1-9.
+        [mosaic] = self._stitch(
+            _burst(a, _strip(0, 9, 1.0)), _burst(b, _strip(1, 23, 2.0))
+        ).values()
+        np.testing.assert_array_equal(_row(mosaic)[:4], [1.0, 1.0, 2.0, 2.0])
+
+    def test_a_hole_in_the_deeper_burst_takes_the_other(self) -> None:
+        """Where the deeper burst has no data, the other burst's value is used."""
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        holed = _strip(0, 13, 1.0)
+        holed[:, 10] = np.nan
+        [mosaic] = self._stitch(_burst(a, holed), _burst(b, _strip(8, 23, 2.0))).values()
+        assert _row(mosaic)[10 - _MARGIN] == 2.0
+        assert _row(mosaic)[9 - _MARGIN] == 1.0
+
+    def test_index_names_the_source_burst(self) -> None:
+        """``index`` points into ``sources``, and is -1 where no burst has data."""
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        [mosaic] = self._stitch(
+            _burst(a, _strip(0, 13, 1.0)), _burst(b, _strip(8, 18, 2.0))
+        ).values()
+        assert mosaic.sources == (a, b)
+        np.testing.assert_array_equal(mosaic.index[1], [0] * 7 + [1] * 6 + [-1] * 3)
+
+    def test_two_bursts_deeper_than_the_margin_are_logged(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Where two bursts cover the whole read, their depths cannot be ranked."""
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        with caplog.at_level(logging.WARNING, logger="s1bursts.resolution_weighter"):
+            [mosaic] = self._stitch(
+                _burst(a, np.ones((11, 11))), _burst(b, np.full((11, 11), 2.0))
+            ).values()
+        assert "32TMS03, orbit 10 on 2023-01-10: 9 pixels" in caplog.text
+        np.testing.assert_array_equal(mosaic.data, 1.0)
+
+    def test_a_ranked_overlap_is_not_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An overlap narrower than twice the margin is decided without a warning."""
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        with caplog.at_level(logging.WARNING, logger="s1bursts.resolution_weighter"):
+            self._stitch(_burst(a, _strip(0, 13, 1.0)), _burst(b, _strip(8, 23, 2.0)))
+        assert not caplog.records
 
     def test_different_dates_produce_separate_groups(self) -> None:
         """Products with different acquisition dates must produce separate keys."""
         p1 = _RTCStub(rel_orbit_number=10, date=self._D1, polarization="VV")
         p2 = _RTCStub(rel_orbit_number=10, date=self._D2, polarization="VV")
-        arr1 = np.array([[1.0]])
-        arr2 = np.array([[2.0]])
-        loaded = [(p1, arr1), (p2, arr2)]
-
-        # Stub carries only the fields read here.
-        # pyrefly: ignore [bad-argument-type]
-        result = self._weighter()._stitch_by_orbit_date(loaded)
-
+        result = self._stitch(_burst(p1, np.ones((9, 9))), _burst(p2, np.ones((9, 9))))
         assert len(result) == 2
 
     def test_different_orbits_produce_separate_groups(self) -> None:
         """Products with different orbit numbers must produce separate keys."""
         p1 = _RTCStub(rel_orbit_number=10, date=self._D1, polarization="VV")
         p2 = _RTCStub(rel_orbit_number=20, date=self._D1, polarization="VV")
-        arr1 = np.array([[1.0]])
-        arr2 = np.array([[2.0]])
-        loaded = [(p1, arr1), (p2, arr2)]
-
-        # Stub carries only the fields read here.
-        # pyrefly: ignore [bad-argument-type]
-        result = self._weighter()._stitch_by_orbit_date(loaded)
-
+        result = self._stitch(_burst(p1, np.ones((9, 9))), _burst(p2, np.ones((9, 9))))
         assert len(result) == 2
 
     def test_result_is_sorted_by_key(self) -> None:
         """Output dict must be sorted by (orbit_number, date) key."""
         p_late = _RTCStub(rel_orbit_number=10, date=self._D2, polarization="VV")
         p_early = _RTCStub(rel_orbit_number=10, date=self._D1, polarization="VV")
-        arr = np.array([[1.0]])
-        loaded = [(p_late, arr), (p_early, arr)]
-
-        # Stub carries only the fields read here.
-        # pyrefly: ignore [bad-argument-type]
-        result = self._weighter()._stitch_by_orbit_date(loaded)
-
+        result = self._stitch(_burst(p_late, np.ones((9, 9))), _burst(p_early, np.ones((9, 9))))
         keys = list(result.keys())
         assert keys == sorted(keys)
-        # Earlier date must come first
         assert keys[0][1] < keys[1][1]
 
     def test_coherence_product_uses_date_primary_for_key(self) -> None:
-        """CoherenceProduct-like objects group by date_primary, not a 'date' attr.
-
-        Construct a frozen CoherenceProduct via object.__new__ (bypassing the
-        LUT), give it date_primary='2023-07-01', then feed two copies with the
-        same (rel_orbit_number=99, date_primary) into _stitch_by_orbit_date.
-        They must collapse into a single group.
-        """
+        """CoherenceProduct-like objects group by date_primary, not a 'date' attr."""
         crs = CRS.from_epsg(32632)
 
         # Since CoherenceProduct is frozen we cannot setattr safely for a
@@ -519,9 +578,9 @@ class TestStitchByOrbitDate:
             def rel_orbit_number(self) -> int:
                 return 99
 
-        def _make_coh_nolut(date_primary: Timestamp) -> _CohNoLUT:
+        def _make_coh_nolut(date_primary: Timestamp, burst_id: int) -> _CohNoLUT:
             prod = object.__new__(_CohNoLUT)
-            object.__setattr__(prod, "burst_id", 0)
+            object.__setattr__(prod, "burst_id", burst_id)
             object.__setattr__(prod, "sub_swath", "IW1")
             object.__setattr__(prod, "crs", crs)
             object.__setattr__(prod, "date_primary", date_primary)
@@ -530,19 +589,12 @@ class TestStitchByOrbitDate:
             return prod
 
         d = Timestamp("2023-07-01")
-        p1 = _make_coh_nolut(d)
-        p2 = _make_coh_nolut(d)
-        arr1 = np.array([[1.0, np.nan]])
-        arr2 = np.array([[9.0, 5.0]])
-        loaded = [(p1, arr1), (p2, arr2)]
-
-        result = self._weighter()._stitch_by_orbit_date(loaded)
-
-        # Both products have the same (rel_orbit_number=99, date_primary) →
-        # they must be merged into a single key.
-        assert len(result) == 1
-        _, mosaic = next(iter(result.items()))
-        np.testing.assert_allclose(mosaic, [[1.0, 5.0]])
+        result = self._stitch(
+            _burst(_make_coh_nolut(d, 1), _strip(0, 13, 1.0)),
+            _burst(_make_coh_nolut(d, 2), _strip(8, 23, 2.0)),
+        )
+        # Both products share (rel_orbit_number=99, date_primary), so one group.
+        assert list(result) == [(99, d)]
 
 
 # ---------------------------------------------------------------------------
@@ -671,32 +723,54 @@ class TestAggregateWeighted:
 
 
 # ---------------------------------------------------------------------------
-# _check_area_coverage
+# _areas
 # ---------------------------------------------------------------------------
 
 
-class TestCheckSimCoverage:
-    """Tests for ``ResolutionWeighter._check_area_coverage``."""
+class TestAreas:
+    """Tests for ``ResolutionWeighter._areas``."""
 
-    def test_full_coverage_passes(self) -> None:
-        """No error is raised when every observation group has a sim group."""
-        arr: NDArray[np.floating[Any]] = np.zeros((1, 1))
-        key_a = (10, Timestamp("2024-01-01"))
-        key_b = (10, Timestamp("2024-01-13"))
-        obs = {key_a: arr, key_b: arr}
-        sim = {key_a: arr, key_b: arr}
-        # Must not raise.
-        ResolutionWeighter._check_area_coverage(obs, sim)
+    _D1 = Timestamp("2023-01-10")
 
-    def test_missing_group_raises(self) -> None:
-        """A missing sim group raises CompositeInputError naming the orbit/date."""
-        arr: NDArray[np.floating[Any]] = np.zeros((1, 1))
-        key_a = (10, Timestamp("2024-01-01"))
-        key_b = (10, Timestamp("2024-01-13"))
-        obs = {key_a: arr, key_b: arr}
-        sim = {key_a: arr}  # key_b missing
-        with pytest.raises(CompositeInputError, match=r"orbit 10, 2024-01-13"):
-            ResolutionWeighter._check_area_coverage(obs, sim)
+    def _mosaics(self) -> tuple[dict[tuple[int, Timestamp], _Mosaic], _RTCStub, _RTCStub]:
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        mosaics = _make_weighter()._stitch_by_orbit_date(
+            [_burst(a, _strip(0, 13, 1.0)), _burst(b, _strip(8, 23, 2.0))], "32TMS03"
+        )
+        return mosaics, a, b
+
+    def test_area_comes_from_the_burst_of_each_value(self) -> None:
+        """Each pixel's area is read from the RTC product of the burst its value came from."""
+        mosaics, a, b = self._mosaics()
+        cell = np.ones((3, 16), dtype=np.float32)
+        # Stubs carry only the fields the lookup reads.
+        # pyrefly: ignore [bad-argument-type]
+        areas = _make_weighter()._areas(mosaics, [(b, cell * 20), (a, cell * 10)])
+        [area] = areas.values()
+        np.testing.assert_array_equal(area[1], [10.0] * 7 + [20.0] * 9)
+
+    def test_a_missing_burst_raises(self) -> None:
+        """A burst some pixel comes from without its RTC product is an input error."""
+        mosaics, a, _ = self._mosaics()
+        cell = np.ones((3, 16), dtype=np.float32)
+        with pytest.raises(CompositeInputError, match=r"2 IW1 \(orbit 10, 2023-01-10\)"):
+            # Stubs carry only the fields the lookup reads.
+            # pyrefly: ignore [bad-argument-type]
+            _make_weighter()._areas(mosaics, [(a, cell)])
+
+    def test_a_burst_no_pixel_comes_from_needs_no_area(self) -> None:
+        """An RTC product is needed only for the bursts the mosaic takes pixels from."""
+        a = _RTCStub(10, self._D1, "VV", burst_id=1)
+        b = _RTCStub(10, self._D1, "VV", burst_id=2)
+        # b has data only beyond the cell.
+        mosaics = _make_weighter()._stitch_by_orbit_date(
+            [_burst(a, np.ones((11, 24))), _burst(b, _strip(20, 23, 2.0))], "32TMS03"
+        )
+        cell = np.ones((3, 16), dtype=np.float32)
+        # pyrefly: ignore [bad-argument-type]
+        [area] = _make_weighter()._areas(mosaics, [(a, cell)]).values()
+        np.testing.assert_array_equal(area, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -893,6 +967,7 @@ class TestComposeReturns:
             mgrs_code="32TMS03",
             crs=CRS.from_epsg(32632),
             transform=Affine(10.0, 0.0, 500000.0, 0.0, -10.0, 5100000.0),
+            resolution=SimpleNamespace(x=10.0, y=-10.0),
             height=2,
             width=2,
         )
@@ -904,21 +979,23 @@ class TestComposeReturns:
         power: dict[int, np.ndarray],
         area: dict[int, np.ndarray] | None = None,
     ) -> None:
-        def fake_load(
-            products: list[Any],
+        def fake_load_one(
+            product: Any,
             geobox: object,  # noqa: ARG001
-            band: int = 1,
-        ) -> list[tuple[Any, np.ndarray]]:
+            band: int,
+            margin: int,
+        ) -> tuple[Any, np.ndarray]:
             src = power if band == 1 else area
             assert src is not None
-            return [(p, src[id(p)]) for p in products]
+            # Valid data around the cell, as a burst larger than the cell has.
+            return product, np.pad(src[id(product)], margin, constant_values=1.0)
 
         # Instance attributes shadow the real windowed reader and the provenance
         # lookup, which the stubs have no file for. Written through ``vars`` because
         # Pyrefly 1.4 rejects assigning to a method, and 1.3 reports it under a
         # different code, so no single ignore comment fits both.
         vars(weighter).update(
-            _load_band=fake_load, _read_tags=lambda products: [{} for _ in products]
+            _load_one=fake_load_one, _read_tags=lambda products: [{} for _ in products]
         )
 
     def test_rtc_lrw_without_qa_holds_the_measurement(self, tmp_path: Path) -> None:
@@ -1064,6 +1141,7 @@ class TestSaveStatisticsAndChecksum:
             mgrs_code="32TMS03",
             crs=CRS.from_epsg(32632),
             transform=Affine(10.0, 0.0, 500000.0, 0.0, -10.0, 5100000.0),
+            resolution=SimpleNamespace(x=10.0, y=-10.0),
             height=2,
             width=2,
         )
@@ -1107,27 +1185,39 @@ def _geobox() -> MGRSGeoBox:
     )
 
 
+# Data around the test cell, so its pixels are not a burst's trimmed edge.
+_FRAME = BURST_EDGE_TRIM_PX + 1
+
+
 def _write_raster(
     path: Path | UPath,
     bands: list[NDArray[np.floating[Any]]],
     tags: dict[str, str] | None = None,
+    *,
+    frame: bool = True,
 ) -> None:
-    """Write a small georeferenced GeoTIFF aligned to the test geobox."""
+    """Write a small GeoTIFF holding ``bands`` on the test geobox.
+
+    A burst product gets a frame of valid data around the cell, as a burst
+    larger than the cell has; a composite covers the cell exactly.
+    """
+    pad = _FRAME if frame else 0
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(
         path,
         "w",
         driver="GTiff",
-        width=_TILE,
-        height=_TILE,
+        width=_TILE + 2 * pad,
+        height=_TILE + 2 * pad,
         count=len(bands),
         dtype="float32",
         crs=_UTM32,
-        transform=Affine(10.0, 0.0, 400000.0, 0.0, -10.0, 5200000.0),
+        transform=Affine(10.0, 0.0, 400000.0 - 10 * pad, 0.0, -10.0, 5200000.0 + 10 * pad),
         nodata=np.nan,
     ) as dst:
         for index, band in enumerate(bands, 1):
-            dst.write(band.astype("float32"), index)
+            framed = np.pad(band.astype("float32"), pad, constant_values=1.0)
+            dst.write(framed, index)
         if tags:
             dst.update_tags(**tags)
 
@@ -1922,7 +2012,9 @@ class TestCompositeTags:
             assert tags["BACKSCATTER_CONVENTION"] == "Power"
             assert tags["CONTRIBUTING_OBSERVATIONS"] == "2"
             # The parameters must be the ones this call actually used.
-            assert tags["COMPOSITING_PARAMETERS"] == "aggregation=mean;clip_max_resolution=2"
+            assert tags["COMPOSITING_PARAMETERS"] == (
+                "aggregation=mean;clip_max_resolution=2;burst_overlap=midline;burst_edge_trim_px=2"
+            )
             assert tags["METADATA_VOCABULARY"] == product_tags.METADATA_VOCABULARY
             assert src.units == ("linear power",)
             assert src.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
@@ -1936,8 +2028,9 @@ class TestCompositeTags:
         composite = scene.weighter.compose_rtc_lrw(products, scene.geobox)
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
-            assert (
-                src.tags()["COMPOSITING_PARAMETERS"] == "aggregation=mean;clip_max_resolution=none"
+            assert src.tags()["COMPOSITING_PARAMETERS"] == (
+                "aggregation=mean;clip_max_resolution=none"
+                ";burst_overlap=midline;burst_edge_trim_px=2"
             )
             assert src.read(1) == pytest.approx(_full(4.0))
 
@@ -2884,8 +2977,8 @@ class TestSkipChecksTheSettings:
         assert excinfo.value.path == scene.manager.get_product_path(composite)
         assert excinfo.value.differences == {
             "COMPOSITING_PARAMETERS": (
-                "aggregation=median;clip_max_resolution=none",
-                "aggregation=mean;clip_max_resolution=none",
+                "aggregation=median;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2",
+                "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2",
             )
         }
         assert "overwrite=True" in str(excinfo.value)
@@ -2961,13 +3054,18 @@ class TestSkipChecksTheSettings:
     ) -> None:
         composite = scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
         for layer in composite.layers:
-            _write_raster(scene.manager.get_product_path(composite, layer), [_full(5.0)])
+            _write_raster(
+                scene.manager.get_product_path(composite, layer), [_full(5.0)], frame=False
+            )
 
         with pytest.raises(ProductSettingsMismatchError, match="overwrite=True") as excinfo:
             scene.weighter.compose_rtc_lrw(products, scene.geobox, write_qa=True)
 
         assert excinfo.value.differences == {
-            "COMPOSITING_PARAMETERS": (None, "aggregation=mean;clip_max_resolution=none")
+            "COMPOSITING_PARAMETERS": (
+                None,
+                "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2",
+            )
         }
 
     # Previously skipped without checking, with a warning.
@@ -2976,7 +3074,7 @@ class TestSkipChecksTheSettings:
     ) -> None:
         composites = scene.weighter.compose_rtc_by_pass(products, scene.geobox)
         for composite in composites.values():
-            _write_raster(scene.manager.get_product_path(composite), [_full(5.0)])
+            _write_raster(scene.manager.get_product_path(composite), [_full(5.0)], frame=False)
 
         with pytest.raises(ProductSettingsMismatchError, match="COMPOSITING_PARAMETERS"):
             scene.weighter.compose_rtc_by_pass(products, scene.geobox)
@@ -3052,3 +3150,125 @@ class TestSkipChecksTheSettings:
 
         # The existing descending composite is checked first, but listed second.
         assert list(again) == ["Ascending", "Descending"]
+
+
+class TestBurstOverlap:
+    """Two bursts of one orbit and date that overlap within the cell.
+
+    Burst ``left`` has data up to cell column 6 and ``right`` from cell
+    column 1, both continuing beyond the cell. After their outer two pixels
+    are dropped, cell columns 3 and 4 remain in both, and the midline of the
+    overlap lies between them.
+    """
+
+    _LEFT = 30346
+    _RIGHT = 30348
+
+    @staticmethod
+    def _write(path: Path | UPath, values: list[float], first: int, last: int) -> None:
+        """Write a burst with data in cell columns ``first`` to ``last`` and beyond the cell."""
+        size = _TILE + 2 * _FRAME
+        framed = []
+        for value in values:
+            band = np.full((size, size), np.nan, dtype=np.float32)
+            band[:, _FRAME + first : _FRAME + last + 1] = value
+            framed.append(band)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.open(
+            path,
+            "w",
+            driver="GTiff",
+            width=size,
+            height=size,
+            count=len(framed),
+            dtype="float32",
+            crs=_UTM32,
+            transform=Affine(
+                10.0, 0.0, 400000.0 - 10 * _FRAME, 0.0, -10.0, 5200000.0 + 10 * _FRAME
+            ),
+            nodata=np.nan,
+        ) as dst:
+            for index, band in enumerate(framed, 1):
+                dst.write(band, index)
+
+    def test_rtc_value_and_area_come_from_the_burst_nearer_the_midline(
+        self, scene: _Scene
+    ) -> None:
+        left = _rtc("2022-08-13", burst_id=self._LEFT)
+        right = _rtc("2022-08-13", burst_id=self._RIGHT)
+        self._write(scene.manager.get_product_path(left), [1.0, 2.0], -_FRAME, 6)
+        self._write(scene.manager.get_product_path(right), [3.0, 4.0], 1, _TILE + _FRAME)
+
+        composite = scene.weighter.compose_rtc_lrw([right, left], scene.geobox, write_qa=True)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            np.testing.assert_array_equal(src.read(1), np.tile([1.0] * 4 + [3.0] * 4, (8, 1)))
+            assert src.tags()["CONTRIBUTING_OBSERVATIONS"] == "1"
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_CQM)) as src:
+            np.testing.assert_array_equal(src.read(1), np.tile([0.5] * 4 + [0.25] * 4, (8, 1)))
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_NUM)) as src:
+            assert (src.read(1) == 1).all()
+
+    def test_coherence_area_comes_from_the_rtc_product_of_the_same_burst(
+        self, scene: _Scene
+    ) -> None:
+        cohs = [_coh("2022-08-13", "2022-08-25", burst_id=b) for b in (self._LEFT, self._RIGHT)]
+        rtcs = [_rtc("2022-08-13", burst_id=b) for b in (self._LEFT, self._RIGHT)]
+        self._write(scene.manager.get_product_path(cohs[0]), [0.2], -_FRAME, 6)
+        self._write(scene.manager.get_product_path(cohs[1]), [0.8], 1, _TILE + _FRAME)
+        for rtc, area in zip(rtcs, (2.0, 4.0), strict=True):
+            _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(area)])
+
+        composite = scene.weighter.compose_coherence_lrw(cohs, rtcs, scene.geobox, write_qa=True)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            np.testing.assert_allclose(src.read(1), np.tile([0.2] * 4 + [0.8] * 4, (8, 1)))
+        with rasterio.open(scene.manager.get_product_path(composite, Layer.QA_CQM)) as src:
+            np.testing.assert_array_equal(src.read(1), np.tile([0.5] * 4 + [0.25] * 4, (8, 1)))
+
+    def test_coherence_without_the_rtc_product_of_its_burst_raises(self, scene: _Scene) -> None:
+        """Another burst's RTC product of the same date does not stand in for it."""
+        cohs = [_coh("2022-08-13", "2022-08-25", burst_id=b) for b in (self._LEFT, self._RIGHT)]
+        rtc = _rtc("2022-08-13", burst_id=self._LEFT)
+        self._write(scene.manager.get_product_path(cohs[0]), [0.2], -_FRAME, 6)
+        self._write(scene.manager.get_product_path(cohs[1]), [0.8], 1, _TILE + _FRAME)
+        _write_raster(scene.manager.get_product_path(rtc), [_full(1.0), _full(2.0)])
+
+        with pytest.raises(CompositeInputError, match=rf"{self._RIGHT} IW1 \(orbit 15"):
+            scene.weighter.compose_coherence_lrw(cohs, [rtc], scene.geobox)
+
+    def test_coherence_pass_composite_takes_the_burst_nearer_the_midline(
+        self, scene: _Scene
+    ) -> None:
+        cohs = [_coh("2022-08-13", "2022-08-25", burst_id=b) for b in (self._LEFT, self._RIGHT)]
+        self._write(scene.manager.get_product_path(cohs[0]), [0.2], -_FRAME, 6)
+        self._write(scene.manager.get_product_path(cohs[1]), [0.8], 1, _TILE + _FRAME)
+
+        [composite] = scene.weighter.compose_coherence_by_pass(cohs, scene.geobox).values()
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            np.testing.assert_allclose(src.read(1), np.tile([0.2] * 4 + [0.8] * 4, (8, 1)))
+
+    def test_pass_composite_takes_the_burst_nearer_the_midline(self, scene: _Scene) -> None:
+        left = _rtc("2022-08-13", burst_id=self._LEFT)
+        right = _rtc("2022-08-13", burst_id=self._RIGHT)
+        self._write(scene.manager.get_product_path(left), [1.0, 2.0], -_FRAME, 6)
+        self._write(scene.manager.get_product_path(right), [3.0, 4.0], 1, _TILE + _FRAME)
+
+        [composite] = scene.weighter.compose_rtc_by_pass([left, right], scene.geobox).values()
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            np.testing.assert_array_equal(src.read(1), np.tile([1.0] * 4 + [3.0] * 4, (8, 1)))
+
+    def test_the_outermost_pixels_of_a_burst_do_not_reach_the_composite(
+        self, scene: _Scene
+    ) -> None:
+        """The two pixels at a burst's data edge are dropped, also where no burst overlaps."""
+        product = _rtc("2022-08-13", burst_id=self._LEFT)
+        self._write(scene.manager.get_product_path(product), [1.0, 2.0], -_FRAME, 5)
+
+        composite = scene.weighter.compose_rtc_lrw([product], scene.geobox)
+
+        with rasterio.open(scene.manager.get_product_path(composite)) as src:
+            expected = np.tile([1.0] * 4 + [np.nan] * 4, (8, 1))
+            np.testing.assert_array_equal(src.read(1), expected)
