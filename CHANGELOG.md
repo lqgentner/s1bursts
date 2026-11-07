@@ -25,13 +25,13 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
   and 5 for coherence at the default settings on a 10 m grid. The new
   `burst_edge_trim` argument (default `True`) turns it off. Composite values
   change along burst and sub-swath seams and at burst edges.
-  `COMPOSITING_PARAMETERS` records the rule and the pixels dropped, so with
+  `COMPOSITING_PARAMETERS` records the pixels dropped, so with
   `overwrite=False` a composite made by an earlier release now raises
   `ProductSettingsMismatchError`; pass `overwrite=True` to rebuild it.
   - LRW before: `aggregation=mean;clip_max_resolution=none`
-  - LRW after: `aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=4`
+  - LRW after: `aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=4`
   - Pass before: `aggregation=mean`
-  - Pass after: `aggregation=mean;burst_overlap=midline;burst_edge_trim_px=4`
+  - Pass after: `aggregation=mean;burst_edge_trim_px=4`
 
   The number follows the inputs. A cell that bursts reach only with their
   darkened edge now has no valid input: an LRW composite raises

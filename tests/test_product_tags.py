@@ -225,27 +225,25 @@ class TestCompositingParameters:
 
     def test_records_the_aggregation_and_the_absent_clip(self) -> None:
         assert _lrw(aggregation="mean")["COMPOSITING_PARAMETERS"] == (
-            "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=2"
+            "aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=2"
         )
 
     def test_records_a_clip_that_was_applied(self) -> None:
         assert _lrw(clip_max_resolution=2.5)["COMPOSITING_PARAMETERS"] == (
-            "aggregation=median;clip_max_resolution=2.5;burst_overlap=midline;burst_edge_trim_px=2"
+            "aggregation=median;clip_max_resolution=2.5;burst_edge_trim_px=2"
         )
 
     def test_records_the_burst_edge_trim(self) -> None:
         tags = _lrw(aggregation="mean", burst_edge_trim_px=5)
         assert tags["COMPOSITING_PARAMETERS"] == (
-            "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=5"
+            "aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=5"
         )
 
     def test_a_pass_composite_records_the_burst_edge_trim(self) -> None:
         tags = product_tags.rtc_pass_metadata(
             _rtc_pass(), aggregation="mean", burst_edge_trim_px=0, n_observations=1
         ).tags
-        assert tags["COMPOSITING_PARAMETERS"] == (
-            "aggregation=mean;burst_overlap=midline;burst_edge_trim_px=0"
-        )
+        assert tags["COMPOSITING_PARAMETERS"] == ("aggregation=mean;burst_edge_trim_px=0")
 
     def test_a_float_aggregation_is_named_as_a_quantile(self) -> None:
         assert "aggregation=quantile=0.9" in _lrw(aggregation=0.9)["COMPOSITING_PARAMETERS"]
@@ -289,9 +287,7 @@ class TestGTCPass:
         assert tags["BACKSCATTER_MEASUREMENT"] == "Beta-0"
         assert tags["BACKSCATTER_CONVENTION"] == "Power"
         assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
-        assert tags["COMPOSITING_PARAMETERS"] == (
-            "aggregation=mean;burst_overlap=midline;burst_edge_trim_px=2"
-        )
+        assert tags["COMPOSITING_PARAMETERS"] == ("aggregation=mean;burst_edge_trim_px=2")
         assert tags["PASS_DIRECTION"] == "Ascending"
         assert tags["CONTRIBUTING_OBSERVATIONS"] == "5"
         assert tags["LAYER_NAME"] == "beta0"

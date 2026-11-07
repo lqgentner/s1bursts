@@ -252,12 +252,12 @@ def _aggregation_string(aggregation: Aggregation) -> str:
 
 
 def _burst_mosaicking(burst_edge_trim_px: int) -> str:
-    """How the bursts of one orbit and date were mosaicked.
+    """Render the pixels dropped along each burst's data edge before mosaicking.
 
-    Part of the compositing parameters, so a composite mosaicked another way
+    Part of the compositing parameters, so a composite trimmed another way
     is not skipped as existing.
     """
-    return f"burst_overlap=midline;burst_edge_trim_px={burst_edge_trim_px}"
+    return f"burst_edge_trim_px={burst_edge_trim_px}"
 
 
 def _compositing_parameters(

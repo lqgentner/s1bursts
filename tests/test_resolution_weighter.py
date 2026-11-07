@@ -1679,7 +1679,7 @@ class TestCompositeTags:
             assert tags["CONTRIBUTING_OBSERVATIONS"] == "2"
             # The parameters must be the ones this call actually used.
             assert tags["COMPOSITING_PARAMETERS"] == (
-                "aggregation=mean;clip_max_resolution=2;burst_overlap=midline;burst_edge_trim_px=3"
+                "aggregation=mean;clip_max_resolution=2;burst_edge_trim_px=3"
             )
             assert tags["METADATA_VOCABULARY"] == product_tags.METADATA_VOCABULARY
             assert src.units == ("linear power",)
@@ -1695,8 +1695,7 @@ class TestCompositeTags:
 
         with rasterio.open(scene.manager.get_product_path(composite)) as src:
             assert src.tags()["COMPOSITING_PARAMETERS"] == (
-                "aggregation=mean;clip_max_resolution=none"
-                ";burst_overlap=midline;burst_edge_trim_px=3"
+                "aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=3"
             )
             assert src.read(1) == pytest.approx(_full(4.0))
 
@@ -2643,8 +2642,8 @@ class TestSkipChecksTheSettings:
         assert excinfo.value.path == scene.manager.get_product_path(composite)
         assert excinfo.value.differences == {
             "COMPOSITING_PARAMETERS": (
-                "aggregation=median;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=3",
-                "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=3",
+                "aggregation=median;clip_max_resolution=none;burst_edge_trim_px=3",
+                "aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=3",
             )
         }
         assert "overwrite=True" in str(excinfo.value)
@@ -2731,7 +2730,7 @@ class TestSkipChecksTheSettings:
         assert excinfo.value.differences == {
             "COMPOSITING_PARAMETERS": (
                 None,
-                "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=3",
+                "aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=3",
             )
         }
 
@@ -3065,7 +3064,7 @@ class TestBurstEdgeTrim:
         scene.weighter.compose_rtc_by_pass([rtc], scene.geobox, burst_edge_trim=trim)
 
         assert self._parameters(scene, composite) == (
-            f"aggregation=mean;burst_overlap=midline;burst_edge_trim_px={4 if trim else 0}"
+            f"aggregation=mean;burst_edge_trim_px={4 if trim else 0}"
         )
 
     def test_coherence_without_a_recorded_window_needs_the_trim_off(self, scene: _Scene) -> None:
