@@ -92,7 +92,7 @@ value is written on every product rather than being scoped per product type.
 """
 
 LRW_REFERENCE = "https://doi.org/10.1109/TGRS.2021.3055562"
-"""Small et al. (2022), the local-resolution-weighting method of item 1.7.24."""
+"""Small et al. (2022), the local-resolution-weighting method."""
 
 # The specification asks products to declare this optional conversion.
 CONVERSION_EQ = "dB = 10*log10(DN)"
@@ -238,7 +238,7 @@ def _pipeline() -> dict[str, str]:
 
 
 def _backscatter(*, gamma0: bool) -> dict[str, str]:
-    """Build the measurement and scaling tags for a linear backscatter raster (spec 3.1, 3.2)."""
+    """Build the measurement and scaling tags for a linear backscatter raster."""
     return {
         "BACKSCATTER_MEASUREMENT": "Gamma-0" if gamma0 else "Beta-0",
         "BACKSCATTER_CONVENTION": "Power",
@@ -319,7 +319,7 @@ def _tile(
 def _lrw(
     aggregation: Aggregation, clip_max_resolution: float | None, burst_edge_trim_px: int
 ) -> dict[str, str]:
-    """Compositing-method tags for a locally resolution weighted product (spec 1.7.24)."""
+    """Compositing-method tags for a locally resolution weighted product."""
     return {
         "COMPOSITING_METHOD": "Local resolution weighting",
         "COMPOSITING_METHOD_REFERENCE": LRW_REFERENCE,
@@ -399,7 +399,7 @@ def band_statistics(data: NDArray[Any], nodata: float) -> dict[str, str]:
 
 
 def coherence_statistics(values: NDArray[np.floating[Any]]) -> dict[str, str]:
-    """Mean and standard deviation of a coherence raster ([InSAR] item 3.8).
+    """Mean and standard deviation of a coherence raster.
 
     Returns an empty mapping when no pixel is finite, so that an empty tile
     carries no statistics rather than a NaN.
@@ -451,7 +451,7 @@ def rtc_lrw_metadata(
     clip_max_resolution
         Weight clip actually applied.
     n_observations
-        Number of orbit-date observations entering the composite (spec 2.21).
+        Number of orbit-date observations entering the composite.
     source_tags
         Tags of one of the per-burst inputs, from which the processing
         provenance is inherited.
@@ -495,9 +495,9 @@ def coh_lrw_metadata(
 ) -> RasterMetadata:
     """Metadata for a locally resolution weighted coherence composite.
 
-    The specification defines no composite coherence product: the quantity
-    vocabulary comes from [InSAR] items 3.8 and 1.7.18, the compositing
-    vocabulary from [CB] item 1.7.24, and neither product type is claimed. No
+    CEOS-ARD defines no composite coherence product: the tags borrow the
+    vocabulary of its InSAR and Composite Backscatter products, and neither
+    product type is claimed. No
     conversion equation is emitted, because coherence is a dimensionless
     magnitude on [0, 1] rather than a power quantity.
 
@@ -512,7 +512,7 @@ def coh_lrw_metadata(
     clip_max_resolution
         Weight clip actually applied.
     n_observations
-        Number of orbit-date observations entering the composite (spec 2.21).
+        Number of orbit-date observations entering the composite.
     statistics
         Coherence statistics from ``coherence_statistics``.
     source_tags
@@ -750,7 +750,7 @@ def qa_metadata(
     burst_edge_trim_px
         Pixels the parent composite dropped along each burst's data edge.
     n_observations
-        Number of orbit-date observations entering the composite (spec 2.21).
+        Number of orbit-date observations entering the composite.
     clip_max_resolution
         Weight clip actually applied; ignored for a pass composite's QA, which
         applies no weighting.
@@ -954,7 +954,7 @@ def coherence_metadata(
 ) -> RasterMetadata:
     """Metadata for a per-burst coherence product.
 
-    The estimation window ([InSAR] item 1.7.18) exists only in ``config``, so
+    The estimation window exists only in ``config``, so
     these tags are the only route by which it reaches a composite built from
     this product. The options SNAP 14 added to its ``Coherence`` operator are
     recorded as ``false`` for an older SNAP, which has neither, and as
