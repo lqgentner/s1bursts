@@ -129,6 +129,7 @@ def _coh_burst() -> CoherenceProduct:
 def _lrw(**kwargs: Any) -> dict[str, str]:
     defaults: dict[str, Any] = {
         "aggregation": "median",
+        "burst_edge_trim_px": 2,
         "clip_max_resolution": None,
         "n_observations": 7,
     }
@@ -139,10 +140,15 @@ def _every_builder() -> dict[str, dict[str, str]]:
     """Tags from one product of every kind this module builds metadata for."""
     composite: dict[str, Any] = {
         "aggregation": "median",
+        "burst_edge_trim_px": 2,
         "clip_max_resolution": None,
         "n_observations": 3,
     }
-    unweighted: dict[str, Any] = {"aggregation": "median", "n_observations": 3}
+    unweighted: dict[str, Any] = {
+        "aggregation": "median",
+        "burst_edge_trim_px": 2,
+        "n_observations": 3,
+    }
     return {
         "rtc_lrw": _lrw(),
         "coh_lrw": product_tags.coh_lrw_metadata(_coh_lrw(), **composite).tags,
@@ -186,7 +192,11 @@ class TestBackscatterScaling:
         assert not [key for key in tags if key.endswith("_SCALING")]
 
     def test_the_unit_is_linear_power(self) -> None:
-        common: dict[str, Any] = {"aggregation": "median", "n_observations": 1}
+        common: dict[str, Any] = {
+            "aggregation": "median",
+            "burst_edge_trim_px": 2,
+            "n_observations": 1,
+        }
         lrw = product_tags.rtc_lrw_metadata(_rtc_lrw(), clip_max_resolution=None, **common)
         assert lrw.units == ["linear power"]
         assert product_tags.rtc_pass_metadata(_rtc_pass(), **common).units == ["linear power"]
@@ -223,6 +233,20 @@ class TestCompositingParameters:
             "aggregation=median;clip_max_resolution=2.5;burst_overlap=midline;burst_edge_trim_px=2"
         )
 
+    def test_records_the_burst_edge_trim(self) -> None:
+        tags = _lrw(aggregation="mean", burst_edge_trim_px=5)
+        assert tags["COMPOSITING_PARAMETERS"] == (
+            "aggregation=mean;clip_max_resolution=none;burst_overlap=midline;burst_edge_trim_px=5"
+        )
+
+    def test_a_pass_composite_records_the_burst_edge_trim(self) -> None:
+        tags = product_tags.rtc_pass_metadata(
+            _rtc_pass(), aggregation="mean", burst_edge_trim_px=0, n_observations=1
+        ).tags
+        assert tags["COMPOSITING_PARAMETERS"] == (
+            "aggregation=mean;burst_overlap=midline;burst_edge_trim_px=0"
+        )
+
     def test_a_float_aggregation_is_named_as_a_quantile(self) -> None:
         assert "aggregation=quantile=0.9" in _lrw(aggregation=0.9)["COMPOSITING_PARAMETERS"]
 
@@ -236,6 +260,7 @@ class TestCompositingParameters:
         tags = product_tags.rtc_pass_metadata(
             _rtc_pass(),
             aggregation="median",
+            burst_edge_trim_px=2,
             n_observations=4,
         ).tags
         assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
@@ -254,6 +279,7 @@ class TestGTCPass:
         meta = product_tags.gtc_pass_metadata(
             _gtc_pass(),
             aggregation="mean",
+            burst_edge_trim_px=2,
             n_observations=5,
             source_tags=source,
         )
@@ -286,7 +312,12 @@ class TestGTCPass:
             "PROCESSING_SOFTWARE_VERSION": "14.0",
         }
         tags = product_tags.qa_metadata(
-            qa, Layer.QA_NUM, aggregation="mean", n_observations=3, source_tags=source
+            qa,
+            Layer.QA_NUM,
+            aggregation="mean",
+            burst_edge_trim_px=2,
+            n_observations=3,
+            source_tags=source,
         ).tags
         assert tags["PRODUCT_TYPE"] == "GTC_COMP_D_QA-NUM"
         assert tags["PASS_DIRECTION"] == "Descending"
@@ -314,6 +345,7 @@ class TestCoherenceComposite:
     def _tags(self, **kwargs: Any) -> dict[str, str]:
         defaults: dict[str, Any] = {
             "aggregation": "median",
+            "burst_edge_trim_px": 2,
             "clip_max_resolution": None,
             "n_observations": 5,
         }
@@ -360,6 +392,7 @@ class TestCoherenceComposite:
         metadata = product_tags.coh_lrw_metadata(
             _coh_lrw(),
             aggregation="median",
+            burst_edge_trim_px=2,
             clip_max_resolution=None,
             n_observations=5,
         )
@@ -370,6 +403,7 @@ class TestCoherenceComposite:
         tags = product_tags.coh_pass_metadata(
             _coh_pass(),
             aggregation="mean",
+            burst_edge_trim_px=2,
             n_observations=3,
         ).tags
         assert tags["PASS_DIRECTION"] == "Descending"
@@ -430,11 +464,19 @@ class TestCoherenceStatistics:
 
 class TestQaLayers:
     def _num(self, **kwargs: Any) -> dict[str, str]:
-        defaults: dict[str, Any] = {"aggregation": "median", "n_observations": 6}
+        defaults: dict[str, Any] = {
+            "aggregation": "median",
+            "burst_edge_trim_px": 2,
+            "n_observations": 6,
+        }
         return product_tags.qa_metadata(_rtc_lrw(), Layer.QA_NUM, **(defaults | kwargs)).tags
 
     def _cqm(self, **kwargs: Any) -> dict[str, str]:
-        defaults: dict[str, Any] = {"aggregation": "median", "n_observations": 6}
+        defaults: dict[str, Any] = {
+            "aggregation": "median",
+            "burst_edge_trim_px": 2,
+            "n_observations": 6,
+        }
         return product_tags.qa_metadata(_rtc_lrw(), Layer.QA_CQM, **(defaults | kwargs)).tags
 
     def test_num_carries_no_scaling_tags(self) -> None:
@@ -459,6 +501,7 @@ class TestQaLayers:
             _rtc_lrw(),
             Layer.QA_NUM,
             aggregation="median",
+            burst_edge_trim_px=2,
             n_observations=6,
         )
         assert metadata.band_names == ["num_obs"]
@@ -482,6 +525,7 @@ class TestQaLayers:
             _rtc_pass(),
             Layer.QA_NUM,
             aggregation="mean",
+            burst_edge_trim_px=2,
             n_observations=2,
         ).tags
         assert tags["COMPOSITING_METHOD"] == "Unweighted temporal aggregation"
@@ -507,7 +551,9 @@ class TestQaLayers:
         layer: Layer,
     ) -> None:
         with pytest.raises(ValueError, match=f"has no QA layer {layer.name}"):
-            product_tags.qa_metadata(product, layer, aggregation="mean", n_observations=1)
+            product_tags.qa_metadata(
+                product, layer, aggregation="mean", burst_edge_trim_px=2, n_observations=1
+            )
 
     def test_lrw_qa_counts_weighted_contributions(self) -> None:
         assert "non-zero resolution weight" in self._num()["LAYER_DESCRIPTION"]
@@ -517,6 +563,7 @@ class TestQaLayers:
             _coh_lrw(),
             Layer.QA_CQM,
             aggregation="median",
+            burst_edge_trim_px=2,
             n_observations=4,
         ).tags
         assert tags["PRODUCT_FAMILY"] == "Composite Coherence"
@@ -533,6 +580,7 @@ class TestQaLayers:
             ),
             Layer.QA_NUM,
             aggregation="mean",
+            burst_edge_trim_px=2,
             n_observations=2,
         ).tags
         assert tags["PASS_DIRECTION"] == "Descending"
@@ -751,7 +799,11 @@ class TestSettingTags:
             pytest.param(
                 lambda source: (
                     product_tags.rtc_pass_metadata(
-                        _rtc_pass(), aggregation="mean", n_observations=2, source_tags=source
+                        _rtc_pass(),
+                        aggregation="mean",
+                        burst_edge_trim_px=2,
+                        n_observations=2,
+                        source_tags=source,
                     ).tags
                 ),
                 id="rtc_pass",
@@ -762,6 +814,7 @@ class TestSettingTags:
                         _rtc_lrw(),
                         Layer.QA_CQM,
                         aggregation="mean",
+                        burst_edge_trim_px=2,
                         n_observations=2,
                         source_tags=source,
                     ).tags
@@ -793,7 +846,11 @@ class TestSettingTags:
             _coh_burst(), CoherenceConfig(), snap_version=(14, 0, 0)
         ).tags
         tags = product_tags.coh_pass_metadata(
-            _coh_pass(), aggregation="mean", n_observations=2, source_tags=source
+            _coh_pass(),
+            aggregation="mean",
+            burst_edge_trim_px=2,
+            n_observations=2,
+            source_tags=source,
         ).tags
         assert tags["COHERENCE_BIAS_CORRECTED"] == "false"
         assert tags["TOPOGRAPHIC_PHASE_REMOVED"] == "true"
@@ -847,11 +904,16 @@ class TestRasterMetadata:
             product_tags.coh_lrw_metadata(
                 _coh_lrw(),
                 aggregation=0.5,
+                burst_edge_trim_px=2,
                 clip_max_resolution=1.0,
                 n_observations=2,
             ).tags,
             product_tags.qa_metadata(
-                _rtc_lrw(), Layer.QA_CQM, aggregation="mean", n_observations=1
+                _rtc_lrw(),
+                Layer.QA_CQM,
+                aggregation="mean",
+                burst_edge_trim_px=2,
+                n_observations=1,
             ).tags,
             product_tags.backscatter_metadata(_rtc_burst(), RTCConfig()).tags,
             product_tags.coherence_metadata(_coh_burst(), CoherenceConfig()).tags,
