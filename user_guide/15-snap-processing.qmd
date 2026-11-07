@@ -21,7 +21,7 @@ graph has eight steps with the default settings:
 | `Apply-Orbit-File` | Replaces the predicted satellite orbit with the precise one | |
 | `ThermalNoiseRemoval` | Removes the instrument's own noise | |
 | `Calibration` | Converts the raw values to beta-0 radar brightness | |
-| `TOPSAR-Deburst` | Joins the burst into one seamless image | |
+| `TOPSAR-Deburst` | Keeps only the burst's valid lines and samples, dropping the empty margin around it | |
 | `Multilook` | Averages neighboring pixels to reduce noise and runtime | `multilook`; `None` skips it |
 | `Terrain-Flattening` | Corrects brightness for the slope of the terrain; RTC only | `dem_oversampling`, `additional_overlap`, DEM settings |
 | `ReplaceZerosWithNoData` | Marks the empty border of the burst as missing ([why](#corrections-s1bursts-applies)) | `replace_zeros_with_nan`; `False` skips it |

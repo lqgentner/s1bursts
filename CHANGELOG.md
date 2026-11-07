@@ -16,8 +16,8 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ### Changed
 
-- **Breaking:** the bursts of one orbit and date are joined at the midline of
-  their overlap, and the two outermost pixels of every burst are dropped, in
+- **Breaking:** the bursts of one orbit and date are mosaicked at the midline
+  of their overlap, and the two outermost pixels of every burst are dropped, in
   every `compose_*` method. Before, an overlap was taken from the burst with
   the lowest `(burst_id, sub_swath)`, including the faded pixels at its edge,
   which are 2 to 9 dB too dark. Composite values change along burst and

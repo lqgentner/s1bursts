@@ -190,7 +190,7 @@ class TestProcessCollection:
         """Results must be listed in input order, not the order the threads finish.
 
         Previously they were listed as they completed, which composites then
-        inherited as their stitch order.
+        inherited as their mosaic order.
         """
         processor.config.resolved_max_workers = 3
         items = ["a", "b", "c"]
