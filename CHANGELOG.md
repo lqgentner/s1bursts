@@ -8,68 +8,67 @@ While the project is pre-1.0 (`0.x`), minor releases may contain breaking change
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-07
+
 ### Added
 
-- s1bursts can be cited: each release is archived on Zenodo under the DOI
+- s1bursts can be cited: every release is archived on Zenodo under the DOI
   [10.5281/zenodo.23918246](https://doi.org/10.5281/zenodo.23918246), and
   `CITATION.cff` holds the citation metadata.
 
 ### Changed
 
-- **Breaking:** the bursts of one orbit and date are mosaicked at the midline
-  of their overlap, and every burst loses its darkened edge first, in every
-  `compose_*` method. Before, an overlap was taken from the burst with the
-  lowest `(burst_id, sub_swath)`, including the edge pixels that multilooking
-  or the coherence window darkens by 1 to 9 dB. The width of that edge follows
-  the inputs' looks or coherence window and the grid spacing: 4 pixels for RTC
-  and 5 for coherence at the default settings on a 10 m grid. The new
-  `burst_edge_trim` argument (default `True`) turns it off. Composite values
-  change along burst and sub-swath seams and at burst edges.
-  `COMPOSITING_PARAMETERS` records the pixels dropped, so with
-  `overwrite=False` a composite made by an earlier release now raises
-  `ProductSettingsMismatchError`; pass `overwrite=True` to rebuild it.
+- **Breaking:** composites join the bursts of one orbit and date differently,
+  so their values change along burst and sub-swath seams and at the outer edge
+  of the covered area. Each overlap is split at its midline, and each burst
+  first loses the edge that multilooking or the coherence window darkens (by
+  up to about 9 dB in backscatter). The width follows the inputs' looks or
+  coherence window and the grid spacing: 4 pixels for RTC and GTC, and 5 for
+  coherence, at the default settings on a 10 m grid. Before, an overlap came
+  entirely from the burst with the lowest `(burst_id, sub_swath)`, darkened
+  edge included. Pass `burst_edge_trim=False` to any `compose_*` method to
+  keep the edge.
+
+  `COMPOSITING_PARAMETERS` records the trim, so with `overwrite=False` a
+  composite made by an earlier release raises `ProductSettingsMismatchError`;
+  rebuild it with `overwrite=True`. At the defaults:
   - LRW before: `aggregation=mean;clip_max_resolution=none`
   - LRW after: `aggregation=mean;clip_max_resolution=none;burst_edge_trim_px=4`
   - Pass before: `aggregation=mean`
   - Pass after: `aggregation=mean;burst_edge_trim_px=4`
 
-  The number follows the inputs. A cell that bursts reach only with their
-  darkened edge now has no valid input: an LRW composite raises
-  `EmptyCompositeError` (with `overwrite=True`, after deleting the earlier
-  composite), and a pass composite skips that direction. `compose_coherence_*`
-  raises `ValueError` for inputs that do not record their estimation window,
-  unless `burst_edge_trim=False`.
-- **Breaking:** the composite metadata builders `rtc_lrw_metadata()`,
-  `coh_lrw_metadata()`, `rtc_pass_metadata()`, `gtc_pass_metadata()`,
-  `coh_pass_metadata()` and `qa_metadata()` take a required keyword
-  `burst_edge_trim_px`, the pixels dropped along each burst's edge.
+  The number is 5 for coherence and follows the inputs' settings. A cell that
+  bursts reach only with their trimmed edge is now empty: an LRW composite
+  raises `EmptyCompositeError`, and a pass composite skips that direction.
+  Coherence composites raise `ValueError` for inputs that do not record their
+  estimation window, unless `burst_edge_trim=False`.
+- **Breaking:** `compose_coherence_lrw()` takes each pixel's scattering area
+  from the RTC product of the same burst and date, and raises
+  `CompositeInputError` when that product is missing. Before, any RTC product
+  of the same orbit and date could supply it.
+- **Breaking:** `img_resampling` accepts only `"BILINEAR_INTERPOLATION"` (the
+  default) and `"NEAREST_NEIGHBOUR"`. SNAP's cubic and sinc kernels gave
+  pixels next to missing data (burst edges, layover, shadow, DEM voids) values
+  as far off as -1e12 that were kept as valid, so reprocess products made with
+  them.
+  - Before: `RTCConfig(img_resampling="CUBIC_CONVOLUTION")` was accepted.
+  - After: it raises `pydantic.ValidationError`, as do
+    `BICUBIC_INTERPOLATION` and `BISINC_5/11/21_POINT_INTERPOLATION`, in
+    every config.
+- **Breaking:** the composite metadata builders in `s1bursts.product_tags`
+  (`rtc_lrw_metadata()`, `coh_lrw_metadata()`, `rtc_pass_metadata()`,
+  `gtc_pass_metadata()`, `coh_pass_metadata()` and `qa_metadata()`) take a
+  required keyword `burst_edge_trim_px`.
   - Before: `rtc_pass_metadata(product, aggregation="mean", n_observations=3)`
   - After: `rtc_pass_metadata(product, aggregation="mean", burst_edge_trim_px=4, n_observations=3)`
-- **Breaking:** `compose_coherence_lrw()` weights each pixel by the scattering
-  area of the RTC product of its own burst, and raises `CompositeInputError`
-  when a burst some pixel is taken from has none. Before, the RTC products of
-  the same orbit and date were mosaicked on their own, so another burst's area
-  could stand in.
-- Composites read every input 3 km beyond the cell, to find the burst edges
-  an overlap is split between; a 10 km cell reads about 2.6 times as much, and
-  loading holds about twice the memory.
-- The package summary reads "Sentinel-1 download, processing and compositing
-  in Python." instead of "... made easy."
-- **Breaking:** `img_resampling` accepts only `"NEAREST_NEIGHBOUR"` and
-  `"BILINEAR_INTERPOLATION"`, and `ResamplingMethod` lists only those two.
-  SNAP's cubic and sinc kernels blended the no-data marker into every pixel
-  next to missing data (burst edges, layover and shadow, DEM voids), giving
-  values as far off as -1e12 that were kept as valid. Products made with them
-  should be reprocessed.
-  - Before: `RTCConfig(img_resampling="CUBIC_CONVOLUTION")` built a graph.
-  - After: it raises `ValidationError`; the same holds for
-    `BICUBIC_INTERPOLATION` and the three `BISINC_*_POINT_INTERPOLATION`
-    methods, in every config.
+- Composites read each input 3 km beyond the cell, also with
+  `burst_edge_trim=False`: about 2.6 times as much data for a 10 km cell, and
+  more memory.
 
 ### Fixed
 
-- The warning about files named without their pass direction no longer
-  points to a nonexistent rename recipe.
+- The warning about files named without their pass direction no longer links
+  to a nonexistent rename recipe.
 
 ## [0.8.0] - 2026-11-03
 
