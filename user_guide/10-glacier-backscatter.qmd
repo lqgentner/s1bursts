@@ -85,7 +85,7 @@ for ax, product in zip(axes, [products[0], products[4]]):
                                fill=False, edgecolor="white"))
     ax.set(title=f"{product.date:%d %B %Y}", xlabel="Easting (km)")
 axes[0].set_ylabel("Northing (km)")
-fig.colorbar(image, ax=axes, shrink=0.8, label="Gamma-0 (dB)")
+fig.colorbar(image, ax=axes, shrink=0.8, label="Backscatter (dB)")
 plt.show()
 ```
 
@@ -116,7 +116,7 @@ series = pd.DataFrame(records)
 #| fig-cap: "Median RTC backscatter in the sample rectangle, one acquisition per month in 2022."
 fig, ax = plt.subplots(figsize=(7.8, 3.3))
 ax.plot(series.date, series.gamma0_db, "o-")
-ax.set(xlabel="Acquisition date", ylabel="Median gamma-0 (dB)")
+ax.set(xlabel="Acquisition date", ylabel="Median backscatter (dB)")
 ax.grid(alpha=0.25)
 fig.autofmt_xdate()
 plt.show()
