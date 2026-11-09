@@ -60,7 +60,7 @@ uv run pytest -q --cov=s1bursts --cov-branch --cov-report=term-missing
 
 ### Prose
 
-[Vale](https://vale.sh) checks the Markdown and Quarto files against `.vale.ini`: the Google developer style, proselint and ai-tells, with the rules that conflict with these docs turned off and the reason beside each. Install Vale, then:
+[Vale](https://vale.sh) checks the Markdown and Quarto files against `.vale.ini`: the Google developer style, proselint and ai-tells, with the rules that conflict with these docs turned off and the reason beside each. The `prose` job in CI runs the same check and fails on any alert, warnings included. Install Vale, then:
 
 ```bash
 vale sync                             # downloads the packages into .vale/styles
