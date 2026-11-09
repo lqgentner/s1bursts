@@ -28,6 +28,21 @@ The default tests run offline. Tests that download data or run SNAP are marked
 `integration` and run with `uv run pytest -m integration` if CDSE
 credentials and a SNAP installation are available.
 
+## Check the prose
+
+[Vale](https://vale.sh/docs/install) checks the Markdown and Quarto files. It
+is installed separately, not through uv. `.vale.ini` sets the rules and gives
+the reason for each rule that is off. Download the rule packages once, then
+check the tracked files:
+
+```{.bash}
+vale sync
+vale $(git ls-files '*.md' '*.qmd')
+```
+
+When the spelling check reports a correct term, add it to
+`.vale/styles/config/vocabularies/s1bursts/accept.txt`.
+
 ## Build the documentation
 
 The site is built with [Great Docs](https://posit-dev.github.io/great-docs/),
@@ -37,7 +52,6 @@ live in `user_guide/`, the API reference comes from the docstrings, and
 
 ```{.bash}
 uv sync --group docs
-uv run python -m ipykernel install --sys-prefix --name python3
 uv run great-docs build
 uv run great-docs preview
 ```

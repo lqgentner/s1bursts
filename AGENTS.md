@@ -33,8 +33,8 @@ uv run ruff format
 uv run pyrefly check
 ```
 
-After every code change, run tests, Ruff formatting and linting, and Pyrefly. Rerun affected
-checks after fixes. Add or update tests for behavior changes. Bug fixes should include a
+After every code change, run tests, Ruff formatting and linting, and Pyrefly. After changing a
+Markdown or Quarto file, run Vale (see [Prose](#prose)). Rerun affected checks after fixes. Add or update tests for behavior changes. Bug fixes should include a
 regression test.
 
 ```bash

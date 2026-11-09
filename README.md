@@ -82,16 +82,9 @@ tutorials on real data, and the API reference.
 
 ## Development
 
-```bash
-uv sync                       # set up the environment
-uv run pytest                 # offline unit tests
-uv run pytest -m integration  # network and SNAP tests (needs credentials and SNAP)
-uv run ruff format && uv run ruff check --fix
-uv run pyrefly check
-```
-
-See the [contributing guide](https://lqgentner.github.io/s1bursts/user-guide/contributing.html)
-for the integration tests and how to build the documentation.
+The [contributing guide](https://lqgentner.github.io/s1bursts/user-guide/contributing.html)
+covers setting up the environment with uv, the tests and other checks, and
+building the documentation, locally and in CI.
 
 ## Citation
 

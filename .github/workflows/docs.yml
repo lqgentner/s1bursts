@@ -32,7 +32,6 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --locked --all-extras --group docs
-          uv run python -m ipykernel install --sys-prefix --name python3
 
       # Versioned _freeze/ outputs supply the expensive CDSE/SNAP tutorials.
       # CI requires neither credentials nor a SNAP installation.
