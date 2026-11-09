@@ -120,14 +120,14 @@ class TestAgainstGdalVrt:
         _, ours, _ = _read(extraction["ours"])
         _, reference, _ = _read(extraction["reference"])
 
-        assert ours == pytest.approx(reference)
+        assert ours == reference
 
     def test_gcps_match_the_shifted_grid(self, extraction: dict[str, Any]) -> None:
         """Guards the previous test: both could agree on a wrong set of points."""
         _, ours, _ = _read(extraction["ours"])
         expected = extraction["points"]
 
-        assert ours == pytest.approx(expected)
+        assert ours == expected
 
     def test_sample_dtype_is_preserved(self, extraction: dict[str, Any]) -> None:
         """SLC pixels are CInt16; neither path may promote them."""
