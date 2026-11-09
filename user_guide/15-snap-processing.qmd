@@ -22,9 +22,9 @@ graph has eight steps with the default settings:
 | `ThermalNoiseRemoval` | Removes the instrument's own noise | |
 | `Calibration` | Converts the raw values to beta-0 radar brightness | |
 | `TOPSAR-Deburst` | Keeps only the burst's valid lines and samples, dropping the empty margin around it | |
-| `Multilook` | Averages neighboring pixels to reduce noise and runtime | `multilook`; `None` skips it |
-| `Terrain-Flattening` | Corrects brightness for the slope of the terrain; RTC only | `dem_oversampling`, `additional_overlap`, DEM settings |
-| `ReplaceZerosWithNoData` | Marks the empty border of the burst as missing ([why](#corrections-s1bursts-applies)) | `replace_zeros_with_nan`; `False` skips it |
+| `Multilook` | Averages neighboring pixels to reduce noise and runtime | `multilook` (`None` skips it) |
+| `Terrain-Flattening` | Corrects brightness for the slope of the terrain (RTC only) | `dem_oversampling`, `additional_overlap`, DEM settings |
+| `ReplaceZerosWithNoData` | Marks the empty border of the burst as missing ([why](#corrections-s1bursts-applies)) | `replace_zeros_with_nan` (`False` skips it) |
 | `Terrain-Correction` | Places every pixel on the map, using the DEM | `grid_spacing`, `img_resampling`, `align_to_standard_grid`, DEM settings |
 
 The DEM settings are `dem`, `dem_resampling` and, for an
@@ -37,7 +37,7 @@ get precise orbits, then `Back-Geocoding` aligns the second onto the first
 pixel by pixel, using the DEM. `Coherence` estimates the similarity of the two
 within a moving window, set by `window`. `TOPSAR-Deburst`,
 `ReplaceZerosWithNoData` and `Terrain-Correction` then run as in the
-backscatter graph; the coherence graph has no noise removal, calibration or
+backscatter graph. The coherence graph has no noise removal, calibration or
 multilooking.
 
 ## Inspect a graph
@@ -62,7 +62,7 @@ Mermaid(config.to_mermaid())
 
 mermaid-py draws the diagram through the online mermaid.ink service. Without
 internet access, paste the text into a `mermaid` code block on GitHub or in
-Quarto instead. For the settings above, the graph looks like this:
+Quarto instead. For `RTCConfig(grid_spacing=20)`, the graph looks like this:
 
 ```{python}
 #| echo: false
@@ -98,7 +98,7 @@ the settings. `CoherenceConfig` returns its graph the same way, with
 
 The coherence graph differs slightly between SNAP 13 and 14.
 Without a version, s1bursts builds the graph for SNAP 13. Pass the version of
-your installation to see the exact graph that processing will run:
+your installation to see the exact graph that processing runs:
 
 ```{.python}
 from s1bursts import CoherenceConfig, SNAPConfig
@@ -119,7 +119,7 @@ s1bursts works around four SNAP problems, so you do not need to:
   ([forum report](https://forum.step.esa.int/t/copernicus-dem-built-in-path-applies-egm96-while-the-data-is-egm2008/46041)).
   SNAP knows only the EGM96 model, even for DEMs based on another.
   `prepare_dem_for_snap()` converts external DEM heights
-  itself; see [Using an external DEM](external-dems.qmd). The built-in
+  itself (see [Using an external DEM](external-dems.qmd)). The built-in
   Copernicus DEM is affected too. To avoid it, download the Copernicus DEM and
   prepare it as an external DEM with `source_crs="EPSG:4326+3855"`.
 - **Burst edges come out too dark**
@@ -166,6 +166,6 @@ burst InSAR products. Both use the same Copernicus DEM, so the comparison tests
 the processing itself. The comparisons are tests in the repository,
 [`test_opera_validation.py`](https://github.com/lqgentner/s1bursts/blob/main/tests/test_opera_validation.py)
 and
-[`test_insar_validation.py`](https://github.com/lqgentner/s1bursts/blob/main/tests/test_insar_validation.py);
+[`test_insar_validation.py`](https://github.com/lqgentner/s1bursts/blob/main/tests/test_insar_validation.py).
 [`REFERENCE.md`](https://github.com/lqgentner/s1bursts/blob/main/tests/fixtures/REFERENCE.md)
 describes the reference products and what each test checks.

@@ -77,9 +77,8 @@ rtc = processor.create_backscatter(
 
 ## Compose the square
 
-The square is composed twice: once per pass direction with
-`compose_rtc_by_pass()`, and once across both directions with
-`compose_rtc_lrw()`, which also writes the quality layers. For an area of
+`compose_rtc_by_pass()` composes the square once per pass direction, and
+`compose_rtc_lrw()` composes it across both directions and also writes the quality layers. For an area of
 several squares,
 [From an area to composites](area-to-composites.qmd#compose-each-square) loops
 over them.

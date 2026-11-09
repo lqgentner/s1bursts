@@ -7,7 +7,7 @@ freeze: true
 # Installation
 
 s1bursts needs a Python package, a free CDSE account, and ESA SNAP. Searching
-the catalog works with the package alone; downloading needs the account, and
+the catalog works with the package alone. Downloading needs the account, and
 processing needs SNAP.
 
 ## Install the package
@@ -57,7 +57,7 @@ it with ESA's installer, or as a conda package:
 
 Download [SNAP](https://step.esa.int/main/download/snap-download/) from ESA and
 include the Microwave Toolbox, which holds the Sentinel-1 tools. The installer
-does not always put `gpt` on your `PATH`; if it does not, set `SNAP_BIN` to the
+does not always put `gpt` on your `PATH`. If it does not, set `SNAP_BIN` to the
 installation's `bin` directory (see
 [Environment variables](environment-variables.qmd)).
 
@@ -80,8 +80,8 @@ conda install -c sarforge -c conda-forge "esa-snap-s1tbx-gpt=14"
 :::
 
 Use one SNAP version for one study. The versions give slightly different
-results, so a time series that mixes them contains a small artificial step; see
-[SNAP processing](snap-processing.qmd#snap-versions).
+results, so a time series that mixes them contains a small artificial step (see
+[SNAP processing](snap-processing.qmd#snap-versions)).
 
 ## Check that SNAP is found
 
@@ -103,7 +103,7 @@ set.
 ## Set up credentials
 
 Downloads need a free [CDSE account](https://dataspace.copernicus.eu/).
-s1bursts reads the account name and password from the environment variables
+s1bursts reads the username and password from the environment variables
 `CDSE_USERNAME` and `CDSE_PASSWORD`.
 [Environment variables](environment-variables.qmd) shows how to set them and
 lists the optional settings, including keys for a second download route.

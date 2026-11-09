@@ -5,7 +5,7 @@ guide-section: "How-to Guides"
 
 # Finding and downloading bursts
 
-A search asks the CDSE catalog which bursts exist for a place and a time
+A search queries the CDSE catalog for the bursts of a place and a time
 window, and a download fetches them. Searching needs no account and downloads
 nothing, so you can refine a query freely before committing to a download.
 
@@ -46,13 +46,13 @@ bursts = catalog.search(SearchQuery(
 ))
 ```
 
-`SearchQuery` also filters by orbit, pass direction and acquisition mode; its
+`SearchQuery` also filters by orbit, pass direction and acquisition mode. Its
 [reference](../reference/query.SearchQuery.qmd) lists every field.
 
 ::: {.callout-note}
 A search returns every matching burst, up to 1000, the size of one catalog
-page. A query that matches more raises `TooManyResultsError` rather than return
-an incomplete list. Narrow the time window or the area, or split the query and
+page. If a query matches more, it raises `TooManyResultsError` rather than
+return an incomplete list. Narrow the time window or the area, or split the query and
 [combine the results](#combine-searches).
 :::
 
@@ -131,12 +131,12 @@ summary = catalog.download(bursts, max_workers=4)
 summary.print_summary()
 ```
 
-`max_workers` sets how many bursts download in parallel. Each file lands in the
+`max_workers` sets how many bursts download in parallel. Each file is saved in the
 `s1-slc` folder below the `FileManager`'s base directory.
 
 ## When the burst service fails
 
-CDSE's burst service occasionally fails for particular bursts. If
+CDSE's burst service occasionally fails for some bursts. If
 [CDSE S3 keys](environment-variables.qmd#cdse-credentials) are set, s1bursts
 then extracts the burst from the full scene on CDSE's S3 storage instead. This
 route is slower but usually succeeds. Without the keys, the burst is recorded as
@@ -165,7 +165,7 @@ Most failures are temporary server errors and succeed on a second run, which
 downloads only the missing bursts. To stop at the first failure instead,
 create the catalog with `BurstCatalog(fm, continue_on_error=False)`. A burst
 that CDSE reports as missing is not requested again by the same
-`BurstCatalog`; create a new one to retry it later. To accept such bursts and
+`BurstCatalog`. Create a new one to retry it later. To accept such bursts and
 continue, ignore their error type:
 
 ```{.python}
@@ -194,12 +194,12 @@ To [form pairs](#pair-acquisitions), turn it into a collection first with
 `find()` lists every product and composite type the same way: pass the type,
 such as `RTCProduct` or `RTCLRWComposite` from `s1bursts.product`, and filter
 on the fields its filename records. These listings are rebuilt from filenames,
-so they hold less information than the original search result;
-[save the search](#save-a-search) if you need the full catalog record.
+so they contain less information than the original search result.
+[Save the search](#save-a-search) if you need the full catalog record.
 
 ### The burst-ID map
 
-A burst from a search carries its relative orbit, pass direction and footprint,
+A burst from a search includes its relative orbit, pass direction and footprint,
 and product and SLC filenames record the orbit and pass direction, so the usual
 search, download, process and composite workflow needs no further data. Only a
 burst that did not come from a search needs to look these up, in the

@@ -25,8 +25,8 @@ uv run pyrefly check
 ```
 
 The default tests run offline. Tests that download data or run SNAP are marked
-`integration` and run with `uv run pytest -m integration`, given CDSE
-credentials and a SNAP installation.
+`integration` and run with `uv run pytest -m integration` if CDSE
+credentials and a SNAP installation are available.
 
 ## Build the documentation
 
@@ -42,7 +42,7 @@ uv run great-docs build
 uv run great-docs preview
 ```
 
-The built site lands in `great-docs/_site/`, which is generated and never
+The build writes the site to `great-docs/_site/`, which is generated and never
 edited by hand.
 
 ## Frozen tutorials
@@ -52,8 +52,10 @@ build. Their results are therefore frozen: `_freeze/` stores each page's
 rendered output and figures, and builds reuse it without running the code. CI
 builds the site from `_freeze/` alone, without credentials or SNAP.
 
-Refresh a frozen page after changing its code or the API it uses. This reruns
-the page, so it needs `.env` and SNAP; downloads and products are cached in
+Refresh a frozen page after changing its code, its text or the API it uses.
+The frozen output includes the text, so the site shows an edit only after the
+page is refreshed. This reruns
+the page, so it needs `.env` and SNAP. Downloads and products are cached in
 `cache/docs/` and reused. Refresh one page per command, then rebuild:
 
 ```{.bash}

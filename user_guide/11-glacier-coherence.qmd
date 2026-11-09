@@ -9,7 +9,7 @@ freeze: true
 This tutorial computes coherence for one 12-day pair per month over the
 Aletsch glacier in 2022. Coherence shows where the surface stayed the same
 between two acquisitions, so it separates moving ice and changing snow from
-ground that stays put.
+stable ground.
 
 ```{python}
 #| include: false
@@ -27,7 +27,7 @@ os.chdir(root / "cache/docs")
 ## Process one pair per month
 
 The search is the same as in the [backscatter tutorial](glacier-backscatter.qmd).
-`find_pairs()` forms every pair of acquisitions 12 days apart; keeping the
+`find_pairs()` forms every pair of acquisitions 12 days apart. Keeping the
 first pair of each month leaves twelve, which are processed into coherence:
 
 ```{python}
@@ -62,7 +62,7 @@ area is snow-covered and incoherent. Snow decorrelates quickly: new snow and
 melt change it between the two dates, and wet snow can lose its coherence
 within hours (Strozzi et al., 1999)[^strozzi].
 In August the slopes around the glacier are highly coherent, while the glacier
-stays dark, which makes its outline stand out.
+is dark, which makes its outline stand out.
 
 ```{python}
 #| fig-cap: "Coherence of a 12-day pair in winter and in summer 2022. The rectangles are the sample areas on the glacier (white) and off it (cyan)."

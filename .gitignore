@@ -57,3 +57,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+# Vale packages, downloaded by `vale sync`
+.vale/styles/*
+!.vale/styles/config/
+.vale/styles/config/*
+!.vale/styles/config/vocabularies/

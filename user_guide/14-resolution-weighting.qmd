@@ -21,7 +21,7 @@ slopes that the other resolves poorly.
 
 ## The weights
 
-The `scattering_area` band of an RTC product holds the normalized ground area
+The `scattering_area` band of an RTC product contains the normalized ground area
 $A_i$ that acquisition $i$ observes in each pixel. Its inverse is the local
 resolution, $r_i = 1/A_i$. At each pixel, the weights are the local
 resolutions, normalized to sum to one over the $M$ acquisitions with a valid
@@ -47,11 +47,11 @@ well.
 An acquisition in radar shadow has no valid area there and does not count
 toward $M$. Bursts of the same orbit and date are mosaicked first, so the overlap
 of neighboring bursts counts once. The edge of every burst is dropped, because
-multilooking or the coherence window darkens it; `burst_edge_trim` turns this
+multilooking or the coherence window darkens it. `burst_edge_trim` turns this
 off, and its width follows the looks or window and the grid spacing. Each
 pixel is taken from the burst whose data edge is farther away, which splits
 every overlap at its midline, as SNAP's TOPSAR-Deburst and TOPSAR-Merge do. A pixel's scattering
-area comes from the same burst as its value; for coherence, from the RTC
+area comes from the same burst as its value, or for coherence from the RTC
 product of that burst.
 
 ## Capping the local resolution
@@ -59,8 +59,8 @@ product of that burst.
 Close to radar shadow, $A_i$ approaches zero and $r_i$ grows without bound,
 although the simulated area is least reliable there. `clip_max_resolution`
 sets a cap $r_\text{max}$ and uses $\min(r_i, r_\text{max})$ in place of $r_i$
-in the weights, so that one acquisition cannot dominate such pixels. By
-default, no cap is applied. For scale, flat terrain has a local resolution of
+in the weights, so that one acquisition cannot dominate such pixels. No
+cap is applied by default. For scale, flat terrain has a local resolution of
 about 0.6 to 1.0.
 
 ## The quality layers
@@ -76,7 +76,7 @@ $$
 
 A higher value means a finer resolution. The quality map describes the viewing
 geometry only, not the accuracy of the measured value. With a median or
-quantile, it is still the weighted mean above, so it describes the weighting
+quantile, it is still the weighted mean from [The weights](#the-weights), so it describes the weighting
 rather than the acquisitions that supplied each value.
 
 [^small]: Small, D., Rohner, C., Miranda, N., Ruetschi, M., & Schaepman, M. E.
