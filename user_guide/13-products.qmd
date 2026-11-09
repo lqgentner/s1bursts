@@ -17,7 +17,7 @@ descriptions:
 
 | Product | Bands | Values |
 |---|---|---|
-| RTC backscatter | `gamma0`, `scattering_area` | Linear power; area without units |
+| RTC backscatter | `gamma0`, `scattering_area` | `gamma0` in linear power, `scattering_area` without units |
 | GTC backscatter | `beta0` | Linear power |
 | Coherence | `coherence` | Magnitude, 0 to 1, without units |
 
@@ -25,14 +25,14 @@ Backscatter is stored as linear power, not decibels, in products and
 composites alike. Convert with
 `10 * log10(value)` only after averaging, since the mean of decibels is not the
 decibel of the mean. The `scattering_area` band describes how much ground each
-pixel covers; [Local resolution weighting](resolution-weighting.qmd) explains
+pixel covers. [Local resolution weighting](resolution-weighting.qmd) explains
 how composites use it.
 
 ## Composites
 
-A composite holds one band, the quantity of its inputs: gamma-0, beta-0 or
+A composite has one band, the quantity of its inputs: gamma-0, beta-0 or
 coherence, in the same units. Its band description is the polarization, such
-as `VV`; the bands of the quality layers are named `num_obs` and `cqm`.
+as `VV`. The bands of the quality layers are named `num_obs` and `cqm`.
 
 With `write_qa=True`, each quality layer of a composite is written to a file of
 its own:
@@ -47,7 +47,7 @@ explains both.
 
 ## Missing values
 
-Pixels without data are `NaN`, for example outside the burst. Keep them
+Pixels without a value are `NaN`, for example outside the burst. Keep them
 missing in statistics and plots rather than replacing them with zero. The one
 exception is the number of observations, an integer layer that marks pixels
 without data as 0. Both are declared as the file's no-data value, so
@@ -55,7 +55,7 @@ without data as 0. Both are declared as the file's no-data value, so
 
 ## Metadata tags
 
-Each GeoTIFF also carries tags that say how to read it and how it was made.
+Each GeoTIFF also has tags that say how to read it and how it was made.
 They include the units of the stored values, the acquisition dates, every
 processing setting, such as the DEM, the resampling or whether the topographic
 phase was removed, and the SNAP and s1bursts versions:
@@ -67,8 +67,8 @@ with fm.open(product) as src:
 ```
 
 These tags make a file understandable on its own, even when separated from the
-code that wrote it. A composite carries the processing settings of its inputs,
-which must all match. A resolution-weighted coherence composite carries those
+code that wrote it. A composite records the processing settings of its inputs,
+which must all match. A resolution-weighted coherence composite records those
 of its coherence products, not of the RTC products that weight them. Where the
 [CEOS-ARD SAR specification](https://ceos.org/ard/) has a term, the tag names
 use it, so it can be looked up there. s1bursts borrows the vocabulary only and
@@ -76,8 +76,8 @@ does not claim conformance with the specification.
 
 ## Filenames
 
-A filename holds only what tells one product from another, in fixed fields
-joined by underscores. Each product type has its own pattern:
+A filename contains only what distinguishes one product from another, in
+fixed fields separated by `_`. Each product type has its own pattern:
 
 | Product | Filename pattern |
 |---|---|
@@ -90,8 +90,7 @@ joined by underscores. Each product type has its own pattern:
 | RTC or GTC pass composite | `S1_RTC_COMP_<pass>[_QA-NUM]_<square>_<pol>_<start>_<end>.tif`, with `GTC` for GTC |
 | Coherence pass composite | `S1_COH<baseline>_COMP_<pass>[_QA-NUM]_<square>_<pol>_<start>_<end>.tif` |
 
-Square brackets mark the part that names a quality layer; the composite itself
-has none. The fields are:
+The part in square brackets appears only in the name of a quality layer. The fields are:
 
 | Field | Meaning | Example |
 |---|---|---|
@@ -118,5 +117,5 @@ an LRW composite is named
 composites in `s1-comp`, below the directory it is given.
 
 Processing settings are not part of the name. They are recorded in the tags
-instead, and a rerun compares them before it skips an existing file; see
+instead, and a rerun compares them before it skips an existing file. See
 [Reprocessing and failures](processing.qmd#reprocessing-and-failures).

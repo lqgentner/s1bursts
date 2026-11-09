@@ -46,11 +46,10 @@ an area to the composites of its squares.
 
 ## Compose with local resolution weighting
 
-Two methods combine all products that cover a square, whatever their orbit or
-direction: `compose_rtc_lrw()` for backscatter and `compose_coherence_lrw()` for
-coherence. Each pixel is weighted toward the acquisitions with the highest
+`compose_rtc_lrw()` for backscatter and `compose_coherence_lrw()` for coherence
+combine all products that cover a square, whatever their orbit or direction. Each pixel is weighted toward the acquisitions with the highest
 spatial resolution at that pixel. This is called local resolution weighting
-(LRW); [Local resolution weighting](resolution-weighting.qmd) explains how it
+(LRW). [Local resolution weighting](resolution-weighting.qmd) explains how it
 works.
 
 ```{.python}
@@ -99,7 +98,7 @@ with fm.open(composite, Layer.QA_CQM) as src:
 
 ## Composites per pass direction
 
-Three more methods keep ascending and descending orbits apart:
+The pass composites keep ascending and descending orbits apart:
 
 | Method | Combines | Use it for |
 |---|---|---|
@@ -127,7 +126,7 @@ inputs must share a temporal baseline. A pass composite that already exists
 must match the settings and SNAP version of the direction being added. A SNAP version that could not be
 determined matches any. The RTC products that weight a coherence composite
 must share their settings among themselves, and the DEM and SNAP version with
-the coherence products; the composite records the settings of the coherence
+the coherence products. The composite records the settings of the coherence
 products only.
 
 Like processing, compositing skips a square whose files already exist, after

@@ -28,7 +28,7 @@ os.chdir(root / "cache/docs")
 
 ## Find two acquisitions
 
-A search returns the catalog records that match a query. This one asks for two
+A search returns the catalog records that match a query. This one covers two
 weeks of one burst footprint, which Sentinel-1 imaged twice, 12 days apart:
 
 ```{python}
@@ -48,7 +48,7 @@ bursts = catalog.search(SearchQuery(
 The download stores both acquisitions under `data/quickstart/s1-slc`.
 Processing then writes one GeoTIFF per product under `data/quickstart/s1-prod`.
 With `crs="auto"`, each burst is projected in the UTM zone that holds it, here
-zone 32 North (EPSG:32632). Backscatter is processed per burst; coherence needs
+zone 32 North (EPSG:32632). Backscatter is processed per burst. Coherence needs
 a pair of acquisitions, which `find_pairs()` builds from the same bursts:
 
 ```{python}
@@ -71,7 +71,7 @@ checking that it was made with the same settings.
 
 Each product is a GeoTIFF that any GIS or raster library can open, and
 `fm.open()` opens one with rasterio. This plots the backscatter of the first
-date in decibels above the coherence:
+date in decibels, with the coherence below it:
 
 ```{python}
 import matplotlib.pyplot as plt
@@ -98,7 +98,7 @@ glaciers and in forests.
 
 ## What you get
 
-The two calls return two kinds of GeoTIFF:
+The processing calls return two kinds of GeoTIFF:
 
 - **Backscatter** (one file per date): how strongly the ground reflects the
   radar signal, corrected for terrain.

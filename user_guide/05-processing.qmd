@@ -44,7 +44,7 @@ Each product has its own method and settings object:
 | `create_coherences()` | Pairs | `CoherenceConfig` | Coherence between two acquisitions |
 
 The settings objects share most fields. The one you are most likely to change
-is the pixel size, `grid_spacing`, which is 10 m by default; a smaller pixel
+is the pixel size, `grid_spacing`, which is 10 m by default. A smaller pixel
 size does not add detail beyond what the radar resolves. The
 [API reference](../reference/snap_graph.RTCConfig.qmd) lists every setting and
 its default.
@@ -64,7 +64,7 @@ pixel by the area of ground that contributed to it, so the remaining
 differences in brightness come from the surface itself. The result is called
 gamma-0.
 
-Use RTC unless you have a reason not to; only RTC products can be composited
+Use RTC unless you have a reason not to. Only RTC products can be composited
 with [resolution weighting](resolution-weighting.qmd). The settings object
 selects the product: `RTCConfig`, the default, gives RTC, and `GTCConfig` gives
 geometrically terrain-corrected (GTC) backscatter, called beta-0,
@@ -89,11 +89,11 @@ pairs = bursts.find_pairs(baseline=12)
 coherence = processor.create_coherences(pairs, crs="auto")
 ```
 
-The product holds the coherence magnitude: the absolute value of the complex
+The product contains the coherence magnitude: the absolute value of the complex
 correlation between the two acquisitions, estimated over a small window of
 neighboring pixels set by `CoherenceConfig(window=...)`. A larger window gives
 smoother values at a coarser resolution. The phase of the correlation is not
-kept, and s1bursts makes no interferograms; ASF's
+kept, and s1bursts makes no interferograms. ASF's
 [HyP3 burst InSAR](https://hyp3-docs.asf.alaska.edu/guides/burst_insar_product_guide)
 products cover the same bursts with wrapped and unwrapped phase.
 
@@ -123,9 +123,9 @@ rerun after an interruption.
 Filenames describe the burst and date, not the settings, so an existing file is
 checked before it is skipped. If it was made with other settings, such as
 another `grid_spacing` or DEM, the call raises a `ProductSettingsMismatchError`
-naming each difference, before SNAP runs. So does a file that does not record
-every setting, such as one written by an earlier s1bursts version, and a file
-made by another SNAP version, since the versions give slightly different
+naming each difference, before SNAP runs. The same error is raised for a file that does not
+record every setting, such as one written by an earlier s1bursts version, and
+for a file made by another SNAP version, since the versions give slightly different
 results (see [SNAP versions](snap-processing.qmd#snap-versions)). A SNAP
 version that could not be determined is not compared. Write each experiment to
 its own `FileManager` directory, or pass `overwrite=True` to replace the old
@@ -133,7 +133,7 @@ products.
 :::
 
 A failed burst does not stop the batch by default. Each call returns an
-`OperationSummary`; check it before using the results, since a time series
+`OperationSummary`. Check it before using the results, since a time series
 with silent gaps can mislead. `raise_on_failure()` raises an error listing
 every failed burst, and otherwise returns the summary, so its products are one
 step away:

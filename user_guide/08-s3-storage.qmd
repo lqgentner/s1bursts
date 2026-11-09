@@ -8,7 +8,7 @@ guide-section: "How-to Guides"
 `FileManager` can keep bursts, products and composites in an S3 bucket instead
 of on local disk. Give it an S3 path from
 [freezebase](https://lqgentner.github.io/freezebase/) instead of a local
-`Path`; everything else in your workflow stays the same.
+`Path`. Everything else in your workflow stays the same.
 
 ## Point the FileManager at a bucket
 

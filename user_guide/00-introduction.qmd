@@ -20,7 +20,7 @@ Sentinel-1's radar sends microwave pulses to the ground and records their echo,
 by day and night and through clouds. s1bursts creates two products from it:
 
 - **Backscatter** is how much of the pulse returns to the satellite. It depends
-  on the roughness, moisture and structure of the surface; wet snow, for
+  on the roughness, moisture and structure of the surface. Wet snow, for
   example, looks much darker than dry snow. Use it to follow the state of a
   surface through time.
 - **Coherence** compares two acquisitions of the same place, from 0 (unrelated)

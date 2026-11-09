@@ -39,7 +39,7 @@ prepared = prepare_dem_for_snap(
 
 `source_crs` states both the map projection and the height reference of the
 DEM, joined by `+`. Here, `EPSG:2056` is the Swiss LV95 grid and `5728` the
-Swiss LN02 heights; look these up in your DEM's documentation. Converting the
+Swiss LN02 heights. Look these up in your DEM's documentation. Converting the
 heights can need correction grids from PROJ, which
 `download_missing_grids=True` fetches when they are freely available.
 
@@ -52,7 +52,7 @@ costs nothing.
 ## Use the prepared DEM
 
 Pass the prepared file to the processing settings, together with a short name,
-which is required. The name, not the file path, is written into every product's
+which is required. The name, not the path, is written into every product's
 metadata, so you can tell later which DEM was used, and a rerun checks it before
 skipping an existing product:
 
@@ -75,7 +75,7 @@ SNAP's terrain flattening and terrain correction (geocoding) take much longer
 on a fine DEM grid. So a DEM much finer than your products should be downsampled before
 preparing it, by averaging all fine pixels within each coarse one.
 freezebase's `vrt.warp()`
-averages by default; this reduces the 2 m swissALTI3D to 30 m:
+averages by default. This call reduces the 2 m swissALTI3D to 30 m:
 
 ```{.python}
 from freezebase import vrt

@@ -79,7 +79,7 @@ is missed.
 ## Process in the zone of the squares
 
 A composite accepts only products in the UTM zone of its square, so the bursts
-are processed with that zone as `crs`, not with `crs="auto"`;
+are processed with that zone as `crs`, not with `crs="auto"`.
 [Compositing](compositing.qmd#get-the-grid-squares) explains why. One batch
 has one `crs`, so check first that all squares share a zone:
 
@@ -97,7 +97,7 @@ To set how many bursts SNAP processes at once, see
 
 ## Compose each square
 
-Each square is composed from the products whose bursts reach it.
+Each square is composed from the products whose bursts cover it.
 `intersecting()` selects those bursts from the search result, and a product
 belongs to a burst footprint by its `burst_id` and `sub_swath`:
 
@@ -122,13 +122,13 @@ for square in squares:
         failed[square.mgrs_code] = error
 ```
 
-Passing all products to every square would give the same composites, since a
+Passing the full product list to each square would give the same composites, since a
 product outside a square contributes nothing to it, but each product would be
 read once per square.
 
 Some squares cannot be composed, because of their own data. A square that no
 burst reached in the time window has no products, so the loop skips it. A
-burst footprint can also touch a square without a valid pixel in it, and if
+burst footprint can also overlap a square without a valid pixel in it, and if
 that holds for all products of a square, the call raises an
 `EmptyCompositeError`. Such an error concerns one square and is a
 `CompositeError`, so the loop records it in `failed` and continues with the
@@ -137,7 +137,7 @@ and stops the loop: an `InconsistentInputsError` for products in another UTM
 zone or at another pixel size, or a `ProductSettingsMismatchError` for
 composites made with other settings.
 
-A composite holds one polarization. For VV and VH, run the script once with
+A composite contains one polarization. For VV and VH, run the script once with
 each.
 
 Rerunning the script is cheap. Downloads, products and composites that exist
@@ -217,7 +217,7 @@ downloaded once and processed once per zone.
 Another way, for any number of zones, is to run the whole script for each
 square on its own: search the bounding box of the square, keep the bursts
 `intersecting()` it, then download them, process them with `crs=square.crs`
-and compose. Each search stays small, which suits an area whose zones hold
+and compose. Each search is small, which suits an area whose zones contain
 more bursts than one search returns. Neighboring squares share most of their
 bursts, but each burst is still downloaded and processed only once per zone,
 since the later squares find its files and skip them. The cost is
