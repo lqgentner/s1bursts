@@ -24,10 +24,7 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Set up Quarto
-        uses: quarto-dev/quarto-actions/setup@v2
-
-      # The `docs` group carries great-docs itself; the guide executes against
+      # The `docs` group carries great-docs and Quarto; the guide executes against
       # the installed package, so the runtime dependencies are needed too.
       - name: Install dependencies
         run: |

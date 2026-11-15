@@ -30,14 +30,14 @@ credentials and a SNAP installation are available.
 
 ## Check the prose
 
-[Vale](https://vale.sh/docs/install) checks the Markdown and Quarto files. It
-is installed separately, not through uv. `.vale.ini` sets the rules and gives
-the reason for each rule that is off. Download the rule packages once, then
-check the tracked files:
+[Vale](https://vale.sh) checks the Markdown and Quarto files. `uv sync`
+installs it with the other development tools. `.vale.ini` sets the rules and
+gives the reason for each rule that is off. Download the rule packages once,
+then check the tracked files:
 
 ```{.bash}
-vale sync
-vale $(git ls-files '*.md' '*.qmd')
+uv run vale sync
+uv run vale $(git ls-files '*.md' '*.qmd')
 ```
 
 When the spelling check reports a correct term, add it to
@@ -46,8 +46,8 @@ When the spelling check reports a correct term, add it to
 ## Build the documentation
 
 The site is built with [Great Docs](https://posit-dev.github.io/great-docs/),
-which also needs [Quarto](https://quarto.org/docs/get-started/). Guide pages
-live in `user_guide/`, the API reference comes from the docstrings, and
+which renders through [Quarto](https://quarto.org/). The `docs` group installs
+both. Guide pages live in `user_guide/`, the API reference comes from the docstrings, and
 `great-docs.yml` configures the site:
 
 ```{.bash}

@@ -77,6 +77,8 @@ dev = [
     "ruff>=0.16",
     "types-geopandas>=1.1",
     "types-requests>=2.33",
+    # Exact pin, so the prose check reports the same alerts locally and in CI.
+    "vale==3.19.0.0",
 ]
 # Scientific cross-validation against OPERA RTC-S1 and ASF HyP3. Kept out of
 # `dev` because it is only needed to run `pytest -m validation` or regenerate
@@ -85,10 +87,11 @@ validation = [
     "asf-search>=8",
     "hyp3-sdk>=7",
 ]
-# Documentation toolchain. `great-docs` renders the site via Quarto,
-# installed separately.
+# Documentation toolchain. `great-docs` renders the site via Quarto, pinned
+# exactly so local and CI builds render alike.
 docs = [
     "great-docs[svg]>=0.17",
+    "quarto-cli==1.11.9",
     "matplotlib>=3.11.2",
     "pyarrow>=26.0.0",
     "python-dotenv>=1.2.2",
