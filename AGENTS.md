@@ -60,11 +60,11 @@ uv run pytest -q --cov=s1bursts --cov-branch --cov-report=term-missing
 
 ### Prose
 
-[Vale](https://vale.sh) checks the Markdown and Quarto files against `.vale.ini`: the Google developer style, proselint and ai-tells, with the rules that conflict with these docs turned off and the reason beside each. The `prose` job in CI runs the same check and fails on any alert, warnings included. Install Vale, then:
+[Vale](https://vale.sh) checks the Markdown and Quarto files against `.vale.ini`: the Google developer style, proselint and ai-tells, with the rules that conflict with these docs turned off and the reason beside each. The `prose` job in CI runs the same check and fails on any alert, warnings included. Vale is pinned in the `dev` group, so `uv sync` installs it:
 
 ```bash
-vale sync                             # downloads the packages into .vale/styles
-vale $(git ls-files '*.md' '*.qmd')
+uv run vale sync                      # downloads the packages into .vale/styles
+uv run vale $(git ls-files '*.md' '*.qmd')
 ```
 
 When the spelling check reports a correct term, add it to `.vale/styles/config/vocabularies/s1bursts/accept.txt`. An inline comment cannot turn off a package rule, so reword a false positive or turn the rule off for that file in `.vale.ini`. A frozen user-guide page shows a text change only after it is refreshed (see the contributing page of the user guide).
